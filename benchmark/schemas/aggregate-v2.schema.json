@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:civil3d-mcp:benchmark-aggregate:v2",
+  "title": "Civil 3D MCP deterministic benchmark aggregate v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_sha256",
+    "suite_id",
+    "model_config_id",
+    "runner_config_id",
+    "drawing_fixture_id",
+    "expected_repetitions_per_state",
+    "p95_definition",
+    "measurement_mode",
+    "groups"
+  ],
+  "properties": {
+    "schema_version": { "const": "civil3d-mcp-benchmark-aggregate/v2" },
+    "manifest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "suite_id": { "$ref": "#/$defs/identifier" },
+    "model_config_id": { "$ref": "#/$defs/identifier" },
+    "runner_config_id": { "$ref": "#/$defs/identifier" },
+    "drawing_fixture_id": { "$ref": "#/$defs/identifier" },
+    "expected_repetitions_per_state": { "type": "integer", "minimum": 1 },
+    "p95_definition": {
+      "const": "nearest_rank: sorted ascending, rank=max(1,ceil(0.95*n))"
+    },
+    "measurement_mode": { "enum": ["external", "plugin_internal"] },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "suite_id",
+          "variant_id",
+          "scenario_id",
+          "temperature_state",
+          "measurement_mode",
+          "expected_repetitions",
+          "observed_repetitions",
+          "missing_iterations",
+          "complete",
+          "iterations",
+          "numeric_metrics",
+          "boolean_metrics",
+          "runtime_error_categories",
+          "generated_csharp_sha256"
+        ],
+        "properties": {
+          "suite_id": { "$ref": "#/$defs/identifier" },
+          "variant_id": { "$ref": "#/$defs/identifier" },
+          "scenario_id": { "$ref": "#/$defs/identifier" },
+          "temperature_state": { "enum": ["cold", "warm"] },
+          "measurement_mode": { "enum": ["external", "plugin_internal"] },
+          "expected_repetitions": { "type": "integer", "minimum": 1 },
+          "observed_repetitions": { "type": "integer", "minimum": 0 },
+          "missing_iterations": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1 }
+          },
+          "complete": { "type": "boolean" },
+          "iterations": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1 }
+          },
+          "numeric_metrics": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "generated_csharp_attempts",
+              "generated_csharp_characters_total",
+              "generated_csharp_lines_total",
+              "generated_csharp_utf8_bytes_total",
+              "tool_calls",
+              "model_tool_rounds",
+              "roslyn_cache_hits",
+              "roslyn_cache_misses",
+              "compilation_attempts",
+              "compilation_retries",
+              "compilation_errors",
+              "runtime_errors",
+              "returned_payload_utf8_bytes",
+              "queue_ms",
+              "execution_ms",
+              "end_to_end_ms"
+            ],
+            "properties": {
+              "generated_csharp_attempts": { "$ref": "#/$defs/numeric_summary" },
+              "generated_csharp_characters_total": { "$ref": "#/$defs/numeric_summary" },
+              "generated_csharp_lines_total": { "$ref": "#/$defs/numeric_summary" },
+              "generated_csharp_utf8_bytes_total": { "$ref": "#/$defs/numeric_summary" },
+              "tool_calls": { "$ref": "#/$defs/numeric_summary" },
+              "model_tool_rounds": { "$ref": "#/$defs/numeric_summary" },
+              "roslyn_cache_hits": { "$ref": "#/$defs/numeric_summary" },
+              "roslyn_cache_misses": { "$ref": "#/$defs/numeric_summary" },
+              "compilation_attempts": { "$ref": "#/$defs/numeric_summary" },
+              "compilation_retries": { "$ref": "#/$defs/numeric_summary" },
+              "compilation_errors": { "$ref": "#/$defs/numeric_summary" },
+              "runtime_errors": { "$ref": "#/$defs/numeric_summary" },
+              "returned_payload_utf8_bytes": { "$ref": "#/$defs/numeric_summary" },
+              "queue_ms": { "$ref": "#/$defs/numeric_summary" },
+              "execution_ms": { "$ref": "#/$defs/numeric_summary" },
+              "end_to_end_ms": { "$ref": "#/$defs/numeric_summary" }
+            }
+          },
+          "boolean_metrics": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["outcome_success", "first_pass_success"],
+            "properties": {
+              "outcome_success": { "$ref": "#/$defs/boolean_summary" },
+              "first_pass_success": { "$ref": "#/$defs/boolean_summary" }
+            }
+          },
+          "runtime_error_categories": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["runtime_exception", "timeout", "transport_error", "unknown"],
+            "properties": {
+              "runtime_exception": { "$ref": "#/$defs/runtime_category_summary" },
+              "timeout": { "$ref": "#/$defs/runtime_category_summary" },
+              "transport_error": { "$ref": "#/$defs/runtime_category_summary" },
+              "unknown": { "$ref": "#/$defs/runtime_category_summary" }
+            }
+          },
+          "generated_csharp_sha256": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["available_run_count", "not_available_run_count", "unique_hashes"],
+            "properties": {
+              "available_run_count": { "type": "integer", "minimum": 0 },
+              "not_available_run_count": { "type": "integer", "minimum": 0 },
+              "unique_hashes": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "numeric_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available_count", "not_available_count", "median", "p95"],
+      "properties": {
+        "available_count": { "type": "integer", "minimum": 0 },
+        "not_available_count": { "type": "integer", "minimum": 0 },
+        "median": { "type": ["number", "null"] },
+        "p95": { "type": ["number", "null"] }
+      }
+    },
+    "boolean_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "available_count",
+        "not_available_count",
+        "true_count",
+        "false_count",
+        "true_rate"
+      ],
+      "properties": {
+        "available_count": { "type": "integer", "minimum": 0 },
+        "not_available_count": { "type": "integer", "minimum": 0 },
+        "true_count": { "type": "integer", "minimum": 0 },
+        "false_count": { "type": "integer", "minimum": 0 },
+        "true_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "runtime_category_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available_run_count", "not_available_run_count", "total"],
+      "properties": {
+        "available_run_count": { "type": "integer", "minimum": 0 },
+        "not_available_run_count": { "type": "integer", "minimum": 0 },
+        "total": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    }
+  }
+}

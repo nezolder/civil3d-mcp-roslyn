@@ -1,0 +1,38 @@
+{
+  "schema_version": "civil3d-mcp-benchmark-manifest/v1",
+  "suite_id": "civil3d-2a-core-v1",
+  "model_config_id": "fixed-model-config-v1",
+  "runner_config_id": "fixed-runner-config-v1",
+  "drawing_fixture_id": "disposable-synthetic-drawing-v1",
+  "repetitions_per_state": 5,
+  "temperature_states": [
+    "cold",
+    "warm"
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "skills.catalog.synthetic.v1",
+      "public_tool": "civil3d_skills",
+      "operation_kind": "metadata",
+      "live_required": false,
+      "fixture_reset_required": false,
+      "prompt": "List the available Civil 3D skills and return only the count and skill names. Do not call a Civil 3D execution tool."
+    },
+    {
+      "scenario_id": "query.bounded-summary.synthetic.v1",
+      "public_tool": "civil3d_query",
+      "operation_kind": "read_only",
+      "live_required": true,
+      "fixture_reset_required": true,
+      "prompt": "Using only the disposable synthetic benchmark drawing, return bounded counts of alignments, surfaces, and COGO points. Do not return names, paths, coordinates, or object dumps."
+    },
+    {
+      "scenario_id": "execute.single-entity.synthetic.v1",
+      "public_tool": "civil3d_execute",
+      "operation_kind": "write",
+      "live_required": true,
+      "fixture_reset_required": true,
+      "prompt": "In the disposable synthetic benchmark drawing, create exactly one generic benchmark entity using runner-supplied synthetic parameters, then return only a success flag and created-object count."
+    }
+  ]
+}

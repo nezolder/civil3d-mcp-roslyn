@@ -1,0 +1,19 @@
+build/
+node_modules/
+.npm-cache/
+/benchmark-output/
+
+# C# Plugin
+plugin/**/bin/
+plugin/**/obj/
+tests/transport/bin/
+tests/transport/obj/
+tests/plugin/bin/
+tests/plugin/obj/
+*.dll
+*.pdb
+*.user
+*.suo
+
+# Civil 3D References (proprietary DLLs)
+C_References/*.dll

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\CivilExecution.cs" Link="CivilExecution.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ApiLookup.cs" Link="ApiLookup.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\CommandDispatcher.cs" Link="CommandDispatcher.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\DrawingGuard.cs" Link="DrawingGuard.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\InternalBenchmarkMeasurement.cs" Link="InternalBenchmarkMeasurement.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\IdempotencyRegistry.cs" Link="IdempotencyRegistry.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\PluginRuntime.cs" Link="PluginRuntime.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ResultSerializer.cs" Link="ResultSerializer.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptContext.cs" Link="ScriptContext.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\SerializedOperationGate.cs" Link="SerializedOperationGate.cs" />
+    <Compile Include="AutodeskStubs.cs" />
+    <Compile Include="PluginTestDoubles.cs" />
+    <Compile Include="PluginCoreTests.cs" />
+    <Compile Include="ResultSerializerTests.cs" />
+  </ItemGroup>
+</Project>

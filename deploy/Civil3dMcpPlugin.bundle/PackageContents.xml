@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApplicationPackage
+  SchemaVersion="1.0"
+  AutodeskProduct="AutoCAD"
+  Name="Civil3dMcpPlugin"
+  Description="Local Civil 3D MCP bridge with Roslyn code execution"
+  AppVersion="1.0.0"
+  Author="barbosaihan contributors / nezolder"
+  ProductCode="{7A112B4D-9167-41AF-B75A-6F09A734E8E1}"
+  UpgradeCode="{3E99D899-8D06-4DBD-9E73-9445FB042846}">
+  <CompanyDetails Name="Local Civil 3D MCP" />
+  <RuntimeRequirements
+    OS="Win64"
+    Platform="Civil3D"
+    SeriesMin="R25.0"
+    SeriesMax="R25.0" />
+  <Components>
+    <ComponentEntry
+      AppName="Civil3dMcpPlugin"
+      Version="1.0.0"
+      ModuleName="./Contents/Windows/Civil3dMcpPlugin.dll"
+      AppDescription="Civil 3D MCP local TCP bridge"
+      LoadOnAutoCADStartup="True">
+      <Commands GroupName="C3DMCP">
+        <Command Global="C3DMCPSTART" Local="C3DMCPSTART" />
+        <Command Global="C3DMCPSTOP" Local="C3DMCPSTOP" />
+        <Command Global="C3DMCPSTATUS" Local="C3DMCPSTATUS" />
+      </Commands>
+    </ComponentEntry>
+  </Components>
+</ApplicationPackage>

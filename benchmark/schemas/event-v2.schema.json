@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:civil3d-mcp:benchmark-event:v2",
+  "title": "Civil 3D MCP benchmark JSONL event v2",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "type",
+        "run_id",
+        "suite_id",
+        "variant_id",
+        "scenario_id",
+        "iteration",
+        "temperature_state",
+        "observed_counts",
+        "measurement_mode"
+      ],
+      "properties": {
+        "schema_version": { "const": "civil3d-mcp-benchmark-event/v2" },
+        "type": { "const": "run_start" },
+        "run_id": { "type": "string" },
+        "suite_id": { "type": "string" },
+        "variant_id": { "type": "string" },
+        "scenario_id": { "type": "string" },
+        "iteration": { "type": "integer", "minimum": 1 },
+        "temperature_state": { "enum": ["cold", "warm"] },
+        "measurement_mode": { "enum": ["external", "plugin_internal"] },
+        "observed_counts": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "tool_calls",
+              "model_tool_rounds",
+              "compilation_attempts",
+              "runtime_errors"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "type",
+        "correlation_id",
+        "request_id",
+        "code_sha256",
+        "measurement_status",
+        "partial_reason",
+        "roslyn_cache_hits",
+        "roslyn_cache_misses",
+        "compilation_attempts",
+        "compilation_errors",
+        "command_context_wait_ms",
+        "execution_ms",
+        "end_to_end_ms",
+        "returned_payload_utf8_bytes"
+      ],
+      "properties": {
+        "schema_version": { "const": "civil3d-mcp-benchmark-event/v2" },
+        "type": { "const": "internal_measurement" },
+        "correlation_id": { "type": "string", "pattern": "^run-[a-f0-9]{32}$" },
+        "request_id": { "type": "string", "pattern": "^request-[a-f0-9]{16}$" },
+        "code_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "measurement_status": { "enum": ["complete", "partial"] },
+        "partial_reason": {
+          "type": ["string", "null"],
+          "enum": [
+            null,
+            "transport_timeout",
+            "transport_error",
+            "missing_sidecar",
+            "invalid_sidecar"
+          ]
+        },
+        "roslyn_cache_hits": { "type": ["integer", "null"], "minimum": 0 },
+        "roslyn_cache_misses": { "type": ["integer", "null"], "minimum": 0 },
+        "compilation_attempts": { "type": ["integer", "null"], "minimum": 0 },
+        "compilation_errors": { "type": ["integer", "null"], "minimum": 0 },
+        "command_context_wait_ms": { "type": ["number", "null"], "minimum": 0 },
+        "execution_ms": { "type": ["number", "null"], "minimum": 0 },
+        "end_to_end_ms": { "type": "number", "minimum": 0 },
+        "returned_payload_utf8_bytes": { "type": "integer", "minimum": 0 }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "measurement_status": { "const": "complete" },
+            "partial_reason": { "type": "null" },
+            "roslyn_cache_hits": { "type": "integer", "minimum": 0 },
+            "roslyn_cache_misses": { "type": "integer", "minimum": 0 },
+            "compilation_attempts": { "type": "integer", "minimum": 0 },
+            "compilation_errors": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "properties": {
+            "measurement_status": { "const": "partial" },
+            "partial_reason": {
+              "enum": [
+                "transport_timeout",
+                "transport_error",
+                "missing_sidecar",
+                "invalid_sidecar"
+              ]
+            },
+            "roslyn_cache_hits": { "type": "null" },
+            "roslyn_cache_misses": { "type": "null" },
+            "compilation_attempts": { "type": "null" },
+            "compilation_errors": { "type": "null" },
+            "command_context_wait_ms": { "type": "null" },
+            "execution_ms": { "type": "null" }
+          }
+        }
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "type"],
+      "properties": {
+        "schema_version": { "const": "civil3d-mcp-benchmark-event/v2" },
+        "type": { "enum": ["tool_call", "model_tool_round"] }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "type", "category"],
+      "properties": {
+        "schema_version": { "const": "civil3d-mcp-benchmark-event/v2" },
+        "type": { "const": "runtime_error" },
+        "category": {
+          "enum": ["runtime_exception", "timeout", "transport_error", "unknown"]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "type", "attempt", "code"],
+      "properties": {
+        "schema_version": { "const": "civil3d-mcp-benchmark-event/v2" },
+        "type": { "const": "generated_csharp" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "code": { "type": "string" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "type", "attempt", "outcome"],
+      "properties": {
+        "schema_version": { "const": "civil3d-mcp-benchmark-event/v2" },
+        "type": { "const": "compile_attempt" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "outcome": { "enum": ["success", "error"] }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "type"],
+      "properties": {
+        "schema_version": { "const": "civil3d-mcp-benchmark-event/v2" },
+        "type": { "const": "returned_payload" },
+        "serialized_payload": { "type": "string" },
+        "utf8_bytes": { "type": "integer", "minimum": 0 }
+      },
+      "oneOf": [
+        { "required": ["serialized_payload"], "not": { "required": ["utf8_bytes"] } },
+        { "required": ["utf8_bytes"], "not": { "required": ["serialized_payload"] } }
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "type"],
+      "properties": {
+        "schema_version": { "const": "civil3d-mcp-benchmark-event/v2" },
+        "type": { "const": "timing" },
+        "queue_ms": { "type": "number", "minimum": 0 },
+        "execution_ms": { "type": "number", "minimum": 0 },
+        "end_to_end_ms": { "type": "number", "minimum": 0 }
+      },
+      "anyOf": [
+        { "required": ["queue_ms"] },
+        { "required": ["execution_ms"] },
+        { "required": ["end_to_end_ms"] }
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "type", "success"],
+      "properties": {
+        "schema_version": { "const": "civil3d-mcp-benchmark-event/v2" },
+        "type": { "const": "outcome" },
+        "success": { "type": "boolean" }
+      }
+    }
+  ]
+}

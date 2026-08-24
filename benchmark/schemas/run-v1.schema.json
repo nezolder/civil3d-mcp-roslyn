@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:civil3d-mcp:benchmark-run:v1",
+  "title": "Civil 3D MCP sanitized benchmark run v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_sha256",
+    "run_id",
+    "suite_id",
+    "model_config_id",
+    "runner_config_id",
+    "drawing_fixture_id",
+    "variant_id",
+    "scenario_id",
+    "iteration",
+    "temperature_state",
+    "metrics",
+    "runtime_error_categories",
+    "generated_csharp"
+  ],
+  "properties": {
+    "schema_version": { "const": "civil3d-mcp-benchmark-run/v1" },
+    "manifest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "run_id": { "$ref": "#/$defs/identifier" },
+    "suite_id": { "$ref": "#/$defs/identifier" },
+    "model_config_id": { "$ref": "#/$defs/identifier" },
+    "runner_config_id": { "$ref": "#/$defs/identifier" },
+    "drawing_fixture_id": { "$ref": "#/$defs/identifier" },
+    "variant_id": { "$ref": "#/$defs/identifier" },
+    "scenario_id": { "$ref": "#/$defs/identifier" },
+    "iteration": { "type": "integer", "minimum": 1 },
+    "temperature_state": { "enum": ["cold", "warm"] },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generated_csharp_attempts",
+        "generated_csharp_characters_total",
+        "generated_csharp_lines_total",
+        "generated_csharp_utf8_bytes_total",
+        "tool_calls",
+        "model_tool_rounds",
+        "compilation_attempts",
+        "compilation_retries",
+        "compilation_errors",
+        "runtime_errors",
+        "returned_payload_utf8_bytes",
+        "queue_ms",
+        "execution_ms",
+        "end_to_end_ms",
+        "outcome_success",
+        "first_pass_success"
+      ],
+      "properties": {
+        "generated_csharp_attempts": { "$ref": "#/$defs/integer_measurement" },
+        "generated_csharp_characters_total": { "$ref": "#/$defs/integer_measurement" },
+        "generated_csharp_lines_total": { "$ref": "#/$defs/integer_measurement" },
+        "generated_csharp_utf8_bytes_total": { "$ref": "#/$defs/integer_measurement" },
+        "tool_calls": { "$ref": "#/$defs/integer_measurement" },
+        "model_tool_rounds": { "$ref": "#/$defs/integer_measurement" },
+        "compilation_attempts": { "$ref": "#/$defs/integer_measurement" },
+        "compilation_retries": { "$ref": "#/$defs/integer_measurement" },
+        "compilation_errors": { "$ref": "#/$defs/integer_measurement" },
+        "runtime_errors": { "$ref": "#/$defs/integer_measurement" },
+        "returned_payload_utf8_bytes": { "$ref": "#/$defs/integer_measurement" },
+        "queue_ms": { "$ref": "#/$defs/number_measurement" },
+        "execution_ms": { "$ref": "#/$defs/number_measurement" },
+        "end_to_end_ms": { "$ref": "#/$defs/number_measurement" },
+        "outcome_success": { "$ref": "#/$defs/boolean_measurement" },
+        "first_pass_success": { "$ref": "#/$defs/boolean_measurement" }
+      }
+    },
+    "runtime_error_categories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_exception", "timeout", "transport_error", "unknown"],
+      "properties": {
+        "runtime_exception": { "$ref": "#/$defs/integer_measurement" },
+        "timeout": { "$ref": "#/$defs/integer_measurement" },
+        "transport_error": { "$ref": "#/$defs/integer_measurement" },
+        "unknown": { "$ref": "#/$defs/integer_measurement" }
+      }
+    },
+    "generated_csharp": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["attempt", "characters", "lines", "utf8_bytes", "sha256"],
+        "properties": {
+          "attempt": { "type": "integer", "minimum": 1 },
+          "characters": { "type": "integer", "minimum": 0 },
+          "lines": { "type": "integer", "minimum": 0 },
+          "utf8_bytes": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+    },
+    "integer_measurement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "availability", "source"],
+          "properties": {
+            "value": { "type": "integer", "minimum": 0 },
+            "availability": { "enum": ["measured", "external", "derived"] },
+            "source": { "$ref": "#/$defs/source" }
+          }
+        },
+        { "$ref": "#/$defs/not_available" }
+      ]
+    },
+    "number_measurement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "availability", "source"],
+          "properties": {
+            "value": { "type": "number", "minimum": 0 },
+            "availability": { "enum": ["measured", "external", "derived"] },
+            "source": { "$ref": "#/$defs/source" }
+          }
+        },
+        { "$ref": "#/$defs/not_available" }
+      ]
+    },
+    "boolean_measurement": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "availability", "source"],
+          "properties": {
+            "value": { "type": "boolean" },
+            "availability": { "enum": ["measured", "external", "derived"] },
+            "source": { "$ref": "#/$defs/source" }
+          }
+        },
+        { "$ref": "#/$defs/not_available" }
+      ]
+    },
+    "not_available": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "availability", "source"],
+      "properties": {
+        "value": { "type": "null" },
+        "availability": { "const": "not_available" },
+        "source": { "$ref": "#/$defs/source" }
+      }
+    }
+  }
+}

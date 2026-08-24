@@ -1,0 +1,48 @@
+{
+  "name": "civil3d-mcp",
+  "version": "1.0.0",
+  "description": "Dynamic Roslyn-based MCP server for Autodesk Civil 3D.",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "civil3d-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "clean": "rimraf build",
+    "prebuild": "npm run clean",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test:benchmark": "npm run build && node --test tests/benchmark/*.test.mjs",
+    "test:errors": "npm run build && node --test tests/errors/*.test.mjs",
+    "test:plugin": "npm run build && dotnet run --project tests/plugin/Civil3dMcpPlugin.CoreTests.csproj --configuration Release && node --test tests/plugin/*.test.mjs",
+    "test:skills": "npm run build && node --test tests/skills/*.test.mjs",
+    "test:transport": "npm run build && node --test tests/transport/*.test.mjs && dotnet run --project tests/transport/Civil3dMcpPlugin.TransportTests.csproj --configuration Release",
+    "benchmark": "node build/benchmark/cli.js",
+    "test:mcp": "node scripts/mcp-smoke-test.mjs"
+  },
+  "files": [
+    "build"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nezolder/civil3d-mcp-roslyn.git"
+  },
+  "keywords": [],
+  "author": "nezolder",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/nezolder/civil3d-mcp-roslyn/issues"
+  },
+  "homepage": "https://github.com/nezolder/civil3d-mcp-roslyn#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "ws": "8.21.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/ws": "^8.18.0",
+    "rimraf": "6.1.3",
+    "typescript": "5.9.3"
+  }
+}

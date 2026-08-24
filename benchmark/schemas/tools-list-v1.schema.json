@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:civil3d-mcp:tools-list-snapshot:v1",
+  "title": "Civil 3D MCP tools/list description snapshot v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "character_unit",
+    "token_estimator",
+    "public_tool_count",
+    "tools",
+    "totals"
+  ],
+  "properties": {
+    "schema_version": { "const": "civil3d-mcp-tools-list-snapshot/v1" },
+    "character_unit": { "const": "unicode_code_points" },
+    "token_estimator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "formula"],
+      "properties": {
+        "id": { "const": "utf8_bytes_div_4_ceil_v1" },
+        "formula": { "const": "ceil(utf8_bytes / 4) per text field" }
+      }
+    },
+    "public_tool_count": { "type": "integer", "minimum": 0 },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "top_level_description", "all_description_fields"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "top_level_description": { "$ref": "#/$defs/summary" },
+          "all_description_fields": { "$ref": "#/$defs/summary" }
+        }
+      }
+    },
+    "totals": { "$ref": "#/$defs/summary" }
+  },
+  "$defs": {
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field_count", "characters", "utf8_bytes", "estimated_tokens", "sha256"],
+      "properties": {
+        "field_count": { "type": "integer", "minimum": 0 },
+        "characters": { "type": "integer", "minimum": 0 },
+        "utf8_bytes": { "type": "integer", "minimum": 0 },
+        "estimated_tokens": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  }
+}

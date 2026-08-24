@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:civil3d-mcp:benchmark-manifest:v1",
+  "title": "Civil 3D MCP fixed benchmark scenario manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "suite_id",
+    "model_config_id",
+    "runner_config_id",
+    "drawing_fixture_id",
+    "repetitions_per_state",
+    "temperature_states",
+    "scenarios"
+  ],
+  "properties": {
+    "schema_version": { "const": "civil3d-mcp-benchmark-manifest/v1" },
+    "suite_id": { "$ref": "#/$defs/identifier" },
+    "model_config_id": { "$ref": "#/$defs/identifier" },
+    "runner_config_id": { "$ref": "#/$defs/identifier" },
+    "drawing_fixture_id": { "$ref": "#/$defs/identifier" },
+    "repetitions_per_state": { "type": "integer", "minimum": 3, "maximum": 5 },
+    "temperature_states": {
+      "const": ["cold", "warm"]
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scenario_id",
+          "public_tool",
+          "operation_kind",
+          "live_required",
+          "fixture_reset_required",
+          "prompt"
+        ],
+        "properties": {
+          "scenario_id": { "$ref": "#/$defs/identifier" },
+          "public_tool": {
+            "enum": ["civil3d_execute", "civil3d_query", "civil3d_skills"]
+          },
+          "operation_kind": { "enum": ["metadata", "read_only", "write"] },
+          "live_required": { "type": "boolean" },
+          "fixture_reset_required": { "type": "boolean" },
+          "prompt": { "type": "string", "minLength": 1, "maxLength": 500 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    }
+  }
+}
