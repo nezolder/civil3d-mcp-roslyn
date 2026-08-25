@@ -26,7 +26,7 @@ This independent project is not affiliated with or endorsed by Autodesk. Autodes
 
 | Tool | Purpose | Safety |
 |------|---------|--------|
-| `civil3d_execute` | Execute C# code with **write** access (transaction committed) | ⚠️ Modifies drawing |
+| `civil3d_execute` | Execute C# code with **write** access; optional save after commit | ⚠️ Modifies drawing |
 | `civil3d_query` | Execute C# code **read-only** (no commit) | ✅ No side effects |
 | `civil3d_skills` | Browse/search/read code skill templates; `api_lookup` searches already-loaded public Civil 3D API metadata | ✅ Metadata only |
 
@@ -84,6 +84,8 @@ Code executed via `civil3d_execute` or `civil3d_query` has access to:
 
 All Civil 3D namespaces are auto-imported.
 
+Committing the `civil3d_execute` transaction changes the open drawing but does not by itself write the DWG file to disk. Set `saveDrawing: true` when the completed change should also be saved. The plugin saves only after the script transaction and document lock are closed; scripts must not call `Database.SaveAs` or queue `QSAVE` themselves. The save request uses a separate 10-minute default timeout and is never retried automatically.
+
 ## Setup
 
 ### 1. Build MCP Server
@@ -123,6 +125,7 @@ C3DMCPSTATUS → verify running
 | `CIVIL3D_HOST` | `localhost` | Plugin host |
 | `CIVIL3D_PORT` | `8080` | Plugin port |
 | `CIVIL3D_COMMAND_TIMEOUT` | `120000` | Execution timeout (ms) |
+| `CIVIL3D_SAVE_TIMEOUT` | `600000` | Timeout for execute requests with `saveDrawing: true` (ms) |
 | `LOG_LEVEL` | `info` | Log level |
 
 ## Benchmarking
@@ -141,7 +144,7 @@ Each localhost TCP connection carries one UTF-8 JSON-RPC request and one respons
 
 At the default `info` log level, each accepted `civil3d_query` and `civil3d_execute` operation emits one bounded stderr audit event. It contains a new opaque operation ID, tool name, SHA-256 and UTF-8 byte length of the C# source, success/error status, and elapsed milliseconds; errors add only stable code/category/source/outcome fields. The audit event never contains caller code, description, drawing identity, result, or error message.
 
-`civil3d_execute` also accepts an optional opaque `idempotencyKey` (1–128 ASCII letters, digits, `.`, `_`, `:`, `-`). In one plugin session it binds the key to the UTF-8 C# SHA-256 and normalized `expectedDrawing` identity. A duplicate is rejected as in-progress, conflicting, or already committed; committed entries retain no result and callers must reconcile with a read-only query. The session keeps at most 256 completed keys, evicting the oldest deterministically. This adds neither persistence nor automatic retry or exactly-once semantics.
+`civil3d_execute` also accepts an optional opaque `idempotencyKey` (1–128 ASCII letters, digits, `.`, `_`, `:`, `-`). In one plugin session it binds the key to the UTF-8 C# SHA-256, normalized `expectedDrawing` identity, and `saveDrawing` choice. A duplicate is rejected as in-progress, conflicting, or already committed; committed entries retain no result and callers must reconcile with a read-only query. A save failure occurs after the in-memory write commit, so its key is kept as completed to prevent an accidental duplicate modification. The session keeps at most 256 completed keys, evicting the oldest deterministically. This adds neither persistence nor automatic retry or exactly-once semantics.
 
 ## Security
 

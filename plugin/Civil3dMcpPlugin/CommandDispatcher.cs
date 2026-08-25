@@ -44,7 +44,15 @@ public static class CommandDispatcher
   {
     var code = PluginRuntime.GetRequiredString(parameters, "code");
     benchmarkMeasurement?.RecordCode(code);
-    var readOnly = parameters?["readOnly"]?.GetValue<bool>() ?? false;
+    var readOnly = PluginRuntime.GetOptionalBool(parameters, "readOnly") ?? false;
+    var saveDrawing = PluginRuntime.GetOptionalBool(parameters, "saveDrawing") ?? false;
+    if (readOnly && saveDrawing)
+    {
+      throw new JsonRpcDispatchException(
+        "CIVIL3D.INVALID_INPUT",
+        "Parameter 'saveDrawing' is only valid when readOnly is false."
+      );
+    }
     var expectedDrawing = DrawingGuard.Parse(parameters, required: !readOnly);
     // Keep the plugin debug output free of caller-provided description text.
     System.Diagnostics.Debug.WriteLine($"[C3D-MCP] {(readOnly ? "QUERY" : "EXECUTE")}");
@@ -60,7 +68,7 @@ public static class CommandDispatcher
         .GetAwaiter()
         .GetResult();
       return ResultSerializer.Serialize(rawResult);
-    }, write: !readOnly, expectedDrawing, benchmarkMeasurement);
+    }, write: !readOnly, expectedDrawing, benchmarkMeasurement, saveDrawing);
   }
 
   /// <summary>

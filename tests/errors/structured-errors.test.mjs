@@ -143,6 +143,51 @@ test("drawing guard plugin errors have stable non-retryable classifications", ()
   }
 });
 
+test("a command can opt into a longer timeout for a synchronous drawing save", async () => {
+  const connection = new ApplicationClientConnection("127.0.0.1", 65535);
+  connection.isConnected = true;
+  connection.socket.write = () => true;
+  const originalSetTimeout = globalThis.setTimeout;
+  let observedDelay;
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    observedDelay = delay;
+    queueMicrotask(() => callback(...args));
+    return 0;
+  };
+
+  try {
+    const error = await connection
+      .sendCommand("executeCode", { code: "return 1;" }, undefined, 600_000)
+      .then(
+        () => assert.fail("timeout must reject"),
+        (reason) => reason
+      );
+    assert.equal(observedDelay, 600_000);
+    assert.equal(error.code, "CIVIL3D.COMMAND_TIMEOUT");
+    assert.match(error.message, /600000ms/);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    connection.socket.destroy();
+  }
+});
+
+test("post-commit save errors distinguish missing paths from failed disk writes", () => {
+  const missingPath = civil3dErrorFromPlugin({
+    code: "CIVIL3D.SAVE_PATH_REQUIRED",
+    message: "drawing has no file path",
+  });
+  assert.equal(missingPath.category, "drawing");
+  assert.equal(missingPath.outcome, "not_started");
+
+  const failedSave = civil3dErrorFromPlugin({
+    code: "CIVIL3D.SAVE_FAILED",
+    message: "changes committed in memory, save failed",
+  });
+  assert.equal(failedSave.category, "execution");
+  assert.equal(failedSave.outcome, "reported_error");
+  assert.equal(failedSave.toStructuredError().retryable, false);
+});
+
 test("idempotency plugin outcomes are stable and never retryable", () => {
   for (const code of [
     "CIVIL3D.IDEMPOTENCY_CONFLICT",

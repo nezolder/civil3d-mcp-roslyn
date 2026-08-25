@@ -52,7 +52,7 @@ async function callMustFailValidation(client, params) {
   }
 }
 
-test("execute exposes and forwards idempotencyKey without changing the other tool inputs", async () => {
+test("execute exposes and forwards drawing guard, idempotency, and post-commit save inputs", async () => {
   const mockPlugin = await startMockPlugin();
   process.env.CIVIL3D_HOST = "127.0.0.1";
   process.env.CIVIL3D_PORT = String(mockPlugin.port);
@@ -85,6 +85,10 @@ test("execute exposes and forwards idempotencyKey without changing the other too
     assert.ok(execute.inputSchema.properties.idempotencyKey);
     assert.equal(execute.inputSchema.required.includes("idempotencyKey"), false);
     assert.equal(query.inputSchema.properties.idempotencyKey, undefined);
+    assert.ok(execute.inputSchema.properties.saveDrawing);
+    assert.equal(execute.inputSchema.properties.saveDrawing.type, "boolean");
+    assert.equal(execute.inputSchema.required.includes("saveDrawing"), false);
+    assert.equal(query.inputSchema.properties.saveDrawing, undefined);
     const keySchema = execute.inputSchema.properties.idempotencyKey;
     assert.equal(keySchema.minLength, 1);
     assert.equal(keySchema.maxLength, 128);
@@ -142,8 +146,17 @@ test("execute exposes and forwards idempotencyKey without changing the other too
         idempotencyKey: "write:test-1",
       },
     });
+    await client.callTool({
+      name: "civil3d_execute",
+      arguments: {
+        code: "return 4;",
+        expectedDrawing,
+        idempotencyKey: "write:test-save",
+        saveDrawing: true,
+      },
+    });
 
-    assert.equal(mockPlugin.requests.length, 3);
+    assert.equal(mockPlugin.requests.length, 4);
     assert.equal("expectedDrawing" in mockPlugin.requests[0].params, false);
     assert.equal(mockPlugin.requests[0].params.readOnly, true);
     assert.deepEqual(mockPlugin.requests[1].params.expectedDrawing, expectedDrawing);
@@ -151,6 +164,10 @@ test("execute exposes and forwards idempotencyKey without changing the other too
     assert.deepEqual(mockPlugin.requests[2].params.expectedDrawing, expectedDrawing);
     assert.equal(mockPlugin.requests[2].params.readOnly, false);
     assert.equal(mockPlugin.requests[2].params.idempotencyKey, "write:test-1");
+    assert.equal("saveDrawing" in mockPlugin.requests[2].params, false);
+    assert.equal(mockPlugin.requests[3].params.readOnly, false);
+    assert.equal(mockPlugin.requests[3].params.idempotencyKey, "write:test-save");
+    assert.equal(mockPlugin.requests[3].params.saveDrawing, true);
   } finally {
     await client.close();
     await server.close();

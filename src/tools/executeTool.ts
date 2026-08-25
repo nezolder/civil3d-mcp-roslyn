@@ -25,6 +25,10 @@ import {
 } from "../utils/operationAudit.js";
 
 const log = createLogger("ExecuteTool");
+const SAVE_COMMAND_TIMEOUT_MS = parseInt(
+  process.env.CIVIL3D_SAVE_TIMEOUT ?? "600000",
+  10
+);
 const idempotencyKeySchema = z
   .string()
   .min(1)
@@ -37,7 +41,8 @@ const idempotencyKeySchema = z
 
 /**
  * civil3d_execute — Executes C# code in Civil 3D with WRITE access.
- * The code runs inside a transaction that gets committed on success.
+ * The code runs inside a transaction that gets committed on success. Optional
+ * disk saving runs only after that transaction and its document lock are closed.
  *
  * Available globals in the script:
  *   - Document (active AutoCAD document)
@@ -56,7 +61,8 @@ export function registerExecuteTool(server: McpServer) {
       "Available globals: Document, CivilDoc, Database, Transaction, Editor. " +
       "All Civil 3D namespaces are auto-imported. Return a value to get results back as JSON. " +
       "Use this for operations that MODIFY the drawing (create, edit, delete objects). " +
-      "expectedDrawing must come from a prior read-only identity query.",
+      "expectedDrawing must come from a prior read-only identity query. " +
+      "To persist the drawing file, set saveDrawing=true; do not call Database.SaveAs or queue QSAVE from the C# code.",
     {
       code: z.string().describe(
         "C# code to execute. Has access to Document, CivilDoc, Database, Transaction, Editor. " +
@@ -67,6 +73,14 @@ export function registerExecuteTool(server: McpServer) {
       ),
       expectedDrawing: expectedDrawingSchema,
       idempotencyKey: idempotencyKeySchema,
+      saveDrawing: z
+        .boolean()
+        .optional()
+        .describe(
+          "When true, save the currently named DWG after the write transaction commits and wait for completion. " +
+            "Use this instead of Database.SaveAs or Document.SendStringToExecute(\"QSAVE\") in code. " +
+            "An unsaved drawing must first be named in Civil 3D."
+        ),
     },
     async (args, extra) => {
       let benchmarkTrace: BenchmarkTraceRequest | undefined;
@@ -95,8 +109,10 @@ export function registerExecuteTool(server: McpServer) {
               description: args.description,
               expectedDrawing: args.expectedDrawing,
               idempotencyKey: args.idempotencyKey,
+              saveDrawing: args.saveDrawing,
             },
-            benchmarkTrace
+            benchmarkTrace,
+            args.saveDrawing ? SAVE_COMMAND_TIMEOUT_MS : undefined
           )
         );
         const result = benchmarkTrace

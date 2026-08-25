@@ -5,6 +5,13 @@ namespace Autodesk.AutoCAD.EditorInput
 
 namespace Autodesk.AutoCAD.DatabaseServices
 {
+  public enum DwgVersion
+  {
+    Current,
+  }
+
+  public sealed class SecurityParameters { }
+
   public readonly struct Handle
   {
     public Handle(long value)
@@ -39,9 +46,29 @@ namespace Autodesk.AutoCAD.DatabaseServices
 
   public sealed class Database
   {
+    private int _saveAsCallCount;
+
     public string Filename { get; set; } = string.Empty;
     public string FingerprintGuid { get; set; } = string.Empty;
     public TransactionManager TransactionManager { get; } = new();
+    public DwgVersion OriginalFileVersion { get; set; } = DwgVersion.Current;
+    public SecurityParameters SecurityParameters { get; } = new();
+    public int SaveAsCallCount => Volatile.Read(ref _saveAsCallCount);
+    public string? LastSavedFilename { get; private set; }
+    public Action? BeforeSaveAs { get; set; }
+    public Exception? SaveAsException { get; set; }
+
+    public void SaveAs(
+      string fileName,
+      bool createBackupAndRename,
+      DwgVersion version,
+      SecurityParameters securityParameters)
+    {
+      BeforeSaveAs?.Invoke();
+      Interlocked.Increment(ref _saveAsCallCount);
+      LastSavedFilename = fileName;
+      if (SaveAsException != null) throw SaveAsException;
+    }
   }
 
   public sealed class TransactionManager
@@ -166,6 +193,12 @@ namespace Autodesk.AutoCAD.ApplicationServices
   public static class Application
   {
     public static DocumentCollection DocumentManager { get; } = new();
+    public static int DwgTitled { get; set; } = 1;
+
+    public static object GetSystemVariable(string name)
+      => name == "DWGTITLED"
+        ? DwgTitled
+        : throw new InvalidOperationException($"Unsupported test system variable: {name}");
   }
 }
 

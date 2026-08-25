@@ -26,7 +26,8 @@ public static class CivilExecution
     Func<Document, CivilDocument, Database, Transaction, T> action,
     bool write,
     ExpectedDrawing? expectedDrawing,
-    InternalBenchmarkMeasurement? benchmarkMeasurement)
+    InternalBenchmarkMeasurement? benchmarkMeasurement,
+    bool saveDrawing = false)
   {
     T? result = default;
     Exception? capturedException = null;
@@ -60,6 +61,20 @@ public static class CivilExecution
           database.FingerprintGuid,
           () =>
           {
+            if (saveDrawing)
+            {
+              var drawingHasFileName = Convert.ToInt16(
+                App.GetSystemVariable("DWGTITLED")
+              ) != 0;
+              if (!drawingHasFileName || string.IsNullOrWhiteSpace(database.Filename))
+              {
+                throw new JsonRpcDispatchException(
+                  "CIVIL3D.SAVE_PATH_REQUIRED",
+                  "The active drawing has not been named yet. Save it once in Civil 3D before using saveDrawing."
+                );
+              }
+            }
+
             using var documentLock = doc.LockDocument();
             using var transaction = database.TransactionManager.StartTransaction();
 
@@ -73,6 +88,29 @@ public static class CivilExecution
             return actionResult;
           }
         );
+
+        if (saveDrawing)
+        {
+          try
+          {
+            // Saving inside the Roslyn transaction can fail with eFilerError.
+            // Run it only after both the transaction and document lock are disposed.
+            database.SaveAs(
+              database.Filename,
+              true,
+              database.OriginalFileVersion,
+              database.SecurityParameters
+            );
+          }
+          catch (Exception ex)
+          {
+            throw new JsonRpcDispatchException(
+              "CIVIL3D.SAVE_FAILED",
+              $"Drawing changes were committed in memory, but saving the active drawing failed: {ex.Message}",
+              operationCommitted: true
+            );
+          }
+        }
       }
       catch (Exception ex)
       {

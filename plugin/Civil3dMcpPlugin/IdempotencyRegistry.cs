@@ -19,12 +19,13 @@ internal sealed class IdempotencyRegistry
   internal IdempotencyReservation Reserve(
     JsonObject? parameters,
     string code,
-    ExpectedDrawing expectedDrawing)
+    ExpectedDrawing expectedDrawing,
+    bool saveDrawing)
   {
     var key = ParseOptionalKey(parameters);
     if (key == null) return IdempotencyReservation.None;
 
-    var binding = IdempotencyBinding.Create(code, expectedDrawing);
+    var binding = IdempotencyBinding.Create(code, expectedDrawing, saveDrawing);
     lock (_sync)
     {
       if (_entries.TryGetValue(key, out var existing))
@@ -33,7 +34,7 @@ internal sealed class IdempotencyRegistry
         {
           throw Error(
             "CIVIL3D.IDEMPOTENCY_CONFLICT",
-            "The idempotencyKey is already bound to different code or expectedDrawing."
+            "The idempotencyKey is already bound to different code, expectedDrawing, or saveDrawing."
           );
         }
 
@@ -143,15 +144,20 @@ internal sealed class IdempotencyRegistry
 internal readonly record struct IdempotencyBinding(
   string CodeSha256,
   string DatabaseFilename,
-  Guid FingerprintGuid)
+  Guid FingerprintGuid,
+  bool SaveDrawing)
 {
-  public static IdempotencyBinding Create(string code, ExpectedDrawing expectedDrawing)
+  public static IdempotencyBinding Create(
+    string code,
+    ExpectedDrawing expectedDrawing,
+    bool saveDrawing)
   {
     var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(code)));
     return new IdempotencyBinding(
       hash,
       expectedDrawing.DatabaseFilename.ToUpperInvariant(),
-      expectedDrawing.FingerprintGuid
+      expectedDrawing.FingerprintGuid,
+      saveDrawing
     );
   }
 }

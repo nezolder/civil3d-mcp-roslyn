@@ -74,6 +74,8 @@ function classifyPluginCode(code: string): {
     case "CIVIL3D.DRAWING_GUARD_REQUIRED":
     case "CIVIL3D.DRAWING_MISMATCH":
       return { category: "drawing", outcome: "not_started" };
+    case "CIVIL3D.SAVE_PATH_REQUIRED":
+      return { category: "drawing", outcome: "not_started" };
     case "CIVIL3D.DRAWING_GUARD_INVALID":
       return { category: "validation", outcome: "not_started" };
     case "CIVIL3D.IDEMPOTENCY_CONFLICT":
@@ -88,6 +90,7 @@ function classifyPluginCode(code: string): {
     case "CIVIL3D.TRANSPORT_ERROR":
       return { category: "transport", outcome: "unknown" };
     case "CIVIL3D.TRANSACTION_FAILED":
+    case "CIVIL3D.SAVE_FAILED":
     case "CIVIL3D.RESULT_SERIALIZATION_FAILED":
       return { category: "execution", outcome: "reported_error" };
     default:

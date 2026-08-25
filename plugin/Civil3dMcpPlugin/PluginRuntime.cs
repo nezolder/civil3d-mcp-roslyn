@@ -16,12 +16,17 @@ public sealed record PluginStatus(
 /// </summary>
 public sealed class JsonRpcDispatchException : Exception
 {
-  public JsonRpcDispatchException(string code, string message) : base(message)
+  public JsonRpcDispatchException(
+    string code,
+    string message,
+    bool operationCommitted = false) : base(message)
   {
     Code = code;
+    OperationCommitted = operationCommitted;
   }
 
   public string Code { get; }
+  public bool OperationCommitted { get; }
 }
 
 /// <summary>
@@ -142,6 +147,10 @@ public static class PluginRuntime
     }
     catch (JsonRpcDispatchException ex)
     {
+      if (ex.OperationCommitted)
+      {
+        reservation.Complete();
+      }
       return SerializeError(id, ex.Code, ex.Message, benchmarkMeasurement);
     }
     catch (Exception ex)
@@ -167,7 +176,7 @@ public static class PluginRuntime
   {
     if (method != "executeCode") return IdempotencyReservation.None;
 
-    var readOnly = parameters?["readOnly"]?.GetValue<bool>() ?? false;
+    var readOnly = GetOptionalBool(parameters, "readOnly") ?? false;
     if (parameters?.ContainsKey("idempotencyKey") != true) return IdempotencyReservation.None;
     if (readOnly)
     {
@@ -180,7 +189,8 @@ public static class PluginRuntime
     // Validate every part of the binding before acquiring the serialized Civil gate.
     var code = GetRequiredString(parameters, "code");
     var expectedDrawing = DrawingGuard.Parse(parameters, required: true)!;
-    return Idempotency.Reserve(parameters, code, expectedDrawing);
+    var saveDrawing = GetOptionalBool(parameters, "saveDrawing") ?? false;
+    return Idempotency.Reserve(parameters, code, expectedDrawing, saveDrawing);
   }
 
   // ── Parameter extraction helpers ──
@@ -222,7 +232,18 @@ public static class PluginRuntime
     => parameters?[name] != null ? parameters[name]!.GetValue<int>() : null;
 
   public static bool? GetOptionalBool(JsonObject? parameters, string name)
-    => parameters?[name] != null ? parameters[name]!.GetValue<bool>() : null;
+  {
+    var value = parameters?[name];
+    if (value == null) return null;
+    if (value is JsonValue jsonValue && jsonValue.TryGetValue<bool>(out var parsed))
+    {
+      return parsed;
+    }
+    throw new JsonRpcDispatchException(
+      "CIVIL3D.INVALID_INPUT",
+      $"Parameter '{name}' must be a boolean."
+    );
+  }
 
   // ── JSON-RPC serialization ──
 

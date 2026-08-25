@@ -234,7 +234,8 @@ export class ApplicationClientConnection {
   public sendCommand(
     command: string,
     params: Record<string, unknown> = {},
-    benchmarkTrace?: BenchmarkTraceRequest
+    benchmarkTrace?: BenchmarkTraceRequest,
+    timeoutMs: number = COMMAND_TIMEOUT_MS
   ): Promise<any | MeasuredCommandResult> {
     return new Promise((resolve, reject) => {
       const fallbackStartedAt = benchmarkTrace ? performance.now() : undefined;
@@ -355,11 +356,11 @@ export class ApplicationClientConnection {
             log.warn("Command timed out", {
               method: command,
               requestId,
-              timeoutMs: COMMAND_TIMEOUT_MS,
+              timeoutMs,
             });
             const timeoutError = new Civil3dMcpError(
               "CIVIL3D.COMMAND_TIMEOUT",
-              `Command timed out after ${COMMAND_TIMEOUT_MS}ms: ${command}`,
+              `Command timed out after ${timeoutMs}ms: ${command}`,
               "timeout",
               "transport",
               "unknown"
@@ -369,7 +370,7 @@ export class ApplicationClientConnection {
             );
             this.socket.destroy();
           }
-        }, COMMAND_TIMEOUT_MS);
+        }, timeoutMs);
         this.commandSent = true;
         this.socket.write(`${commandString}\n`);
       } catch (error) {

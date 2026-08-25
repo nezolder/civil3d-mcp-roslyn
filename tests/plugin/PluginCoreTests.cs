@@ -19,6 +19,9 @@ internal static class PluginCoreTests
     {
       ("direct execute guard is required and malformed guards fail closed", DirectGuardContractAsync),
       ("drawing identity is checked before lock, transaction, and Roslyn", DrawingIdentityOrderingAsync),
+      ("save runs after commit and releases transaction resources", SaveAfterCommitOrderingAsync),
+      ("save rejects unsupported request states before Roslyn", SaveRequestValidationAsync),
+      ("save failure preserves committed idempotency state", SaveFailureCompletesIdempotencyAsync),
       ("failed listener start does not report running", FailedListenerStartDoesNotReportRunningAsync),
       ("parallel dispatch is serialized with exact waiting and active status", SerializedDispatchStatusAsync),
       ("health bypasses active and waiting Civil operations", HealthBypassesSerializedQueueAsync),
@@ -268,6 +271,102 @@ internal static class PluginCoreTests
     AssertCleanStatus();
   }
 
+  private static async Task SaveAfterCommitOrderingAsync()
+  {
+    ResetEnvironment();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    var transactionCountAtSave = -1;
+    var documentLockCountAtSave = -1;
+    CurrentDatabase.BeforeSaveAs = () =>
+    {
+      transactionCountAtSave = CurrentDatabase.TransactionManager.ActiveCount;
+      documentLockCountAtSave = CurrentDocument.ActiveLockCount;
+    };
+
+    AssertResult(
+      await SendAsync(CreateGuardedWriteRequest("save-after-commit", "save-result", saveDrawing: true)),
+      "save-result"
+    );
+
+    Assert(CurrentDatabase.TransactionManager.CommittedCount == 1,
+      "save request must commit the write transaction exactly once");
+    Assert(CurrentDatabase.SaveAsCallCount == 1,
+      "save request must save the drawing exactly once");
+    Assert(CurrentDatabase.LastSavedFilename == ActualPath,
+      "save request must use the guarded active drawing path");
+    Assert(transactionCountAtSave == 0,
+      "save must start only after the script transaction is disposed");
+    Assert(documentLockCountAtSave == 0,
+      "save must start only after the script document lock is disposed");
+  }
+
+  private static async Task SaveRequestValidationAsync()
+  {
+    const string templatePath = @"C:\Users\test\AppData\Local\Autodesk\C3D 2025\Template\mt_2025.dwt";
+    ResetEnvironment(actualPath: templatePath, dwgTitled: false);
+    AssertError(
+      await SendAsync(CreateRequest(
+        "save-unnamed",
+        readOnly: false,
+        includeExpectedDrawing: true,
+        expectedDrawing: Guard(templatePath, ActualFingerprint),
+        code: "must-not-run",
+        saveDrawing: true
+      )),
+      "CIVIL3D.SAVE_PATH_REQUIRED"
+    );
+    AssertNoCivilResourcesOpened();
+    Assert(CurrentDatabase.SaveAsCallCount == 0,
+      "unnamed drawing rejection must not attempt a save");
+
+    ResetEnvironment();
+    AssertError(
+      await SendAsync(CreateRequest(
+        "save-read-only",
+        readOnly: true,
+        code: "must-not-run",
+        saveDrawing: true
+      )),
+      "CIVIL3D.INVALID_INPUT"
+    );
+    AssertNoCivilResourcesOpened();
+  }
+
+  private static async Task SaveFailureCompletesIdempotencyAsync()
+  {
+    ResetEnvironment();
+    CurrentDatabase.SaveAsException = new InvalidOperationException("expected save failure");
+    const string key = "write:save-failure";
+
+    AssertError(
+      await SendAsync(CreateIdempotentWriteRequest(
+        "save-failure-first",
+        key,
+        "committed-before-save",
+        saveDrawing: true
+      )),
+      "CIVIL3D.SAVE_FAILED"
+    );
+    Assert(CurrentDatabase.TransactionManager.CommittedCount == 1,
+      "save failure must occur after the in-memory write committed");
+    Assert(CurrentDatabase.SaveAsCallCount == 1,
+      "failed save must be attempted exactly once");
+
+    AssertError(
+      await SendAsync(CreateIdempotentWriteRequest(
+        "save-failure-duplicate",
+        key,
+        "committed-before-save",
+        saveDrawing: true
+      )),
+      "CIVIL3D.IDEMPOTENCY_COMPLETED"
+    );
+    Assert(RoslynExecutor.CallCount == 1,
+      "a save failure duplicate must not repeat the committed drawing modification");
+    Assert(CurrentDatabase.SaveAsCallCount == 1,
+      "a save failure duplicate must not repeat the save attempt implicitly");
+  }
+
   private static async Task IdempotencyFirstSuccessAndCompletedDuplicateAsync()
   {
     ResetEnvironment();
@@ -358,6 +457,15 @@ internal static class PluginCoreTests
     );
     AssertError(
       await SendAsync(differentDrawing.ToJsonString()),
+      "CIVIL3D.IDEMPOTENCY_CONFLICT"
+    );
+    AssertError(
+      await SendAsync(CreateIdempotentWriteRequest(
+        "idempotency-save-conflict",
+        key,
+        "original",
+        saveDrawing: true
+      )),
       "CIVIL3D.IDEMPOTENCY_CONFLICT"
     );
     Assert(RoslynExecutor.CallCount == 1, "conflict must not reach Roslyn");
@@ -789,7 +897,9 @@ internal static class PluginCoreTests
   private static Database CurrentDatabase => CurrentDocument.Database;
   private static Document CurrentDocument => Application.DocumentManager.MdiActiveDocument!;
 
-  private static void ResetEnvironment(string actualPath = ActualPath)
+  private static void ResetEnvironment(
+    string actualPath = ActualPath,
+    bool? dwgTitled = null)
   {
     AssertCleanStatus();
     PluginRuntime.ResetIdempotencyForTests();
@@ -800,6 +910,7 @@ internal static class PluginCoreTests
     };
     Application.DocumentManager.MdiActiveDocument = new Document(database);
     Application.DocumentManager.CommandContextDelay = TimeSpan.Zero;
+    Application.DwgTitled = (dwgTitled ?? !string.IsNullOrEmpty(actualPath)) ? 1 : 0;
     CivilApplication.ActiveDocument = new CivilDocument();
     RoslynExecutor.Reset();
   }
@@ -811,24 +922,41 @@ internal static class PluginCoreTests
       ["fingerprintGuid"] = fingerprintGuid.ToString("D"),
     };
 
-  private static string CreateGuardedWriteRequest(string id, string code)
+  private static string CreateGuardedWriteRequest(
+    string id,
+    string code,
+    bool saveDrawing = false)
     => CreateRequest(
       id,
       readOnly: false,
       includeExpectedDrawing: true,
       expectedDrawing: Guard(ActualPath, ActualFingerprint),
-      code: code
+      code: code,
+      saveDrawing: saveDrawing
     );
 
-  private static string CreateIdempotentWriteRequest(string id, JsonNode? idempotencyKey, string code)
+  private static string CreateIdempotentWriteRequest(
+    string id,
+    JsonNode? idempotencyKey,
+    string code,
+    bool saveDrawing = false)
   {
-    var request = JsonNode.Parse(CreateGuardedWriteRequest(id, code))!.AsObject();
+    var request = JsonNode.Parse(CreateGuardedWriteRequest(id, code, saveDrawing))!.AsObject();
     request["params"]!.AsObject()["idempotencyKey"] = idempotencyKey?.DeepClone();
     return request.ToJsonString();
   }
 
-  private static string CreateIdempotentWriteRequest(string id, string idempotencyKey, string code)
-    => CreateIdempotentWriteRequest(id, JsonValue.Create(idempotencyKey), code);
+  private static string CreateIdempotentWriteRequest(
+    string id,
+    string idempotencyKey,
+    string code,
+    bool saveDrawing = false)
+    => CreateIdempotentWriteRequest(
+      id,
+      JsonValue.Create(idempotencyKey),
+      code,
+      saveDrawing
+    );
 
   private static string CreateHealthRequest(string id)
     => new JsonObject
@@ -918,7 +1046,8 @@ internal static class PluginCoreTests
     bool readOnly,
     bool includeExpectedDrawing = false,
     JsonNode? expectedDrawing = null,
-    string code = "return-value")
+    string code = "return-value",
+    bool saveDrawing = false)
   {
     var parameters = new JsonObject
     {
@@ -928,6 +1057,10 @@ internal static class PluginCoreTests
     if (includeExpectedDrawing)
     {
       parameters["expectedDrawing"] = expectedDrawing?.DeepClone();
+    }
+    if (saveDrawing)
+    {
+      parameters["saveDrawing"] = true;
     }
 
     return new JsonObject
