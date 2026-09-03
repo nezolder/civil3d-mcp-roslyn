@@ -66,8 +66,10 @@ public static class RoslynExecutor
   internal static async Task<object?> ExecuteAsync(
     string code,
     ScriptContext context,
-    InternalBenchmarkMeasurement? benchmarkMeasurement)
+    InternalBenchmarkMeasurement? benchmarkMeasurement,
+    OperationProgress? progress = null)
   {
+    progress?.SetStage(OperationStage.PreparingScript);
     // Validate with sandbox
     ScriptSandbox.Validate(code);
 
@@ -81,6 +83,7 @@ public static class RoslynExecutor
     benchmarkMeasurement?.RecordCacheLookup(cacheHit);
     if (!cacheHit)
     {
+      progress?.SetStage(OperationStage.CompilingScript);
       script = CSharpScript.Create<object>(code, options, typeof(ScriptContext));
       try
       {
@@ -102,6 +105,7 @@ public static class RoslynExecutor
 
     try
     {
+      progress?.SetStage(OperationStage.RunningScript);
       var result = await script!.RunAsync(context, cts.Token);
       return result.ReturnValue;
     }

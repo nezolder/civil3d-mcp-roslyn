@@ -10,6 +10,8 @@ tests/transport/bin/
 tests/transport/obj/
 tests/plugin/bin/
 tests/plugin/obj/
+tests/skills/bin/
+tests/skills/obj/
 *.dll
 *.pdb
 *.user

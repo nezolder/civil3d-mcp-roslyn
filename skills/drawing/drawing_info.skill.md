@@ -10,6 +10,12 @@ parameters: []
 
 ```csharp
 var settings = CivilDoc.Settings.DrawingSettings;
+var dbmod = Convert.ToInt32(
+    Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("DBMOD")
+);
+var isNamed = Convert.ToInt16(
+    Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("DWGTITLED")
+) != 0;
 
 // Count objects
 var surfaceCount = CivilDoc.GetSurfaceIds().Count;
@@ -23,6 +29,11 @@ return new {
     drawing = new {
         name = Document.Name,
         path = Database.Filename,
+        fingerprintGuid = Database.FingerprintGuid.ToString(),
+        isNamed,
+        dbmod,
+        hasUnsavedChanges = dbmod != 0,
+        isSavedAndClean = isNamed && dbmod == 0,
         coordinateSystem = settings.UnitZoneSettings.CoordinateSystemCode,
         units = settings.UnitZoneSettings.DrawingUnits.ToString(),
         angularUnits = settings.UnitZoneSettings.AngularUnits.ToString()
@@ -40,5 +51,7 @@ return new {
 
 ## Usage Notes
 - This is a good first query to understand the drawing contents
+- `path`, `fingerprintGuid`, and `dbmod` are the minimum identity check before a separately approved write
+- `isSavedAndClean` is true only for a named drawing with `DBMOD=0`
 - Coordinate system code follows EPSG or Autodesk format
 - Units can be Meter, Foot, etc.

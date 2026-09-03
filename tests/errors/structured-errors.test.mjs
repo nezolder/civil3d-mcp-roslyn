@@ -143,6 +143,24 @@ test("drawing guard plugin errors have stable non-retryable classifications", ()
   }
 });
 
+test("command-context start timeout is not confused with an uncertain running script", () => {
+  const notStarted = createStructuredToolErrorResult(civil3dErrorFromPlugin({
+    code: "CIVIL3D.COMMAND_CONTEXT_TIMEOUT",
+    message: "The command context was not entered; the script did not run.",
+  }));
+  assert.equal(notStarted.isError, true);
+  assert.equal(notStarted.structuredContent.error.category, "timeout");
+  assert.equal(notStarted.structuredContent.error.outcome, "not_started");
+  assert.equal(notStarted.structuredContent.error.retryable, false);
+
+  const startedTimeout = civil3dErrorFromPlugin({
+    code: "CIVIL3D.TIMEOUT",
+    message: "Script execution timed out.",
+  });
+  assert.equal(startedTimeout.outcome, "unknown");
+  assert.equal(startedTimeout.toStructuredError().retryable, false);
+});
+
 test("a command can opt into a longer timeout for a synchronous drawing save", async () => {
   const connection = new ApplicationClientConnection("127.0.0.1", 65535);
   connection.isConnected = true;

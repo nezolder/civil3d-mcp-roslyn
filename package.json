@@ -15,7 +15,7 @@
     "test:benchmark": "npm run build && node --test tests/benchmark/*.test.mjs",
     "test:errors": "npm run build && node --test tests/errors/*.test.mjs",
     "test:plugin": "npm run build && dotnet run --project tests/plugin/Civil3dMcpPlugin.CoreTests.csproj --configuration Release && node --test tests/plugin/*.test.mjs",
-    "test:skills": "npm run build && node --test tests/skills/*.test.mjs",
+    "test:skills": "npm run build && node --test tests/skills/*.test.mjs && dotnet run --project tests/skills/Civil3dMcp.SkillTests.csproj --configuration Release",
     "test:transport": "npm run build && node --test tests/transport/*.test.mjs && dotnet run --project tests/transport/Civil3dMcpPlugin.TransportTests.csproj --configuration Release",
     "benchmark": "node build/benchmark/cli.js",
     "test:mcp": "node scripts/mcp-smoke-test.mjs"

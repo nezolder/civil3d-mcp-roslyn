@@ -1,52 +1,48 @@
-# Development status
+# Published development status
 
-Updated: 2026-08-25
+Updated: 2026-09-03
 
-This file is the compact handoff for the current development line. It separates repository and test evidence from live Civil 3D evidence.
+This repository contains the complete current accepted source snapshot, not just a corrective patch on the initial release. Unvalidated local experiments, client data, live-run artifacts, proprietary assemblies and private development history are excluded.
 
-## Fixed project boundaries
+## Boundaries and evidence
 
-- Dynamic Roslyn/C# execution remains the core design.
-- The public MCP surface remains exactly `civil3d_query`, `civil3d_execute`, and `civil3d_skills`.
-- Civil 3D 2025 is the primary live target. Later-version support must be added separately and must not break 2025.
-- A build, typecheck, or MCP smoke test is not live Civil 3D proof.
-- Changes should remain small, reversible, and independently testable.
+- Autodesk Civil 3D 2025 is the primary target; retained live checks used Civil 3D 2025 Hungary. Other versions are **Unverified**.
+- Dynamic Roslyn/C# execution remains the core, with exactly `civil3d_query`, `civil3d_execute` and `civil3d_skills` as public MCP tools.
+- **Proven** means supported by the stated code, offline test or targeted live evidence. **Probable** means a supported explanation that is not fully established. **Unverified** means a fresh targeted check is still needed.
+- Offline tests do not establish live Civil behavior. The live results below concern specific disposable fixtures, not universal feature or road-standard compliance.
 
-Status terms:
+## Included capabilities
 
-- **Proven**: supported by the current repository, tests, or retained local live evidence.
-- **Probable**: strongly supported but not fully rechecked in the current environment.
-- **Unverified**: requires a fresh targeted check.
+| Capability | Evidence and limits |
+| --- | --- |
+| Benchmark recorder and opt-in read-only runner | **Proven offline and for one live query scenario:** five cold and five warm first-pass successes. Other benchmark scenarios and total workflow/token savings remain **Unverified**. |
+| Structured errors, bounded framing/results, serialized execution and drawing guards | **Proven offline**, with targeted normal live execution and saved-write checks. Uncertain outcomes are never retried automatically. |
+| Private health, audit logging and session idempotency | **Proven offline**, with responsive live health during pending work. Logs omit code and drawing content. Idempotency is session-scoped, not durable exactly-once execution. |
+| Filtered/paged skills and bounded API lookup | **Proven offline**; skill discovery was also checked through a fresh client. Lookup reads already-loaded allowlisted public metadata without running Civil code. |
+| Multiple-instance routing | **Proven live:** two Civil sessions used distinct endpoints, ambiguous access failed closed, and selected requests reached the intended drawing fingerprints with `DBMOD=0`. |
+| Bounded road-model inventories | **Proven offline and on an empty live fixture:** profiles, corridors, sample lines/sections, gravity pipe-network QC, TIN definition counts, selection and drawing identity. Populated cases are not all live-validated. |
+| Road-design style readiness | **Proven live** for twelve baseline style groups in one Hungary template. Other templates remain **Unverified**. |
+| Alignment from an identified polyline | **Proven live**, including saved-file reopen. The source is preserved; this narrow recipe adds no automatic curves or standards decisions. |
+| Connected alignment geometry audit | **Proven offline and live** on straight and compound line/arc/clothoid geometry. Standards compliance is explicitly not evaluated. |
+| Fixed-primitive alignment replacement | **Proven offline and in one isolated live case**, including save/reopen of an eight-primitive reverse-clothoid chain. The recipe requires an audited independent, siteless, zero-station centreline without station equations, superelevation, criteria/check state, profiles or corridor dependencies. |
+| Post-commit saving | **Proven live** with `saveDrawing: true`, `DBMOD=0` and independent readback. Saving occurs after transaction/lock disposal; scripts must not call `Database.SaveAs` or queue `QSAVE`. |
 
-## Phase status
+The accepted catalog contains **22 skills** and **24 C# templates**, behind the same three public tools. Build instructions and test commands remain in [README.md](README.md) and `package.json`; Autodesk reference assemblies must be supplied locally and are not distributed.
 
-| Phase | Status | Evidence boundary |
-| --- | --- | --- |
-| 0–1 audit, preserved baseline, migration | **Proven** | Preserved commit `5ce5049` and tag `local-baseline-c3d2025-20260820`; the current line descends from it. |
-| 2A benchmark harness | **Proven** | Commits `b61dd63`, `efb737d`, and `b905d29`. The read-only query scenario has 5 cold and 5 warm live runs, all successful on the first pass. This does not cover every scenario in the benchmark manifest. |
-| 2B structured errors | **Proven in code/tests** | Commit `e259267`. Fresh live checks of each error class are **Unverified**. |
-| 2C framed and bounded transport | **Proven in code/tests** | Commit `dd04b31`. Later live calls prove the normal transport path; destructive limit-edge testing remains unnecessary unless a fault appears. |
-| 2D serialized execution and drawing guard | **Proven in code/tests** | Commit `ee6d9da`. Later live probes completed without a stuck operation. Broad concurrency stress testing is **Unverified** and is not currently required. |
-| 2E bounded Civil 3D result serialization | **Proven in code/tests** | Commit `0da7516`. |
-| 2F health/status | **Proven live** | Commit `0f57133`; live status returned idle state after the latest save test. |
-| 2G filtered and paged skill discovery | **Proven in code/tests** | Commit `691f174`. This is Node-side behavior and does not require a drawing write. |
-| 2H bounded read-only API lookup | **Proven in code/tests** | Commit `82f5aeb`. A fresh live recheck is **Unverified** in this handoff. |
-| 2I audit, security, and session idempotency | **Proven in code/tests** | Commits `a7a1552`, `56fd701`, and `227e88f`. |
-| 2J validated skills and stable helpers | **Partly proven** | Civil 3D 2025 skill fixes and tests are in `643e422`, `6f66965`, and `15f03a7`. The retained live benchmark covers one read-only query, not the complete skills surface. |
+**Proven offline for this publication snapshot:** TypeScript typecheck/build, plugin Release build, benchmark/error/discovery/routing tests, plugin core and serialization tests, transport tests, the three-tool MCP smoke check, all 24 template metadata compilations and 18 fixed-primitive input checks passed. NuGet vulnerability-feed retrieval produced an environment warning; these checks are not a dependency-security audit.
 
-## Latest corrective fix
+## Latest command-context correction
 
-Commit `19c8574` adds the optional `saveDrawing` behavior to the existing execute tool. Saving happens only after the script transaction and document lock are closed. A live Civil 3D 2025 Hungary test on a disposable drawing proved an in-memory change, successful disk save, `DBMOD=0`, and independent disk readback. An unnamed drawing was rejected before execution so its template path could not be overwritten.
+- **Proven offline:** a 15-second atomic admission deadline rejects a callback that has not started, returning `CIVIL3D.COMMAND_CONTEXT_TIMEOUT`, `outcome: not_started` and `retryable: false`. A late abandoned callback does no drawing work. Once an operation starts, its gate is retained until native completion.
+- **Proven local API inspection and deterministic reproduction:** a completion recheck closes a lost-notification window in the Civil 3D 2025 native awaitable. The completion race is a **Probable** contributor to earlier hangs, not a proven explanation of every case.
+- **Proven offline:** private health reports only fixed stage names and elapsed times. Failure/cancellation, stale callbacks, subsequent requests and started-operation serialization are covered by regression tests.
+- **Proven live on the source-equivalent development build:** with no drawing open, one request returned the non-retryable pre-start error after about 15 seconds and health returned to idle. After opening a disposable drawing, a new request succeeded in the same Civil process without restart. A separate backed-up disposable copy completed a geometry-neutral save, follow-up query and normal close/reopen with `DBMOD=0`.
+- **Unverified:** elimination of every intermittent post-save or side-database hang, native cancellation, or recovery of arbitrary already-running code. Do not clear the gate or repeat an uncertain write as automatic recovery.
 
-## Next decision gate
+The publication build is checked offline; it is not a separate live installation. Public source is aligned with the accepted development implementation, and this source update does not alter the active Civil session.
 
-Close 2J with a deliberately small acceptance check, without new implementation unless it exposes a real fault:
+## Not yet included
 
-1. Start a fresh Codex/ChatGPT client session so the MCP tool schema is not cached.
-2. Confirm exactly three public tools and confirm that `civil3d_execute` exposes `saveDrawing`.
-3. Check skill list/get/filter/pagination through the public MCP surface.
-4. If needed, run at most two representative read-only skills in Civil 3D 2025 Hungary on a disposable synthetic drawing and retain only sanitized evidence.
+Dynamic surface-profile/profile-view authoring remains local development work. Its offline checks passed, but its recipe has not been run live, so it is excluded from this accepted snapshot. Designed grades, general corridor authoring, automatic standards compliance and later Civil version support are not claimed.
 
-The empty write and skills groups in the read-only benchmark aggregate are not a reason to build a write-capable benchmark runner. They reflect the runner's intentional read-only scope.
-
-After this gate, choose the next feature only from an observed work problem or a measured benefit. Do not begin a general refactor.
+Next development work should finish the small surface-profile/view validation, or address a newly observed fault. Do not introduce a general refactor or new public tool without a concrete demonstrated need.

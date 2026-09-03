@@ -1,0 +1,44 @@
+// Invented reverse-clothoid inputs, with no client geometry or Civil host access.
+// Tests substitute these initializers into the current skill's validation prefix.
+var alignmentHandle = "AB12";
+var tolerance = 0.001;
+var directionTolerance = 0.000001;
+var expectedName = "SyntheticCentreline";
+var expectedLayer = "0";
+var expectedStyle = "SyntheticStyle";
+var expectedStartingStation = 0.0;
+var expectedUseDesignSpeed = true;
+var expectedStart = new Point2d(0.0, 0.0);
+var expectedEnd = new Point2d(549.7711704994058, 173.62916426622223);
+var auditVerifiedPlainIndependentCentreline = true;
+var auditVerifiedNoStationEquations = true;
+var auditVerifiedNoSuperelevation = true;
+var preserveEndpoints = true;
+
+var expectedSpeedRecords = new[]
+{
+    new { station = 0.0, value = 80.0, comment = "first" },
+    new { station = 200.0, value = 60.0, comment = "approach" }
+};
+
+var expectedExistingPrimitives = new[]
+{
+    new { kind = "line", start = new Point2d(0, 0), end = new Point2d(549.7711704994058, 173.62916426622223),
+        length = 576.537445961729, radius = 0.0, clockwise = false, lineDirection = 1.2648889809496593,
+        startDirection = 1.2648889809496593, endDirection = 1.2648889809496593, spiralDirection = "", curveType = "",
+        radiusIn = 0.0, radiusOut = 0.0 }
+};
+
+// Precalculated connected chain copied from the synthetic input; no solver or
+// geometry is invented here. Spiral pi values are the supplied control points.
+var plannedPrimitives = new[]
+{
+    new { kind = "line", start = new Point2d(0,0), middle = new Point2d(0,0), end = new Point2d(120,0), pi = new Point2d(0,0), length = 120.0, radius = 0.0, transitionLength = 0.0, radiusIn = 0.0, radiusOut = 0.0, startDirection = 1.5707963267948966, endDirection = 1.5707963267948966, curveType = SpiralCurveType.InCurve, clockwise = false },
+    new { kind = "spiral", start = new Point2d(120,0), middle = new Point2d(0,0), end = new Point2d(159.96001851424518,1.332381255358287), pi = new Point2d(146.68064830587338,0), length = 40.0, radius = 200.0, transitionLength = 40.0, radiusIn = double.PositiveInfinity, radiusOut = 200.0, startDirection = 1.5707963267948966, endDirection = 1.4707963267948965, curveType = SpiralCurveType.InCurve, clockwise = false },
+    new { kind = "curve", start = new Point2d(159.96001851424518,1.332381255358287), middle = new Point2d(208.39736385001328,12.394690153781765), end = new Point2d(252.61323817834514,35.05539532201867), pi = new Point2d(0,0), length = 99.62634015954634, radius = 200.0, transitionLength = 0.0, radiusIn = 200.0, radiusOut = 200.0, startDirection = 1.4707963267948965, endDirection = 0.9726646259971649, curveType = SpiralCurveType.OutCurve, clockwise = false },
+    new { kind = "spiral", start = new Point2d(252.61323817834514,35.05539532201867), middle = new Point2d(0,0), end = new Point2d(284.0808264704371,59.72053684903709), pi = new Point2d(263.6422640969112,42.57054669961768), length = 40.0, radius = 200.0, transitionLength = 40.0, radiusIn = 200.0, radiusOut = double.PositiveInfinity, startDirection = 0.9726646259971649, endDirection = 0.8726646259971649, curveType = SpiralCurveType.OutCurve, clockwise = false },
+    new { kind = "spiral", start = new Point2d(284.0808264704371,59.72053684903709), middle = new Point2d(0,0), end = new Point2d(315.2022289560071,84.84013011808158), pi = new Point2d(304.5121733560743,76.86447248523031), length = 40.0, radius = 350.0, transitionLength = 40.0, radiusIn = double.PositiveInfinity, radiusOut = 350.0, startDirection = 0.8726646259971649, endDirection = 0.929807483140022, curveType = SpiralCurveType.InCurve, clockwise = true },
+    new { kind = "curve", start = new Point2d(315.2022289560071,84.84013011808158), middle = new Point2d(362.88611812029706,114.76723021254936), end = new Point2d(414.7513185605333,136.66210607862126), pi = new Point2d(0,0), length = 112.71630954950385, radius = 350.0, transitionLength = 0.0, radiusIn = 350.0, radiusOut = 350.0, startDirection = 0.929807483140022, endDirection = 1.25185408185289, curveType = SpiralCurveType.OutCurve, clockwise = true },
+    new { kind = "spiral", start = new Point2d(414.7513185605333,136.66210607862126), middle = new Point2d(0,0), end = new Point2d(453.1785878704989,147.7472597559702), pi = new Point2d(427.416158810437,140.84423769426252), length = 40.0, radius = 350.0, transitionLength = 40.0, radiusIn = 350.0, radiusOut = double.PositiveInfinity, startDirection = 1.25185408185289, endDirection = 1.3089969389957474, curveType = SpiralCurveType.OutCurve, clockwise = true },
+    new { kind = "line", start = new Point2d(453.1785878704989,147.7472597559702), middle = new Point2d(0,0), end = new Point2d(549.7711704994058,173.62916426622223), pi = new Point2d(0,0), length = 100.0, radius = 0.0, transitionLength = 0.0, radiusIn = 0.0, radiusOut = 0.0, startDirection = 1.3089969389957474, endDirection = 1.3089969389957474, curveType = SpiralCurveType.InCurve, clockwise = false }
+};

@@ -27,7 +27,9 @@ public static class CivilExecution
     bool write,
     ExpectedDrawing? expectedDrawing,
     InternalBenchmarkMeasurement? benchmarkMeasurement,
-    bool saveDrawing = false)
+    bool saveDrawing = false,
+    OperationProgress? progress = null,
+    CancellationToken commandContextStartCancellationToken = default)
   {
     T? result = default;
     Exception? capturedException = null;
@@ -35,7 +37,8 @@ public static class CivilExecution
       ? (long?)null
       : Stopwatch.GetTimestamp();
 
-    await App.DocumentManager.ExecuteInCommandContextAsync(async _ =>
+    progress?.SetStage(OperationStage.WaitingForCommandContext);
+    await CommandContextAdmission.ExecuteAsync(App.DocumentManager, async _ =>
     {
       var executionStartedAt = benchmarkMeasurement == null
         ? (long?)null
@@ -49,6 +52,7 @@ public static class CivilExecution
 
       try
       {
+        progress?.SetStage(OperationStage.ResolvingDrawing);
         var doc = App.DocumentManager.MdiActiveDocument
           ?? throw new JsonRpcDispatchException("CIVIL3D.NO_DRAWING", "No active drawing is open in Civil 3D.");
         var civilDoc = CivilApplication.ActiveDocument
@@ -75,17 +79,37 @@ public static class CivilExecution
               }
             }
 
-            using var documentLock = doc.LockDocument();
-            using var transaction = database.TransactionManager.StartTransaction();
-
-            var actionResult = action(doc, civilDoc, database, transaction);
-
-            if (write)
+            progress?.SetStage(OperationStage.AcquiringDocumentLock);
+            using (var documentLock = doc.LockDocument())
             {
-              transaction.Commit();
-            }
+              try
+              {
+                progress?.SetStage(OperationStage.StartingTransaction);
+                using (var transaction = database.TransactionManager.StartTransaction())
+                {
+                  try
+                  {
+                    var actionResult = action(doc, civilDoc, database, transaction);
 
-            return actionResult;
+                    if (write)
+                    {
+                      progress?.SetStage(OperationStage.CommittingTransaction);
+                      transaction.Commit();
+                    }
+
+                    return actionResult;
+                  }
+                  finally
+                  {
+                    progress?.SetStage(OperationStage.DisposingTransaction);
+                  }
+                }
+              }
+              finally
+              {
+                progress?.SetStage(OperationStage.DisposingDocumentLock);
+              }
+            }
           }
         );
 
@@ -93,6 +117,7 @@ public static class CivilExecution
         {
           try
           {
+            progress?.SetStage(OperationStage.SavingDrawing);
             // Saving inside the Roslyn transaction can fail with eFilerError.
             // Run it only after both the transaction and document lock are disposed.
             database.SaveAs(
@@ -122,10 +147,15 @@ public static class CivilExecution
         {
           benchmarkMeasurement!.RecordExecution(Stopwatch.GetElapsedTime(startedAt));
         }
+        // This marker does not release the gate. The Autodesk task must still
+        // finish, even when the callback has disposed every drawing resource.
+        progress?.SetStage(OperationStage.WaitingForCommandContextCompletion);
       }
 
       await Task.CompletedTask;
-    }, null);
+    }, null, commandContextStartCancellationToken);
+
+    progress?.SetStage(OperationStage.ReturningResult);
 
     if (capturedException != null)
     {

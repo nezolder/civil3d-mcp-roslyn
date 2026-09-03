@@ -15,7 +15,7 @@ This independent project is not affiliated with or endorsed by Autodesk. Autodes
 ```
 ┌─────────────────┐     stdio      ┌──────────────────┐     TCP/JSON-RPC    ┌──────────────────┐
 │   AI Assistant   │ ◄────────────► │  MCP Server (TS) │ ◄──────────────────► │  Civil 3D Plugin │
-│ (Claude, Cline)  │               │   3 meta-tools    │     port 8080       │  Roslyn Engine   │
+│ (Codex, clients) │               │   3 meta-tools    │  discovered locally │  Roslyn Engine   │
 └─────────────────┘               └──────────────────┘                      └──────────────────┘
                                          │                                         │
                                     Skills Library                           C# Code Execution
@@ -27,7 +27,7 @@ This independent project is not affiliated with or endorsed by Autodesk. Autodes
 | Tool | Purpose | Safety |
 |------|---------|--------|
 | `civil3d_execute` | Execute C# code with **write** access; optional save after commit | ⚠️ Modifies drawing |
-| `civil3d_query` | Execute C# code **read-only** (no commit) | ✅ No side effects |
+| `civil3d_query` | Run intended read-only C# without committing the host transaction | Trusted code only; not a side-effect sandbox |
 | `civil3d_skills` | Browse/search/read code skill templates; `api_lookup` searches already-loaded public Civil 3D API metadata | ✅ Metadata only |
 
 ### How It Works
@@ -60,10 +60,16 @@ Result: [{ "Name": "EG", "Layer": "C-TOPO-EG" }, ...]
 
 Skills are documented C# code templates in `skills/`:
 
+The current accepted catalog contains 22 skills. It includes bounded road-model inventories, template-style readiness, controlled alignment creation from an identified polyline, connected curve/spiral auditing, and a narrowly guarded fixed-primitive replacement recipe. Dynamic surface-profile/view authoring is still under development and is not included in this published catalog. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the tested scope and remaining limitations.
+
 ```
 skills/
 ├── surfaces/           # Surface operations
 ├── alignments/         # Alignment + station/offset
+├── profiles/           # Profile inventory + elevation lookup
+├── corridors/          # Corridor and baseline summaries
+├── sections/           # Sample-line and section inventory
+├── pipe_networks/      # Gravity pipe-network QC
 ├── points/             # COGO points
 ├── geometry/           # Lines, polylines, text
 ├── drawing/            # Drawing info
@@ -123,10 +129,20 @@ C3DMCPSTATUS → verify running
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CIVIL3D_HOST` | `localhost` | Plugin host |
-| `CIVIL3D_PORT` | `8080` | Plugin port |
+| `CIVIL3D_PORT` | unset | Optional fixed-port override. When omitted, local instance discovery is active and the plugin prefers port 8080. |
+| `CIVIL3D_CONNECT_TIMEOUT` | `5000` | TCP connection timeout (ms) |
+| `CIVIL3D_DISCOVERY_TIMEOUT` | `5000` | Timeout for private health and drawing-identity probes (ms) |
 | `CIVIL3D_COMMAND_TIMEOUT` | `120000` | Execution timeout (ms) |
 | `CIVIL3D_SAVE_TIMEOUT` | `600000` | Timeout for execute requests with `saveDrawing: true` (ms) |
 | `LOG_LEVEL` | `info` | Log level |
+
+## Multiple Civil 3D instances
+
+Each loaded plugin session publishes a small local endpoint record containing only an opaque instance ID, process ID, port, and start time. It contains no drawing name or project data. The first Civil 3D instance prefers port 8080; another instance automatically uses a free localhost port.
+
+If exactly one instance is available, existing calls work as before. With multiple instances, `expectedDrawing` is used to find the matching active drawing before the requested C# reaches any plugin. An unguarded bootstrap query fails closed with `CIVIL3D.INSTANCE_SELECTION_REQUIRED` and reports the live candidates; retry it with the optional `instanceId` on the existing tool. The final plugin-side drawing guard still checks the path and fingerprint immediately before Civil API access. No fourth public MCP tool is added.
+
+Leave `CIVIL3D_PORT` unset for automatic selection. Setting it deliberately pins the MCP server to that one port for compatibility or diagnostics.
 
 ## Benchmarking
 
@@ -135,6 +151,8 @@ The phase 2A host-independent recorder, the phase 2A.1 opt-in internal live trac
 ## Structured errors (phase 2B.1)
 
 `civil3d_query` and `civil3d_execute` keep their existing text error content and `isError: true`, while also returning `structuredContent` with schema `civil3d-mcp-error/v1`. The stable error fields are `code`, `category`, `message`, `source`, `outcome`, and `retryable`. A command timeout or a connection loss after sending has `outcome: "unknown"` and `retryable: false`; the server never retries it automatically. Successful responses and the three-tool public surface are unchanged.
+
+An operation whose Civil command-context callback has not started within 15 seconds instead returns `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` with `outcome: "not_started"` and `retryable: false`. A subsequently arriving abandoned callback performs no drawing work. This deadline limits admission, not execution: a started operation retains the serialized gate until native completion, and an uncertain write must still be reconciled rather than repeated. A completion recheck also closes a reproduced lost-notification window in Civil 3D 2025's native awaitable. Private health exposes fixed execution-stage names and elapsed times without drawing content; these scoped corrections do not prove that every intermittent hang is eliminated.
 
 ## Private TCP framing (phase 2C.1)
 

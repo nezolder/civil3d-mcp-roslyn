@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Net.Sockets;
 
 namespace Civil3DMcpPlugin;
 
@@ -8,7 +9,14 @@ public sealed record PluginStatus(
   bool IsRunning,
   bool OperationInProgress,
   string? CurrentOperation,
-  int QueueDepth
+  int QueueDepth,
+  string InstanceId,
+  int ProcessId,
+  int Port,
+  DateTimeOffset StartedAtUtc,
+  string? OperationStage = null,
+  double? OperationElapsedMs = null,
+  double? StageElapsedMs = null
 );
 
 /// <summary>
@@ -35,21 +43,52 @@ public sealed class JsonRpcDispatchException : Exception
 /// </summary>
 public static class PluginRuntime
 {
-  public const int Port = 8080;
+  public const int DefaultPort = 8080;
+
+  public static string InstanceId { get; } = Guid.NewGuid().ToString("N");
+  public static DateTimeOffset StartedAtUtc { get; } = DateTimeOffset.UtcNow;
+  public static int Port { get; private set; } = DefaultPort;
 
   private static readonly object Sync = new();
   private static readonly SerializedOperationGate OperationGate = new();
   private static readonly IdempotencyRegistry Idempotency = new();
   private static RpcTcpServer? _server;
+  private static EndpointRegistration? _endpointRegistration;
 
   public static void StartServer()
   {
     lock (Sync)
     {
       if (_server != null) return;
-      var server = new RpcTcpServer(Port, HandleRawRequestAsync);
-      server.Start();
-      _server = server;
+      RpcTcpServer? server = null;
+      EndpointRegistration? registration = null;
+      try
+      {
+        server = new RpcTcpServer(DefaultPort, HandleRawRequestAsync);
+        try
+        {
+          server.Start();
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+          server.Stop();
+          server = new RpcTcpServer(0, HandleRawRequestAsync);
+          server.Start();
+        }
+
+        var boundPort = server.BoundPort;
+        registration = EndpointRegistration.Create(InstanceId, boundPort, StartedAtUtc);
+        Port = boundPort;
+        _server = server;
+        _endpointRegistration = registration;
+      }
+      catch
+      {
+        registration?.Dispose();
+        server?.Stop();
+        Port = DefaultPort;
+        throw;
+      }
     }
   }
 
@@ -58,7 +97,10 @@ public static class PluginRuntime
     lock (Sync)
     {
       _server?.Stop();
+      _endpointRegistration?.Dispose();
       _server = null;
+      _endpointRegistration = null;
+      Port = DefaultPort;
     }
   }
 
@@ -75,7 +117,14 @@ public static class PluginRuntime
       isRunning,
       operationStatus.IsActive,
       operationStatus.CurrentOperation,
-      operationStatus.WaitingCount
+      operationStatus.WaitingCount,
+      InstanceId,
+      Environment.ProcessId,
+      Port,
+      StartedAtUtc,
+      operationStatus.Progress?.Stage,
+      operationStatus.Progress?.OperationElapsedMs,
+      operationStatus.Progress?.StageElapsedMs
     );
   }
 
@@ -128,13 +177,14 @@ public static class PluginRuntime
       else
       {
         reservation = ReserveWriteIdempotency(method, parameters);
-        using (await OperationGate.EnterAsync(method, cancellationToken, benchmarkMeasurement))
+        using (var lease = await OperationGate.EnterAsync(method, cancellationToken, benchmarkMeasurement))
         {
           result = await CommandDispatcher.DispatchAsync(
             method,
             parameters,
             cancellationToken,
-            benchmarkMeasurement
+            benchmarkMeasurement,
+            lease.Progress
           );
         }
         reservation.Complete();

@@ -175,18 +175,146 @@ namespace Autodesk.AutoCAD.ApplicationServices
 
     public Document? MdiActiveDocument { get; set; }
     public TimeSpan CommandContextDelay { get; set; }
+    public Exception? CommandContextScheduleException { get; set; }
+    public Exception? CommandContextCompletionException { get; set; }
+    public Func<Func<object?, Task>, object?, Task>? CommandContextScheduleOverrideAsync { get; set; }
+    public bool CompleteDuringOnCompletedRegistration { get; set; }
+    /// <summary>
+    /// Host-free test hook invoked after command-context dispatch is requested
+    /// but before AutoCAD enters the supplied callback.
+    /// </summary>
+    public Func<Task>? BeforeCommandContextAsync { get; set; }
+
+    /// <summary>
+    /// Host-free test hook invoked after the supplied callback has completed,
+    /// while the outer AutoCAD command-context task is still pending.
+    /// </summary>
+    public Func<Task>? AfterCommandContextAsync { get; set; }
+
     public int CommandContextCallCount => Volatile.Read(ref _commandContextCallCount);
 
-    public async Task ExecuteInCommandContextAsync(
+    public ExecutionResult ExecuteInCommandContextAsync(
       Func<object?, Task> callback,
       object? userData)
     {
+      var result = new ExecutionResult();
+      if (CompleteDuringOnCompletedRegistration)
+      {
+        result.CompleteDuringOnCompletedRegistration = () =>
+          result.CompleteFromTask(StartScheduledTask(callback, userData));
+      }
+      else
+      {
+        result.CompleteFromTask(StartScheduledTask(callback, userData));
+      }
+      return result;
+    }
+
+    private Task StartScheduledTask(Func<object?, Task> callback, object? userData)
+    {
+      try
+      {
+        var scheduleOverride = CommandContextScheduleOverrideAsync;
+        return scheduleOverride != null
+          ? scheduleOverride(callback, userData)
+          : ExecuteDefaultAsync(callback, userData);
+      }
+      catch (Exception ex)
+      {
+        return Task.FromException(ex);
+      }
+    }
+
+    private async Task ExecuteDefaultAsync(
+      Func<object?, Task> callback,
+      object? userData)
+    {
+      if (CommandContextScheduleException != null)
+      {
+        throw CommandContextScheduleException;
+      }
       Interlocked.Increment(ref _commandContextCallCount);
+      var before = BeforeCommandContextAsync;
+      if (before != null)
+      {
+        await before();
+      }
       if (CommandContextDelay > TimeSpan.Zero)
       {
         await Task.Delay(CommandContextDelay);
       }
       await callback(userData);
+      var after = AfterCommandContextAsync;
+      if (after != null)
+      {
+        await after();
+      }
+      if (CommandContextCompletionException != null)
+      {
+        throw CommandContextCompletionException;
+      }
+    }
+
+    public sealed class ExecutionResult : System.Runtime.CompilerServices.INotifyCompletion
+    {
+      private int _completed;
+      private Action? _continuation;
+      private Exception? _exception;
+
+      internal Action? CompleteDuringOnCompletedRegistration { get; set; }
+      public bool IsCompleted => Volatile.Read(ref _completed) != 0;
+      public ExecutionResult GetAwaiter() => this;
+
+      public void OnCompleted(Action continuation)
+      {
+        var completeDuringRegistration = CompleteDuringOnCompletedRegistration;
+        CompleteDuringOnCompletedRegistration = null;
+        completeDuringRegistration?.Invoke();
+        _continuation = continuation;
+      }
+
+      public void GetResult()
+      {
+        if (_exception != null) throw _exception;
+      }
+
+      internal void CompleteFromTask(Task task)
+      {
+        if (task.IsCompleted)
+        {
+          try
+          {
+            task.GetAwaiter().GetResult();
+            Complete(null);
+          }
+          catch (Exception ex)
+          {
+            Complete(ex);
+          }
+          return;
+        }
+        _ = CompleteFromTaskAsync(task);
+      }
+
+      private async Task CompleteFromTaskAsync(Task task)
+      {
+        try
+        {
+          await task;
+          Complete(null);
+        }
+        catch (Exception ex)
+        {
+          Complete(ex);
+        }
+      }
+
+      private void Complete(Exception? exception)
+      {
+        _exception = exception;
+        Volatile.Write(ref _completed, 1);
+        _continuation?.Invoke();
+      }
     }
   }
 

@@ -342,3 +342,238 @@ test("known Civil 3D 2025 skill regressions stay corrected", async () => {
     assert.match(earthwork.content, /does not create profiles or compute cut\/fill volumes/);
   });
 });
+
+test("phase 3A.1 read-only inventory skills stay discoverable and bounded", async () => {
+  await withSkillsClient(async (client) => {
+    const inventory = await callSkills(client, { action: "list", limit: 50 });
+    assert.equal(inventory.total, 22);
+
+    const expectedParameters = {
+      selected_objects_summary: ["limit"],
+      list_profiles: ["alignmentName", "limit"],
+      profile_elevation_at_station: ["alignmentName", "profileName", "station"],
+      corridor_summary: ["corridorName", "limit", "baselineLimit"],
+      section_inventory: ["alignmentName", "limit"],
+      pipe_network_qc: ["networkName", "limit", "partLimit", "issueLimit"],
+      surface_definition_summary: ["surfaceName", "limit"],
+    };
+
+    const names = new Set(inventory.skills.map((skill) => skill.name));
+    for (const name of Object.keys(expectedParameters)) {
+      assert.ok(names.has(name), `${name} must be discoverable`);
+      const skill = await callSkills(client, { action: "get", skillName: name });
+      assert.equal(skill.requires_write, false, `${name} must remain read-only`);
+      assert.deepEqual(
+        skill.parameters.map((parameter) => parameter.name),
+        expectedParameters[name]
+      );
+      assert.doesNotMatch(
+        skill.content,
+        /OpenMode\.ForWrite|UpgradeOpen\s*\(|Transaction\.Commit\s*\(/,
+        `${name} must not contain a write operation`
+      );
+    }
+
+    for (const name of [
+      "selected_objects_summary",
+      "list_profiles",
+      "corridor_summary",
+      "section_inventory",
+      "pipe_network_qc",
+      "surface_definition_summary",
+    ]) {
+      const skill = await callSkills(client, { action: "get", skillName: name });
+      for (const field of ["total", "returned", "truncated", "limit"]) {
+        assert.match(skill.content, new RegExp(`\\b${field}\\b`));
+      }
+    }
+
+    const drawingInfo = await callSkills(client, {
+      action: "get",
+      skillName: "drawing_info",
+    });
+    assert.match(drawingInfo.content, /Database\.FingerprintGuid\.ToString\(\)/);
+    assert.match(drawingInfo.content, /GetSystemVariable\("DBMOD"\)/);
+    assert.match(drawingInfo.content, /GetSystemVariable\("DWGTITLED"\)/);
+    assert.match(drawingInfo.content, /hasUnsavedChanges = dbmod != 0/);
+    assert.match(drawingInfo.content, /isSavedAndClean = isNamed && dbmod == 0/);
+
+  });
+});
+
+test("phase 3D.3 fixed-primitive recipe is discoverable as an explicitly write-capable skill", async () => {
+  await withSkillsClient(async (client) => {
+    const skill = await callSkills(client, {
+      action: "get",
+      skillName: "replace_alignment_with_fixed_primitives",
+    });
+    assert.equal(skill.category, "alignments");
+    assert.equal(skill.requires_write, true);
+    assert.deepEqual(
+      skill.parameters.map(({ name, type, required }) => ({ name, type, required })),
+      [
+        { name: "alignmentHandle", type: "string", required: true },
+        { name: "expectedBaseline", type: "object", required: true },
+        { name: "plannedPrimitives", type: "array", required: true },
+        { name: "tolerance", type: "number", required: false },
+      ]
+    );
+    assert.doesNotMatch(skill.content, /Database\.SaveAs\s*\(|SendStringToExecute\s*\(|Transaction\.Commit\s*\(/);
+  });
+});
+
+test("phase 3D.2 alignment geometry audit remains bounded, read-only, and path-safe", async () => {
+  await withSkillsClient(async (client) => {
+    const skill = await callSkills(client, {
+      action: "get",
+      skillName: "alignment_geometry_audit",
+    });
+
+    assert.equal(skill.category, "alignments");
+    assert.equal(skill.requires_write, false);
+    assert.deepEqual(skill.parameters, [
+      {
+        name: "alignmentHandle",
+        type: "string",
+        required: true,
+        description: "Hex handle of an existing Alignment",
+      },
+      {
+        name: "limit",
+        type: "number",
+        required: false,
+        description: "Maximum top-level alignment entities to return (default 100; 1-200)",
+      },
+    ]);
+    for (const requiredSnippet of [
+      /\^\[0-9A-Fa-f\]\{1,16\}\$/,
+      /limit < 1 \|\| limit > 200/,
+      /as Alignment/,
+      /alignment\.Entities\.Count/,
+      /alignment\.Entities\.GetEntityByOrder\(chainIndex\)/,
+      /AlignmentCurve curve/,
+      /AlignmentLine line/,
+      /AlignmentArc arc/,
+      /AlignmentSpiral spiral/,
+      /var subentity = entity\[subentityIndex\]/,
+      /AlignmentSubEntityLine subentityLine/,
+      /AlignmentSubEntityArc subentityArc/,
+      /AlignmentSubEntitySpiral subentitySpiral/,
+      /parentEntityIndex/,
+      /geometryTotal/,
+      /geometryItems\.Count >= limit/,
+      /connectedChainOrder/,
+      /parentEntityIndexes\[entity\.EntityId\]/,
+      /if \(geometryUsesConnectedOrder && warnings\.Count < 20\)/,
+      /Double\.IsInfinity\(spiral\.RadiusIn\)/,
+      /Double\.IsInfinity\(subentitySpiral\.RadiusOut\)/,
+      /startIsTangent/,
+      /endRadiusUnknown/,
+      /standardCompliance = "not_evaluated"/,
+      /curve\.HighestDesignSpeed/,
+      /entityHighestDesignSpeed > 0\.0/,
+      /string criteriaFileName = null/,
+      /GetSystemVariable\("DBMOD"\)/,
+    ]) {
+      assert.match(skill.content, requiredSnippet);
+    }
+    assert.doesNotMatch(
+      skill.content,
+      /OpenMode\.ForWrite|UpgradeOpen\s*\(|Transaction\.Commit\s*\(|SaveAs\s*\(|QSAVE|DesignChecks|ValidateDesignCheck|\.DesignCriteriaFile\s*=/,
+      "3D.2 must not author, validate, or save an alignment"
+    );
+    assert.doesNotMatch(skill.content, /item\["startRadius"\] = spiral\.RadiusIn;/);
+    assert.doesNotMatch(skill.content, /geometryItem\["endRadius"\] = subentitySpiral\.RadiusOut;/);
+    for (const geometryField of ["total", "returned", "truncated", "limit", "counts", "items"]) {
+      assert.match(skill.content, new RegExp(`geometry[\\s\\S]*?${geometryField}`));
+    }
+    assert.doesNotMatch(skill.content, /criteriaFilePath|fullPath|DirectoryName/, "3D.2 must not expose a criteria-file path");
+  });
+});
+
+test("phase 3D.1 alignment-from-polyline skill remains narrow and rollback-safe", async () => {
+  await withSkillsClient(async (client) => {
+    const createAlignment = await callSkills(client, {
+      action: "get",
+      skillName: "create_alignment_from_polyline",
+    });
+    assert.equal(createAlignment.category, "alignments");
+    assert.equal(createAlignment.requires_write, true);
+    assert.deepEqual(
+      createAlignment.parameters,
+      [
+        {
+          name: "sourceHandle",
+          type: "string",
+          required: true,
+          description: "Hex handle of an existing open 2D model-space Polyline",
+        },
+        {
+          name: "alignmentName",
+          type: "string",
+          required: true,
+          description: "New unique alignment name",
+        },
+      ]
+    );
+    for (const requiredSnippet of [
+      /existing\.Name\.Equals\(alignmentName, StringComparison\.OrdinalIgnoreCase\)/,
+      /source\.OwnerId != modelSpaceId/,
+      /source\.Closed \|\| source\.NumberOfVertices < 2 \|\| source\.Length <= 1e-9/,
+      /EraseExistingEntities = false/,
+      /AddCurvesBetweenTangents = false/,
+      /CivilDoc\.Styles\.AlignmentStyles\["Tervező"\]/,
+      /AlignmentLabelSetStyles\["Út szelvény és geometriai pontok"\]/,
+      /Alignment\.Create\(\s*CivilDoc,\s*options,\s*alignmentName,\s*ObjectId\.Null,\s*source\.LayerId,\s*styleId,\s*labelSetId/s,
+      /if \(alignmentId\.IsNull\)[\s\S]*throw new InvalidOperationException/,
+      /if \(!sourcePreserved\)[\s\S]*throw new InvalidOperationException/,
+      /sourcePreserved/,
+    ]) {
+      assert.match(createAlignment.content, requiredSnippet);
+    }
+    assert.doesNotMatch(
+      createAlignment.content,
+      /SaveAs\s*\(|QSAVE|AddFixedSpiral|Superelevation|Profile\.Create|Corridor\.Create|SampleLineGroup\.Create/,
+      "3D.1 must stay limited to source-polyline alignment creation"
+    );
+  });
+});
+
+test("road-design readiness skill remains a bounded read-only baseline check", async () => {
+  await withSkillsClient(async (client) => {
+    const skill = await callSkills(client, {
+      action: "get",
+      skillName: "road_design_readiness",
+    });
+
+    assert.equal(skill.category, "workflows");
+    assert.equal(skill.requires_write, false);
+    assert.deepEqual(skill.parameters, []);
+    for (const field of ["overallReady", "dbmod", "total", "required", "missing", "ready", "sample", "truncated"]) {
+      assert.match(skill.content, new RegExp(`\\b${field}\\b`));
+    }
+    assert.match(skill.content, /styles\.AlignmentStyles\[name\]/);
+    assert.match(skill.content, /styles\.PartsListSet\[name\]/);
+    assert.match(skill.content, /styles\.CorridorStyles\.Count/);
+    assert.match(skill.content, /styles\.SuperelevationViewStyles\.Count/);
+    for (const baselineName of [
+      "Tervező",
+      "Terep",
+      "Út",
+      "Szabványos",
+      "Nyomterv tervező",
+      "Nyomterv KSZ nyomtatás",
+      "Út mintavonal",
+      "Meglévő terep",
+      "Tervezett pálya",
+      "Út keresztszelvény rajz",
+    ]) {
+      assert.ok(skill.content.includes(baselineName), `${baselineName} must remain in the baseline`);
+    }
+    assert.doesNotMatch(
+      skill.content,
+      /OpenMode\.ForWrite|UpgradeOpen\s*\(|Transaction\.Commit\s*\(|SaveAs\s*\(|QSAVE/,
+      "readiness skill must not contain a write operation"
+    );
+  });
+});

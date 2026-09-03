@@ -12,18 +12,38 @@ internal static class PluginCoreTests
   private const string ActualPath = @"C:\Projects\Plans\Target.dwg";
   private static readonly Guid ActualFingerprint =
     Guid.Parse("11111111-2222-4333-8444-555555555555");
+  private static readonly string EndpointDirectory = Path.Combine(
+    Path.GetTempPath(),
+    $"civil3d-mcp-plugin-tests-{Guid.NewGuid():N}"
+  );
 
   public static async Task Main()
   {
+    var previousEndpointDirectory = Environment.GetEnvironmentVariable(
+      EndpointRegistration.DirectoryEnvironmentVariable
+    );
+    Environment.SetEnvironmentVariable(
+      EndpointRegistration.DirectoryEnvironmentVariable,
+      EndpointDirectory
+    );
     var tests = new (string Name, Func<Task> Run)[]
     {
       ("direct execute guard is required and malformed guards fail closed", DirectGuardContractAsync),
       ("drawing identity is checked before lock, transaction, and Roslyn", DrawingIdentityOrderingAsync),
+      ("private drawing identity is read without Roslyn or a commit", PrivateDrawingIdentityAsync),
       ("save runs after commit and releases transaction resources", SaveAfterCommitOrderingAsync),
       ("save rejects unsupported request states before Roslyn", SaveRequestValidationAsync),
       ("save failure preserves committed idempotency state", SaveFailureCompletesIdempotencyAsync),
       ("failed listener start does not report running", FailedListenerStartDoesNotReportRunningAsync),
+      ("listener fallback publishes and removes a per-instance endpoint", EndpointRegistrationLifecycleAsync),
       ("parallel dispatch is serialized with exact waiting and active status", SerializedDispatchStatusAsync),
+      ("native ExecutionResult bridge closes the lost continuation race", NativeExecutionResultBridgeAsync),
+      ("unstarted command context times out without running stale Civil work", CommandContextAdmissionTimeoutAsync),
+      ("command-context scheduler failures propagate and late faults are observed", CommandContextAdmissionFaultsAsync),
+      ("progress reports a queued AutoCAD command context while health remains responsive", WaitingForCommandContextProgressAsync),
+      ("progress keeps the gate through AutoCAD outer-task completion", WaitingForCommandContextCompletionProgressAsync),
+      ("progress reports a running script and caller cancellation cannot free its gate", RunningScriptProgressAndCancellationAsync),
+      ("progress returns to idle after successful and failed execution", ProgressCleanupAsync),
       ("health bypasses active and waiting Civil operations", HealthBypassesSerializedQueueAsync),
       ("api lookup is metadata-only and bypasses active Civil operations", ApiLookupBypassesSerializedQueueAsync),
       ("cancellation and execution errors release gate and counters", CancellationAndErrorCleanupAsync),
@@ -37,13 +57,59 @@ internal static class PluginCoreTests
       ("idempotency key validation rejects invalid direct JSON-RPC input", IdempotencyInvalidKeyAsync),
     };
 
-    foreach (var (name, run) in tests)
+    try
     {
-      await run();
-      Console.WriteLine($"PASS {name}");
-    }
+      foreach (var (name, run) in tests)
+      {
+        await run();
+        Console.WriteLine($"PASS {name}");
+      }
 
-    ResultSerializerTests.RunAll();
+      ResultSerializerTests.RunAll();
+    }
+    catch (Exception ex)
+    {
+      Console.Error.WriteLine(ex);
+      Environment.ExitCode = 1;
+    }
+    finally
+    {
+      PluginRuntime.StopServer();
+      Environment.SetEnvironmentVariable(
+        EndpointRegistration.DirectoryEnvironmentVariable,
+        previousEndpointDirectory
+      );
+      if (Directory.Exists(EndpointDirectory))
+      {
+        Directory.Delete(EndpointDirectory, recursive: true);
+      }
+    }
+  }
+
+  private static async Task PrivateDrawingIdentityAsync()
+  {
+    ResetEnvironment();
+    var response = JsonNode.Parse(await SendAsync(new JsonObject
+    {
+      ["jsonrpc"] = "2.0",
+      ["method"] = "getActiveDrawingIdentity",
+      ["id"] = "private-drawing-identity",
+    }.ToJsonString()))?.AsObject();
+    var identity = response?["result"]?.AsObject();
+
+    Assert(identity != null, "private identity must return a result");
+    Assert(identity!["instanceId"]?.GetValue<string>() == PluginRuntime.InstanceId,
+      "private identity must belong to the current plugin instance");
+    Assert(identity["databaseFilename"]?.GetValue<string>() == ActualPath,
+      "private identity must return the complete Database.Filename");
+    Assert(identity["fingerprintGuid"]?.GetValue<string>() == ActualFingerprint.ToString("B").ToUpperInvariant(),
+      "private identity must return Database.FingerprintGuid without formatting assumptions");
+    Assert(RoslynExecutor.CallCount == 0, "private identity must not run caller C#");
+    Assert(CurrentDocument.LockCount == 1, "private identity must use one document lock");
+    Assert(CurrentDatabase.TransactionManager.StartedCount == 1,
+      "private identity must use one read transaction");
+    Assert(CurrentDatabase.TransactionManager.CommittedCount == 0,
+      "private identity must not commit a transaction");
   }
 
   private static async Task ExecuteResultSerializationAsync()
@@ -269,6 +335,293 @@ internal static class PluginCoreTests
     }
     Assert(RoslynExecutor.MaxActiveCount == 1, "maxConcurrency must remain one");
     AssertCleanStatus();
+  }
+
+  private static async Task NativeExecutionResultBridgeAsync()
+  {
+    ResetEnvironment();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(
+      await SendAsync(CreateGuardedWriteRequest("execution-result-complete-before-await", "complete-before-await")),
+      "complete-before-await"
+    );
+    Assert(RoslynExecutor.CallCount == 1,
+      "an already-complete native result must run its callback exactly once");
+    Assert(CurrentDocument.LockCount == 1,
+      "an already-complete native result must take one document lock");
+    Assert(CurrentDatabase.TransactionManager.StartedCount == 1,
+      "an already-complete native result must start one transaction");
+    AssertCleanStatus();
+
+    ResetEnvironment();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    Application.DocumentManager.CompleteDuringOnCompletedRegistration = true;
+    AssertResult(
+      await SendAsync(
+        CreateGuardedWriteRequest("execution-result-registration-race", "registration-race")
+      ).WaitAsync(TimeSpan.FromSeconds(1)),
+      "registration-race"
+    );
+    Assert(RoslynExecutor.CallCount == 1,
+      "completion during OnCompleted registration must still run the callback exactly once");
+    Assert(CurrentDocument.LockCount == 1,
+      "completion during OnCompleted registration must take one document lock");
+    Assert(CurrentDatabase.TransactionManager.StartedCount == 1,
+      "completion during OnCompleted registration must start one transaction");
+    AssertCleanStatus();
+  }
+
+  private static async Task CommandContextAdmissionTimeoutAsync()
+  {
+    ResetEnvironment();
+    CommandContextAdmission.StartDeadlineOverrideForTests = TimeSpan.FromMilliseconds(25);
+    var commandContextQueued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var releaseStaleCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var staleCallbackFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var lateFaultObserved = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
+    Application.DocumentManager.BeforeCommandContextAsync = async () =>
+    {
+      commandContextQueued.TrySetResult();
+      await releaseStaleCallback.Task;
+    };
+    CommandContextAdmission.LateFaultObserverForTests = exception =>
+      lateFaultObserved.TrySetResult(exception);
+
+    try
+    {
+      var timedOut = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+        "command-context-timeout",
+        "must-not-run"
+      )));
+      await commandContextQueued.Task;
+      AssertError(await timedOut, "CIVIL3D.COMMAND_CONTEXT_TIMEOUT");
+      Assert(RoslynExecutor.CallCount == 0, "an unstarted command context must not enter Roslyn");
+      Assert(CurrentDocument.LockCount == 0, "an unstarted command context must not take a document lock");
+      Assert(CurrentDatabase.TransactionManager.StartedCount == 0,
+        "an unstarted command context must not start a transaction");
+      AssertCleanStatus();
+
+      // The serialized gate is available before the stale native callback is
+      // released. A later manual request can therefore run independently.
+      Application.DocumentManager.BeforeCommandContextAsync = null;
+      RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+      AssertResult(
+        await SendAsync(CreateGuardedWriteRequest("after-command-context-timeout", "after-timeout")),
+        "after-timeout"
+      );
+      Assert(RoslynExecutor.CallCount == 1,
+        "the subsequent request must be the first and only script execution");
+
+      Application.DocumentManager.AfterCommandContextAsync = () =>
+      {
+        staleCallbackFinished.TrySetResult();
+        throw new InvalidOperationException("expected late command-context fault");
+      };
+      releaseStaleCallback.SetResult();
+      await staleCallbackFinished.Task;
+      var observedFault = await lateFaultObserved.Task;
+      Assert(observedFault.ToString().Contains("expected late command-context fault", StringComparison.Ordinal),
+        "a late scheduler fault after abandonment must be observed");
+      Assert(RoslynExecutor.CallCount == 1,
+        "the stale callback must return before Roslyn or caller code executes");
+      Assert(CurrentDocument.LockCount == 1,
+        "the stale callback must not acquire an additional document lock");
+      Assert(CurrentDatabase.TransactionManager.StartedCount == 1,
+        "the stale callback must not start an additional transaction");
+      AssertCleanStatus();
+    }
+    finally
+    {
+      releaseStaleCallback.TrySetResult();
+      Application.DocumentManager.BeforeCommandContextAsync = null;
+      Application.DocumentManager.AfterCommandContextAsync = null;
+      CommandContextAdmission.LateFaultObserverForTests = null;
+      CommandContextAdmission.StartDeadlineOverrideForTests = null;
+    }
+  }
+
+  private static async Task CommandContextAdmissionFaultsAsync()
+  {
+    ResetEnvironment();
+    var releaseLateCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var lateCallbackReturned = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    Application.DocumentManager.CommandContextScheduleOverrideAsync = (callback, userData) =>
+    {
+      _ = Task.Run(async () =>
+      {
+        await releaseLateCallback.Task;
+        await callback(userData);
+        lateCallbackReturned.TrySetResult();
+      });
+      return Task.FromException(new InvalidOperationException("expected command-context scheduling failure"));
+    };
+    AssertError(
+      await SendAsync(CreateGuardedWriteRequest("command-context-schedule-failure", "must-not-run")),
+      "CIVIL3D.TRANSACTION_FAILED"
+    );
+    Assert(RoslynExecutor.CallCount == 0, "a scheduler failure must propagate before Roslyn");
+    AssertNoCivilResourcesOpened();
+    AssertCleanStatus();
+
+    releaseLateCallback.SetResult();
+    await lateCallbackReturned.Task;
+    Assert(RoslynExecutor.CallCount == 0,
+      "a callback arriving after scheduler failure must be abandoned before Roslyn");
+    AssertNoCivilResourcesOpened();
+    AssertCleanStatus();
+  }
+
+  private static async Task WaitingForCommandContextProgressAsync()
+  {
+    ResetEnvironment();
+    var enteredBeforeCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var releaseBeforeCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    Task<string>? execution = null;
+    Application.DocumentManager.BeforeCommandContextAsync = async () =>
+    {
+      enteredBeforeCallback.TrySetResult();
+      await releaseBeforeCallback.Task;
+    };
+
+    try
+    {
+      execution = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+        "waiting-command-context",
+        "waiting-command-context"
+      )));
+      await enteredBeforeCallback.Task;
+
+      AssertActiveHealth(
+        await GetHealthAsync(),
+        "WaitingForCommandContext",
+        "health must report an operation queued before the AutoCAD callback starts"
+      );
+      Assert(RoslynExecutor.CallCount == 0,
+        "the script must not run before the AutoCAD command-context callback starts");
+      Assert(CurrentDocument.ActiveLockCount == 0,
+        "the document lock must not be acquired before the command-context callback starts");
+    }
+    finally
+    {
+      releaseBeforeCallback.TrySetResult();
+      if (execution != null) await execution;
+      Application.DocumentManager.BeforeCommandContextAsync = null;
+    }
+
+    AssertIdleHealth(await GetHealthAsync(), "completed command-context operation must return to idle");
+  }
+
+  private static async Task WaitingForCommandContextCompletionProgressAsync()
+  {
+    ResetEnvironment();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    var afterCallbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var releaseOuterCommandContextTask = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var afterCallbackVisits = 0;
+    Task<string>? first = null;
+    Task<string>? second = null;
+    Application.DocumentManager.AfterCommandContextAsync = async () =>
+    {
+      if (Interlocked.Increment(ref afterCallbackVisits) == 1)
+      {
+        afterCallbackEntered.TrySetResult();
+        await releaseOuterCommandContextTask.Task;
+      }
+    };
+
+    try
+    {
+      first = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+        "outer-completion-first",
+        "outer-completion-first"
+      )));
+      await afterCallbackEntered.Task;
+
+      AssertActiveHealth(
+        await GetHealthAsync(),
+        "WaitingForCommandContextCompletion",
+        "health must keep the active lease until AutoCAD completes the outer command-context task"
+      );
+      Assert(RoslynExecutor.CallCount == 1,
+        "the first callback must have completed its script before the outer task is held");
+
+      second = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+        "outer-completion-second",
+        "outer-completion-second"
+      )));
+      await WaitUntilAsync(() => PluginRuntime.GetStatus().QueueDepth == 1);
+      Assert(RoslynExecutor.CallCount == 1,
+        "a second operation must not enter while the first AutoCAD outer task is still pending");
+    }
+    finally
+    {
+      releaseOuterCommandContextTask.TrySetResult();
+      if (first != null) AssertResult(await first, "outer-completion-first");
+      if (second != null) AssertResult(await second, "outer-completion-second");
+      Application.DocumentManager.AfterCommandContextAsync = null;
+    }
+
+    AssertIdleHealth(await GetHealthAsync(), "completed outer command-context task must return to idle");
+  }
+
+  private static async Task RunningScriptProgressAndCancellationAsync()
+  {
+    ResetEnvironment();
+    CommandContextAdmission.StartDeadlineOverrideForTests = TimeSpan.Zero;
+    var releaseScript = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    RoslynExecutor.Handler = async (code, _) =>
+    {
+      if (code == "hold-running-script") await releaseScript.Task;
+      return code;
+    };
+
+    using var activeCancellation = new CancellationTokenSource();
+    var first = Task.Run(() => SendAsync(
+      CreateGuardedWriteRequest("running-script-first", "hold-running-script"),
+      activeCancellation.Token
+    ));
+    await WaitForHealthStageAsync("RunningScript");
+
+    var second = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+      "running-script-second",
+      "running-script-second"
+    )));
+    await WaitUntilAsync(() => PluginRuntime.GetStatus().QueueDepth == 1);
+    activeCancellation.Cancel();
+
+    Assert(!first.IsCompleted,
+      "cancelling a caller token after execution starts must not release the running Civil operation");
+    AssertActiveHealth(
+      await GetHealthAsync(),
+      "RunningScript",
+      "caller cancellation must not clear the active running-script stage"
+    );
+    Assert(RoslynExecutor.CallCount == 1,
+      "a queued operation must not overlap the still-running script after caller cancellation");
+
+    releaseScript.SetResult();
+    AssertResult(await first, "hold-running-script");
+    AssertResult(await second, "running-script-second");
+    AssertIdleHealth(await GetHealthAsync(), "released running script must return to idle");
+  }
+
+  private static async Task ProgressCleanupAsync()
+  {
+    ResetEnvironment();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(
+      await SendAsync(CreateGuardedWriteRequest("progress-success", "progress-success")),
+      "progress-success"
+    );
+    AssertIdleHealth(await GetHealthAsync(), "successful execution must clear progress");
+
+    ResetEnvironment();
+    RoslynExecutor.Handler = (_, _) => throw new InvalidOperationException("expected progress failure");
+    AssertError(
+      await SendAsync(CreateGuardedWriteRequest("progress-error", "progress-error")),
+      "CIVIL3D.TRANSACTION_FAILED"
+    );
+    AssertIdleHealth(await GetHealthAsync(), "failed execution must clear progress");
   }
 
   private static async Task SaveAfterCommitOrderingAsync()
@@ -590,6 +943,42 @@ internal static class PluginCoreTests
     return Task.CompletedTask;
   }
 
+  private static Task EndpointRegistrationLifecycleAsync()
+  {
+    ResetEnvironment();
+    RpcTcpServer.ThrowAddressInUseOnDefaultPort = true;
+    try
+    {
+      PluginRuntime.StartServer();
+      var status = PluginRuntime.GetStatus();
+      Assert(status.IsRunning, "fallback listener must report running");
+      Assert(status.Port == 48123, "address-in-use fallback must publish the bound port");
+
+      var files = Directory.GetFiles(EndpointDirectory, "*.json");
+      Assert(files.Length == 1, "one running plugin session must publish one endpoint record");
+      var record = JsonNode.Parse(File.ReadAllText(files[0]))?.AsObject();
+      Assert(record?["schemaVersion"]?.GetValue<int>() == EndpointRegistration.SchemaVersion,
+        "endpoint record must use the supported schema");
+      Assert(record?["instanceId"]?.GetValue<string>() == PluginRuntime.InstanceId,
+        "endpoint record must identify the plugin session");
+      Assert(record?["processId"]?.GetValue<int>() == Environment.ProcessId,
+        "endpoint record must identify the Civil process");
+      Assert(record?["port"]?.GetValue<int>() == status.Port,
+        "endpoint record must publish the actual fallback port");
+
+      PluginRuntime.StopServer();
+      Assert(Directory.GetFiles(EndpointDirectory, "*.json").Length == 0,
+        "normal plugin stop must remove its endpoint record");
+    }
+    finally
+    {
+      RpcTcpServer.ThrowAddressInUseOnDefaultPort = false;
+      PluginRuntime.StopServer();
+    }
+
+    return Task.CompletedTask;
+  }
+
   private static async Task HealthBypassesSerializedQueueAsync()
   {
     ResetEnvironment();
@@ -637,7 +1026,14 @@ internal static class PluginCoreTests
         "listenerRunning",
         "operationInProgress",
         "currentOperation",
+        "operationStage",
+        "operationElapsedMs",
+        "stageElapsedMs",
         "queueDepth",
+        "instanceId",
+        "processId",
+        "port",
+        "startedAtUtc",
         "mode",
         "roslyn",
       };
@@ -649,8 +1045,22 @@ internal static class PluginCoreTests
         "health must report the active operation");
       Assert(health["currentOperation"]?.GetValue<string>() == "executeCode",
         "health must identify the active method");
+      Assert(health["operationStage"]?.GetValue<string>() == "RunningScript",
+        "health must identify the active execution stage without exposing caller data");
+      Assert(health["operationElapsedMs"]?.GetValue<double>() >= 0,
+        "health must report a nonnegative active-operation elapsed time");
+      Assert(health["stageElapsedMs"]?.GetValue<double>() >= 0,
+        "health must report a nonnegative active-stage elapsed time");
       Assert(health["queueDepth"]?.GetValue<int>() == 1,
         "health must report the waiting executeCode request only");
+      Assert(health["instanceId"]?.GetValue<string>() == PluginRuntime.InstanceId,
+        "health must identify the current plugin session");
+      Assert(health["processId"]?.GetValue<int>() == Environment.ProcessId,
+        "health must identify the Civil process without touching the drawing");
+      Assert(health["port"]?.GetValue<int>() == PluginRuntime.Port,
+        "health must report the actual listener port");
+      Assert(health["startedAtUtc"] != null,
+        "health must report the plugin-session start time");
       Assert(health["mode"]?.GetValue<string>() == "code_execution", "health mode must remain stable");
       Assert(health["roslyn"]?.GetValue<bool>() == true, "health must report Roslyn mode");
       Assert(!health.ContainsKey("drawingName"), "health must not inspect or guess drawing identity");
@@ -901,6 +1311,14 @@ internal static class PluginCoreTests
     string actualPath = ActualPath,
     bool? dwgTitled = null)
   {
+    Application.DocumentManager.BeforeCommandContextAsync = null;
+    Application.DocumentManager.AfterCommandContextAsync = null;
+    Application.DocumentManager.CommandContextScheduleException = null;
+    Application.DocumentManager.CommandContextCompletionException = null;
+    Application.DocumentManager.CommandContextScheduleOverrideAsync = null;
+    Application.DocumentManager.CompleteDuringOnCompletedRegistration = false;
+    CommandContextAdmission.StartDeadlineOverrideForTests = null;
+    CommandContextAdmission.LateFaultObserverForTests = null;
     AssertCleanStatus();
     PluginRuntime.ResetIdempotencyForTests();
     var database = new Database
@@ -1090,6 +1508,62 @@ internal static class PluginCoreTests
     Assert(!status.OperationInProgress, "operation status must be inactive");
     Assert(status.CurrentOperation == null, "current operation must be cleared");
     Assert(status.QueueDepth == 0, "waiting count must be zero");
+  }
+
+  private static async Task<JsonObject> GetHealthAsync()
+  {
+    var response = JsonNode.Parse(
+      await SendAsync(CreateHealthRequest($"health-{Guid.NewGuid():N}"))
+    )?.AsObject();
+    var health = response?["result"]?.AsObject();
+    Assert(health != null, "health must return a result object");
+    return health!;
+  }
+
+  private static async Task WaitForHealthStageAsync(string expectedStage)
+  {
+    var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+    while (true)
+    {
+      var health = await GetHealthAsync();
+      if (health["operationStage"]?.GetValue<string>() == expectedStage) return;
+      if (DateTime.UtcNow >= deadline)
+      {
+        throw new TimeoutException($"Timed out waiting for operation stage '{expectedStage}'.");
+      }
+      await Task.Delay(5);
+    }
+  }
+
+  private static void AssertActiveHealth(
+    JsonObject health,
+    string expectedStage,
+    string context)
+  {
+    Assert(health["operationInProgress"]?.GetValue<bool>() == true,
+      $"{context}: health must remain responsive and report an active operation");
+    Assert(health["currentOperation"]?.GetValue<string>() == "executeCode",
+      $"{context}: health must report the active execute operation");
+    Assert(health["operationStage"]?.GetValue<string>() == expectedStage,
+      $"{context}: expected stage '{expectedStage}'");
+    Assert(health["operationElapsedMs"]?.GetValue<double>() >= 0,
+      $"{context}: operation elapsed milliseconds must be nonnegative");
+    Assert(health["stageElapsedMs"]?.GetValue<double>() >= 0,
+      $"{context}: stage elapsed milliseconds must be nonnegative");
+  }
+
+  private static void AssertIdleHealth(JsonObject health, string context)
+  {
+    Assert(health["operationInProgress"]?.GetValue<bool>() == false,
+      $"{context}: health must report idle");
+    Assert(health["currentOperation"] == null,
+      $"{context}: idle current operation must be null");
+    Assert(health["operationStage"] == null,
+      $"{context}: idle operation stage must be null");
+    Assert(health["operationElapsedMs"] == null,
+      $"{context}: idle operation elapsed milliseconds must be null");
+    Assert(health["stageElapsedMs"] == null,
+      $"{context}: idle stage elapsed milliseconds must be null");
   }
 
   private static void AssertError(string responseText, string expectedCode)

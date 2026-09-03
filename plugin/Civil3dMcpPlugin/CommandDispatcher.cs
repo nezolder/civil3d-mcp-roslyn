@@ -20,17 +20,19 @@ public static class CommandDispatcher
     string method,
     JsonObject? parameters,
     CancellationToken cancellationToken,
-    InternalBenchmarkMeasurement? benchmarkMeasurement)
+    InternalBenchmarkMeasurement? benchmarkMeasurement,
+    OperationProgress? progress = null)
   {
     return method switch
     {
-      "executeCode" => await ExecuteCodeAsync(parameters, benchmarkMeasurement),
+      "executeCode" => await ExecuteCodeAsync(parameters, benchmarkMeasurement, progress, cancellationToken),
       "getCivil3DHealth" => await GetHealthAsync(),
+      "getActiveDrawingIdentity" => await GetActiveDrawingIdentityAsync(progress, cancellationToken),
       "apiLookup" => ApiLookup.Lookup(parameters),
 
       _ => throw new JsonRpcDispatchException(
         "CIVIL3D.INVALID_INPUT",
-        $"Unknown method '{method}'. Available: executeCode, getCivil3DHealth, apiLookup"
+        $"Unknown method '{method}'. Available: executeCode, getCivil3DHealth, getActiveDrawingIdentity, apiLookup"
       ),
     };
   }
@@ -40,7 +42,9 @@ public static class CommandDispatcher
   /// </summary>
   private static async Task<object?> ExecuteCodeAsync(
     JsonObject? parameters,
-    InternalBenchmarkMeasurement? benchmarkMeasurement)
+    InternalBenchmarkMeasurement? benchmarkMeasurement,
+    OperationProgress? progress,
+    CancellationToken cancellationToken)
   {
     var code = PluginRuntime.GetRequiredString(parameters, "code");
     benchmarkMeasurement?.RecordCode(code);
@@ -64,11 +68,12 @@ public static class CommandDispatcher
 
       // Run the Roslyn script synchronously within the command context
       // (we're already on the main thread here)
-      var rawResult = RoslynExecutor.ExecuteAsync(code, context, benchmarkMeasurement)
+      var rawResult = RoslynExecutor.ExecuteAsync(code, context, benchmarkMeasurement, progress)
         .GetAwaiter()
         .GetResult();
+      progress?.SetStage(OperationStage.SerializingResult);
       return ResultSerializer.Serialize(rawResult);
-    }, write: !readOnly, expectedDrawing, benchmarkMeasurement, saveDrawing);
+    }, write: !readOnly, expectedDrawing, benchmarkMeasurement, saveDrawing, progress, cancellationToken);
   }
 
   /// <summary>
@@ -84,9 +89,34 @@ public static class CommandDispatcher
       listenerRunning = status.IsRunning,
       operationInProgress = status.OperationInProgress,
       currentOperation = status.CurrentOperation,
+      operationStage = status.OperationStage,
+      operationElapsedMs = status.OperationElapsedMs,
+      stageElapsedMs = status.StageElapsedMs,
       queueDepth = status.QueueDepth,
+      instanceId = status.InstanceId,
+      processId = status.ProcessId,
+      port = status.Port,
+      startedAtUtc = status.StartedAtUtc,
       mode = "code_execution",
       roslyn = true,
     });
+  }
+
+  /// <summary>
+  /// Returns the active drawing identity without compiling or running caller
+  /// code. Unlike health, this intentionally enters the serialized Civil
+  /// command context so the identity belongs to the selected live instance.
+  /// </summary>
+  private static async Task<object?> GetActiveDrawingIdentityAsync(
+    OperationProgress? progress,
+    CancellationToken cancellationToken)
+  {
+    return await CivilExecution.ExecuteAsync((doc, civilDoc, database, transaction) => new
+    {
+      instanceId = PluginRuntime.InstanceId,
+      databaseFilename = database.Filename ?? string.Empty,
+      fingerprintGuid = database.FingerprintGuid.ToString(),
+    }, write: false, expectedDrawing: null, benchmarkMeasurement: null, progress: progress,
+      commandContextStartCancellationToken: cancellationToken);
   }
 }

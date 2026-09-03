@@ -23,6 +23,8 @@ public sealed class RpcTcpServer
   private TcpListener? _listener;
   private Task? _acceptLoop;
 
+  public int BoundPort { get; private set; }
+
   public RpcTcpServer(int port, Func<string, CancellationToken, Task<string>> handler)
   {
     _port = port;
@@ -33,6 +35,7 @@ public sealed class RpcTcpServer
   {
     _listener = new TcpListener(IPAddress.Loopback, _port);
     _listener.Start();
+    BoundPort = ((IPEndPoint)_listener.LocalEndpoint).Port;
     _acceptLoop = Task.Run(AcceptLoopAsync, _cts.Token);
   }
 

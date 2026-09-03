@@ -6,6 +6,7 @@ import { createLogger } from "../utils/logger.js";
 import { fileURLToPath } from "url";
 import { withApplicationConnection } from "../utils/ConnectionManager.js";
 import { Civil3dMcpError, createStructuredToolErrorResult } from "../errors/structuredError.js";
+import { instanceIdSchema } from "./instanceSelection.js";
 
 const log = createLogger("SkillsTool");
 
@@ -26,7 +27,7 @@ interface ApiLookupParameters extends Record<string, unknown> {
 
 interface SkillsToolOptions {
   // Narrow test seam; production always uses the private apiLookup JSON-RPC method.
-  apiLookup?: (parameters: ApiLookupParameters) => Promise<unknown>;
+  apiLookup?: (parameters: ApiLookupParameters, instanceId?: string) => Promise<unknown>;
 }
 
 interface SkillMetadata {
@@ -268,8 +269,11 @@ function paginateSkills(skills: SkillFile[], options: PaginationOptions) {
 }
 
 export function registerSkillsTool(server: McpServer, options: SkillsToolOptions = {}) {
-  const apiLookup = options.apiLookup ?? ((parameters: ApiLookupParameters) =>
-    withApplicationConnection((client) => client.sendCommand("apiLookup", parameters))
+  const apiLookup = options.apiLookup ?? ((parameters: ApiLookupParameters, instanceId?: string) =>
+    withApplicationConnection(
+      (client) => client.sendCommand("apiLookup", parameters),
+      { instanceId }
+    )
   );
 
   server.tool(
@@ -287,6 +291,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
       skillName: z.string().optional().describe("Skill name for 'get' action"),
       assembly: z.string().optional().describe("Allowlisted loaded host assembly filter for api_lookup"),
       namespace: z.string().optional().describe("Namespace prefix filter for api_lookup"),
+      instanceId: instanceIdSchema,
       limit: z
         .number()
         .optional()
@@ -436,12 +441,15 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
               );
             }
 
-            const result = await apiLookup({
-              query: args.query,
-              assembly: args.assembly,
-              namespace: args.namespace,
-              limit: args.limit,
-            });
+            const result = await apiLookup(
+              {
+                query: args.query,
+                assembly: args.assembly,
+                namespace: args.namespace,
+                limit: args.limit,
+              },
+              args.instanceId
+            );
             return {
               content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
             };

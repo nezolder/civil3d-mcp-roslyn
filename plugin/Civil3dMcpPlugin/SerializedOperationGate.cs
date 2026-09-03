@@ -5,7 +5,8 @@ namespace Civil3DMcpPlugin;
 internal sealed record SerializedOperationStatus(
   int WaitingCount,
   bool IsActive,
-  string? CurrentOperation
+  string? CurrentOperation,
+  OperationProgressSnapshot? Progress
 );
 
 /// <summary>
@@ -19,6 +20,7 @@ internal sealed class SerializedOperationGate
   private int _waitingCount;
   private bool _isActive;
   private string? _currentOperation;
+  private OperationProgress? _progress;
 
   public SerializedOperationStatus GetStatus()
   {
@@ -27,12 +29,13 @@ internal sealed class SerializedOperationGate
       return new SerializedOperationStatus(
         _waitingCount,
         _isActive,
-        _currentOperation
+        _currentOperation,
+        _progress?.GetStatus()
       );
     }
   }
 
-  public async Task<IDisposable> EnterAsync(
+  public async Task<Lease> EnterAsync(
     string operation,
     CancellationToken cancellationToken,
     InternalBenchmarkMeasurement? benchmarkMeasurement = null)
@@ -56,11 +59,13 @@ internal sealed class SerializedOperationGate
     var activated = false;
     try
     {
+      var progress = new OperationProgress();
       lock (_sync)
       {
         _waitingCount--;
         _isActive = true;
         _currentOperation = operation;
+        _progress = progress;
         activated = true;
       }
 
@@ -71,7 +76,7 @@ internal sealed class SerializedOperationGate
         );
       }
 
-      return new Lease(this);
+      return new Lease(this, progress);
     }
     catch
     {
@@ -81,6 +86,7 @@ internal sealed class SerializedOperationGate
         {
           _isActive = false;
           _currentOperation = null;
+          _progress = null;
         }
       }
       _semaphore.Release();
@@ -94,18 +100,22 @@ internal sealed class SerializedOperationGate
     {
       _isActive = false;
       _currentOperation = null;
+      _progress = null;
     }
     _semaphore.Release();
   }
 
-  private sealed class Lease : IDisposable
+  internal sealed class Lease : IDisposable
   {
     private SerializedOperationGate? _owner;
 
-    public Lease(SerializedOperationGate owner)
+    public Lease(SerializedOperationGate owner, OperationProgress progress)
     {
       _owner = owner;
+      Progress = progress;
     }
+
+    public OperationProgress Progress { get; }
 
     public void Dispose()
     {

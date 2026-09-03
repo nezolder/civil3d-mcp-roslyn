@@ -18,6 +18,7 @@ import {
   withBenchmarkEventMeta,
 } from "../benchmark/liveTrace.js";
 import { expectedDrawingSchema } from "./expectedDrawing.js";
+import { instanceIdSchema } from "./instanceSelection.js";
 import {
   createOperationAuditContext,
   logOperationFailure,
@@ -51,6 +52,7 @@ export function registerQueryTool(server: McpServer) {
           'surfaces.Add(new { s.Name, s.Layer }); } return surfaces;'
       ),
       expectedDrawing: expectedDrawingSchema.optional(),
+      instanceId: instanceIdSchema,
     },
     async (args, extra) => {
       let benchmarkTrace: BenchmarkTraceRequest | undefined;
@@ -70,16 +72,18 @@ export function registerQueryTool(server: McpServer) {
       const benchmarkFallbackStartedAt = benchmarkTrace ? performance.now() : undefined;
       const audit = createOperationAuditContext("civil3d_query", args.code, performance.now());
       try {
-        const commandResult = await withApplicationConnection(async (client) =>
-          await client.sendCommand(
-            "executeCode",
-            {
-              code: args.code,
-              readOnly: true,
-              expectedDrawing: args.expectedDrawing,
-            },
-            benchmarkTrace
-          )
+        const commandResult = await withApplicationConnection(
+          async (client) =>
+            await client.sendCommand(
+              "executeCode",
+              {
+                code: args.code,
+                readOnly: true,
+                expectedDrawing: args.expectedDrawing,
+              },
+              benchmarkTrace
+            ),
+          { expectedDrawing: args.expectedDrawing, instanceId: args.instanceId }
         );
         const result = benchmarkTrace
           ? (commandResult as MeasuredCommandResult).result

@@ -52,7 +52,7 @@ async function callMustFailValidation(client, params) {
   }
 }
 
-test("execute exposes and forwards drawing guard, idempotency, and post-commit save inputs", async () => {
+test("tools expose drawing, instance, idempotency, and post-commit save safeguards", async () => {
   const mockPlugin = await startMockPlugin();
   process.env.CIVIL3D_HOST = "127.0.0.1";
   process.env.CIVIL3D_PORT = String(mockPlugin.port);
@@ -82,6 +82,11 @@ test("execute exposes and forwards drawing guard, idempotency, and post-commit s
     assert.ok(execute && query);
     assert.ok(execute.inputSchema.required.includes("expectedDrawing"));
     assert.equal(query.inputSchema.required.includes("expectedDrawing"), false);
+    assert.ok(execute.inputSchema.properties.instanceId);
+    assert.ok(query.inputSchema.properties.instanceId);
+    assert.equal(execute.inputSchema.required.includes("instanceId"), false);
+    assert.equal(query.inputSchema.required.includes("instanceId"), false);
+    assert.equal(execute.inputSchema.properties.instanceId.pattern, "^[0-9a-fA-F]{32}$");
     assert.ok(execute.inputSchema.properties.idempotencyKey);
     assert.equal(execute.inputSchema.required.includes("idempotencyKey"), false);
     assert.equal(query.inputSchema.properties.idempotencyKey, undefined);
@@ -129,6 +134,17 @@ test("execute exposes and forwards drawing guard, idempotency, and post-commit s
       },
     });
     assert.equal(mockPlugin.requests.length, beforeInvalidKey, "invalid idempotency key must fail before TCP");
+
+    const beforeInvalidInstance = mockPlugin.requests.length;
+    await callMustFailValidation(client, {
+      name: "civil3d_query",
+      arguments: {
+        code: "return 1;",
+        instanceId: "not-an-instance-id",
+      },
+    });
+    assert.equal(mockPlugin.requests.length, beforeInvalidInstance,
+      "invalid instance id must fail before TCP");
 
     await client.callTool({
       name: "civil3d_query",

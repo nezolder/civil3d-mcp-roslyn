@@ -18,6 +18,7 @@ import {
   withBenchmarkEventMeta,
 } from "../benchmark/liveTrace.js";
 import { expectedDrawingSchema } from "./expectedDrawing.js";
+import { instanceIdSchema } from "./instanceSelection.js";
 import {
   createOperationAuditContext,
   logOperationFailure,
@@ -72,6 +73,7 @@ export function registerExecuteTool(server: McpServer) {
         "Optional human-readable summary; excluded from operation audit logs."
       ),
       expectedDrawing: expectedDrawingSchema,
+      instanceId: instanceIdSchema,
       idempotencyKey: idempotencyKeySchema,
       saveDrawing: z
         .boolean()
@@ -100,20 +102,22 @@ export function registerExecuteTool(server: McpServer) {
       const benchmarkFallbackStartedAt = benchmarkTrace ? performance.now() : undefined;
       const audit = createOperationAuditContext("civil3d_execute", args.code, performance.now());
       try {
-        const commandResult = await withApplicationConnection(async (client) =>
-          await client.sendCommand(
-            "executeCode",
-            {
-              code: args.code,
-              readOnly: false,
-              description: args.description,
-              expectedDrawing: args.expectedDrawing,
-              idempotencyKey: args.idempotencyKey,
-              saveDrawing: args.saveDrawing,
-            },
-            benchmarkTrace,
-            args.saveDrawing ? SAVE_COMMAND_TIMEOUT_MS : undefined
-          )
+        const commandResult = await withApplicationConnection(
+          async (client) =>
+            await client.sendCommand(
+              "executeCode",
+              {
+                code: args.code,
+                readOnly: false,
+                description: args.description,
+                expectedDrawing: args.expectedDrawing,
+                idempotencyKey: args.idempotencyKey,
+                saveDrawing: args.saveDrawing,
+              },
+              benchmarkTrace,
+              args.saveDrawing ? SAVE_COMMAND_TIMEOUT_MS : undefined
+            ),
+          { expectedDrawing: args.expectedDrawing, instanceId: args.instanceId }
         );
         const result = benchmarkTrace
           ? (commandResult as MeasuredCommandResult).result

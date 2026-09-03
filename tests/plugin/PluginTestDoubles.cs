@@ -3,16 +3,28 @@ namespace Civil3DMcpPlugin;
 public sealed class RpcTcpServer
 {
   public static bool ThrowOnStart { get; set; }
+  public static bool ThrowAddressInUseOnDefaultPort { get; set; }
+  private readonly int _requestedPort;
 
   public RpcTcpServer(
     int port,
     Func<string, CancellationToken, Task<string>> handler)
   {
+    _requestedPort = port;
   }
+
+  public int BoundPort { get; private set; }
 
   public void Start()
   {
     if (ThrowOnStart) throw new InvalidOperationException("expected listener start failure");
+    if (ThrowAddressInUseOnDefaultPort && _requestedPort == PluginRuntime.DefaultPort)
+    {
+      throw new System.Net.Sockets.SocketException(
+        (int)System.Net.Sockets.SocketError.AddressAlreadyInUse
+      );
+    }
+    BoundPort = _requestedPort == 0 ? 48123 : _requestedPort;
   }
 
   public void Stop() { }
@@ -34,8 +46,10 @@ public static class RoslynExecutor
   internal static async Task<object?> ExecuteAsync(
     string code,
     ScriptContext context,
-    InternalBenchmarkMeasurement? benchmarkMeasurement)
+    InternalBenchmarkMeasurement? benchmarkMeasurement,
+    OperationProgress? progress = null)
   {
+    progress?.SetStage(OperationStage.RunningScript);
     Interlocked.Increment(ref _callCount);
     var active = Interlocked.Increment(ref _activeCount);
     SetMaximum(active);

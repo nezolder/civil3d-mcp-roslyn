@@ -82,6 +82,8 @@ function classifyPluginCode(code: string): {
     case "CIVIL3D.IDEMPOTENCY_IN_PROGRESS":
     case "CIVIL3D.IDEMPOTENCY_COMPLETED":
       return { category: "execution", outcome: "not_started" };
+    case "CIVIL3D.COMMAND_CONTEXT_TIMEOUT":
+      return { category: "timeout", outcome: "not_started" };
     case "CIVIL3D.TIMEOUT":
       return { category: "timeout", outcome: "unknown" };
     case "CIVIL3D.REQUEST_TOO_LARGE":
