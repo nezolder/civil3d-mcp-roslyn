@@ -20,6 +20,7 @@
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\IdempotencyRegistry.cs" Link="IdempotencyRegistry.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\OperationProgress.cs" Link="OperationProgress.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\PluginRuntime.cs" Link="PluginRuntime.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\PluginEntry.cs" Link="PluginEntry.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ResultSerializer.cs" Link="ResultSerializer.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptContext.cs" Link="ScriptContext.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\SerializedOperationGate.cs" Link="SerializedOperationGate.cs" />
@@ -27,5 +28,6 @@
     <Compile Include="PluginTestDoubles.cs" />
     <Compile Include="PluginCoreTests.cs" />
     <Compile Include="ResultSerializerTests.cs" />
+    <Compile Include="ModalTestHost.cs" />
   </ItemGroup>
 </Project>

@@ -65,7 +65,8 @@ public sealed class PluginEntry : IExtensionApplication
 
   // Internal native command, not an additional public MCP tool. Only an opaque
   // one-use request token enters AutoCAD's command input.
-  [CommandMethod(ModalCommandAdmission.CommandName, CommandFlags.Modal | CommandFlags.NoHistory)]
+  [CommandMethod(ModalCommandAdmission.CommandName,
+    CommandFlags.Modal | CommandFlags.NoHistory | CommandFlags.UsePickSet | CommandFlags.Redraw)]
   public void RunModalCommand() => ModalCommandAdmission.RunCommand();
 
   private static void WriteMessage(string message)

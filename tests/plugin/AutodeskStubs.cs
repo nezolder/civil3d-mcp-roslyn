@@ -12,6 +12,7 @@ namespace Autodesk.AutoCAD.EditorInput
     public bool IsQuiescent { get; set; } = true;
     public string CommandToken { get; set; } = string.Empty;
     public PromptResult GetString(PromptStringOptions options) => new(PromptStatus.OK, CommandToken);
+    public void WriteMessage(string message) { }
   }
 }
 
@@ -167,8 +168,12 @@ namespace Autodesk.AutoCAD.ApplicationServices
     public event EventHandler<CommandEventArgs>? CommandFailed;
     public int CommandHandlerCount => (CommandEnded?.GetInvocationList().Length ?? 0)
       + (CommandCancelled?.GetInvocationList().Length ?? 0) + (CommandFailed?.GetInvocationList().Length ?? 0);
+    public Action<Document, string>? CommandQueued { get; set; }
     public void SendStringToExecute(string command, bool activate, bool wrapUpInactiveDoc, bool echo)
-      => Editor.CommandToken = command.Trim().Split(' ')[1];
+    {
+      Editor.CommandToken = command.Trim().Split(' ')[1];
+      CommandQueued?.Invoke(this, Editor.CommandToken);
+    }
     public void EndCommand(string name) => CommandEnded?.Invoke(this, new(name));
     public void CancelCommand(string name) => CommandCancelled?.Invoke(this, new(name));
     public void FailCommand(string name) => CommandFailed?.Invoke(this, new(name));
@@ -399,6 +404,24 @@ namespace Autodesk.AutoCAD.ApplicationServices
 
 namespace Autodesk.AutoCAD.Runtime
 {
+  [Flags]
+  public enum CommandFlags
+  {
+    Modal = 0, Transparent = 1, UsePickSet = 2, Redraw = 4,
+    Session = 0x200000, NoHistory = 0x800000, NoUndoMarker = 0x1000000,
+  }
+  [AttributeUsage(AttributeTargets.Method)]
+  public sealed class CommandMethodAttribute(string name, CommandFlags flags = CommandFlags.Modal) : Attribute
+  {
+    public string GlobalName { get; } = name;
+    public CommandFlags Flags { get; } = flags;
+  }
+  [AttributeUsage(AttributeTargets.Assembly)]
+  public sealed class ExtensionApplicationAttribute(Type type) : Attribute { public Type Type { get; } = type; }
+  [AttributeUsage(AttributeTargets.Assembly)]
+  public sealed class CommandClassAttribute(Type type) : Attribute { public Type Type { get; } = type; }
+  public interface IExtensionApplication { void Initialize(); void Terminate(); }
+
   public sealed class SynchronizationContext : global::System.Threading.SynchronizationContext
   {
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]

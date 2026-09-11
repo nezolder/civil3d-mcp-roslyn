@@ -10,6 +10,7 @@ namespace Civil3DMcpPlugin;
 
 internal static class PluginCoreTests
 {
+  private static ModalTestHost? _modalHost;
   private const string ActualPath = @"C:\Projects\Plans\Target.dwg";
   private static readonly Guid ActualFingerprint =
     Guid.Parse("11111111-2222-4333-8444-555555555555");
@@ -29,6 +30,7 @@ internal static class PluginCoreTests
     );
     var tests = new (string Name, Func<Task> Run)[]
     {
+      ("compiled modal command registration preserves implied selection", ModalCommandRegistrationAsync),
       ("direct execute guard is required and malformed guards fail closed", DirectGuardContractAsync),
       ("modal dispatch preserves transaction, save, and gate through own host end", ModalDispatchAsync),
       ("modal admission rejects stale tokens, wrong documents, and unstarted work", ModalAdmissionSafetyAsync),
@@ -66,12 +68,36 @@ internal static class PluginCoreTests
       ("idempotency key validation rejects invalid direct JSON-RPC input", IdempotencyInvalidKeyAsync),
     };
 
+    var sharedTests = new HashSet<Func<Task>>
+    {
+      DirectGuardContractAsync, DrawingIdentityOrderingAsync, PrivateDrawingIdentityAsync,
+      SaveAfterCommitOrderingAsync, SaveRequestValidationAsync, SaveFailureCompletesIdempotencyAsync,
+      SerializedDispatchStatusAsync, RunningScriptProgressAndCancellationAsync, ProgressCleanupAsync,
+      HealthBypassesSerializedQueueAsync, ApiLookupBypassesSerializedQueueAsync,
+      CancellationAndErrorCleanupAsync, GateWaitMeasurementAsync, ExecuteResultSerializationAsync,
+      IdempotencyFirstSuccessAndCompletedDuplicateAsync, IdempotencyInProgressDuplicateAsync,
+      IdempotencyConflictAsync, IdempotencyFailureReleasesKeyAsync, IdempotencyCapacityEvictionAsync,
+      IdempotencyInvalidKeyAsync,
+    };
+
     try
     {
       foreach (var (name, run) in tests)
       {
         await run();
         Console.WriteLine($"PASS {name}");
+      }
+
+      foreach (var (name, run) in tests.Where(test => sharedTests.Contains(test.Run)))
+      {
+        using var host = new ModalTestHost();
+        _modalHost = host;
+        try
+        {
+          await run();
+          Console.WriteLine($"PASS [modal] {name}");
+        }
+        finally { _modalHost = null; }
       }
 
       ResultSerializerTests.RunAll();
@@ -93,6 +119,23 @@ internal static class PluginCoreTests
         Directory.Delete(EndpointDirectory, recursive: true);
       }
     }
+  }
+
+  private static Task ModalCommandRegistrationAsync()
+  {
+    var registration = typeof(PluginEntry).GetMethod(nameof(PluginEntry.RunModalCommand))!
+      .GetCustomAttribute<Autodesk.AutoCAD.Runtime.CommandMethodAttribute>();
+    Assert(registration?.GlobalName == ModalCommandAdmission.CommandName,
+      "the production entry method must register the internal command name");
+    var required = Autodesk.AutoCAD.Runtime.CommandFlags.NoHistory
+      | Autodesk.AutoCAD.Runtime.CommandFlags.UsePickSet | Autodesk.AutoCAD.Runtime.CommandFlags.Redraw;
+    var forbidden = Autodesk.AutoCAD.Runtime.CommandFlags.Transparent
+      | Autodesk.AutoCAD.Runtime.CommandFlags.Session | Autodesk.AutoCAD.Runtime.CommandFlags.NoUndoMarker;
+    Assert((registration!.Flags & required) == required,
+      "the modal command must preserve implied selection and remain outside repeat history");
+    Assert((registration.Flags & forbidden) == 0,
+      "the shared writer must stay modal, document-scoped, and preserve normal Undo behavior");
+    return Task.CompletedTask;
   }
 
   private static async Task ModalDispatchAsync()
@@ -1782,6 +1825,8 @@ internal static class PluginCoreTests
         "health response must remain limited to the stable status fields");
       Assert(health["connected"]?.GetValue<bool>() == true, "health must report the live connection");
       Assert(health["listenerRunning"]?.GetValue<bool>() == true, "health must report the listener");
+      Assert(health["executionBackend"]?.GetValue<string>() == (_modalHost == null ? "native" : "modal"),
+        "shared contracts must exercise the selected execution backend");
       Assert(health["operationInProgress"]?.GetValue<bool>() == true,
         "health must report the active operation");
       Assert(health["currentOperation"]?.GetValue<string>() == "executeCode",
@@ -2081,7 +2126,7 @@ internal static class PluginCoreTests
     string actualPath = ActualPath,
     bool? dwgTitled = null)
   {
-    CivilExecution.UseNativeBackendOverrideForTests = true;
+    CivilExecution.UseNativeBackendOverrideForTests = _modalHost == null;
     Application.DocumentManager.BeforeCommandContextAsync = null;
     Application.DocumentManager.AfterCommandContextAsync = null;
     Application.DocumentManager.CommandContextScheduleException = null;
@@ -2100,6 +2145,7 @@ internal static class PluginCoreTests
       FingerprintGuid = ActualFingerprint.ToString("B").ToUpperInvariant(),
     };
     Application.DocumentManager.MdiActiveDocument = new Document(database);
+    _modalHost?.Attach(CurrentDocument);
     Application.DocumentManager.CommandContextDelay = TimeSpan.Zero;
     Application.DwgTitled = (dwgTitled ?? !string.IsNullOrEmpty(actualPath)) ? 1 : 0;
     CivilApplication.ActiveDocument = new CivilDocument();
