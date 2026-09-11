@@ -1,6 +1,6 @@
 # Published development status
 
-Updated: 2026-09-03
+Updated: 2026-09-11
 
 This repository contains the complete current accepted source snapshot, not just a corrective patch on the initial release. Unvalidated local experiments, client data, live-run artifacts, proprietary assemblies and private development history are excluded.
 
@@ -29,9 +29,17 @@ This repository contains the complete current accepted source snapshot, not just
 
 The accepted catalog contains **22 skills** and **24 C# templates**, behind the same three public tools. Build instructions and test commands remain in [README.md](README.md) and `package.json`; Autodesk reference assemblies must be supplied locally and are not distributed.
 
-**Proven offline for this publication snapshot:** TypeScript typecheck/build, plugin Release build, benchmark/error/discovery/routing tests, plugin core and serialization tests, transport tests, the three-tool MCP smoke check, all 24 template metadata compilations and 18 fixed-primitive input checks passed. NuGet vulnerability-feed retrieval produced an environment warning; these checks are not a dependency-security audit.
+**Proven offline for the previous accepted snapshot (2026-09-03):** TypeScript typecheck/build, plugin Release build, benchmark/error/discovery/routing tests, plugin core and serialization tests, transport tests, the three-tool MCP smoke check, all 24 template metadata compilations and 18 fixed-primitive input checks passed. The catalog and Node implementation are unchanged in this update. NuGet vulnerability-feed retrieval produced an environment warning; these checks are not a dependency-security audit.
 
-## Latest command-context correction
+## Modal command completion
+
+- **Proven in code and targeted Civil 3D 2025 checks:** the default backend runs the existing dynamic Roslyn body through a genuine modal command, avoiding the native `ExecuteInCommandContextAsync` completion path. An isolated comparison using identical drawing copies and the same rebuild/save operation reproduced the old completion hang; both the candidate and the final installed modal build returned, and subsequent queries also completed.
+- The same drawing guard, transaction, post-commit save and serialization gate remain. The gate requires both body disposal and the matching command lifecycle event. Only an opaque one-use token enters the command input; abandoned tokens cannot run later requests. Started work is never released on timeout or automatically replayed.
+- Private health reports `executionBackend`. `CIVIL3D_MCP_EXECUTION_BACKEND=native` is reserved for an explicitly selected fresh-session comparison; there is no automatic fallback. Detailed completion diagnostics are disabled by default and contain only bounded, fixed metadata when explicitly enabled.
+- **Proven offline for this update:** the plugin build, plugin core/serialization and modal admission/lifecycle tests, TypeScript checks and the three-tool MCP smoke check passed. This is targeted execution-completion evidence, not proof of every possible long-running or asynchronous script scenario.
+- Corridor dependency freshness is outside this execution-completion fix. This update does not infer an MCP defect from a corridor's stale flag, and does not change corridor or data-reference modeling behavior.
+
+## Earlier command-context correction
 
 - **Proven offline:** a 15-second atomic admission deadline rejects a callback that has not started, returning `CIVIL3D.COMMAND_CONTEXT_TIMEOUT`, `outcome: not_started` and `retryable: false`. A late abandoned callback does no drawing work. Once an operation starts, its gate is retained until native completion.
 - **Proven local API inspection and deterministic reproduction:** a completion recheck closes a lost-notification window in the Civil 3D 2025 native awaitable. The completion race is a **Probable** contributor to earlier hangs, not a proven explanation of every case.
@@ -45,4 +53,4 @@ The publication build is checked offline; it is not a separate live installation
 
 Dynamic surface-profile/profile-view authoring remains local development work. Its offline checks passed, but its recipe has not been run live, so it is excluded from this accepted snapshot. Designed grades, general corridor authoring, automatic standards compliance and later Civil version support are not claimed.
 
-Next development work should finish the small surface-profile/view validation, or address a newly observed fault. Do not introduce a general refactor or new public tool without a concrete demonstrated need.
+Further development should address an observed work problem or explicitly approved validation. Do not introduce a general refactor or new public tool without a concrete demonstrated need.

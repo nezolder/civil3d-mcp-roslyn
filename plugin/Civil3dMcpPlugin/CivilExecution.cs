@@ -9,10 +9,16 @@ namespace Civil3DMcpPlugin;
 /// <summary>
 /// Helper for executing Civil 3D API operations safely on the main thread.
 /// The Civil 3D API is single-threaded — all operations must be marshaled to
-/// the main AutoCAD thread via ExecuteInCommandContextAsync.
+/// the main AutoCAD thread through a correlated modal command.
 /// </summary>
 public static class CivilExecution
 {
+  // Explicit legacy comparison route. Never switch or replay an in-flight request.
+  private static readonly bool NativeBackendConfigured = string.Equals(
+    Environment.GetEnvironmentVariable("CIVIL3D_MCP_EXECUTION_BACKEND"),
+    "native", StringComparison.OrdinalIgnoreCase);
+  internal static bool? UseNativeBackendOverrideForTests { get; set; }
+  internal static bool UseNativeBackend => UseNativeBackendOverrideForTests ?? NativeBackendConfigured;
   /// <summary>
   /// Execute an operation within a proper document lock and transaction.
   /// If <paramref name="write"/> is true, the transaction is committed.
@@ -33,13 +39,16 @@ public static class CivilExecution
   {
     T? result = default;
     Exception? capturedException = null;
+    var operationCommitted = false;
     var commandContextRequestedAt = benchmarkMeasurement == null
       ? (long?)null
       : Stopwatch.GetTimestamp();
 
+    progress?.ConfigureExecution(write, saveDrawing);
     progress?.SetStage(OperationStage.WaitingForCommandContext);
-    await CommandContextAdmission.ExecuteAsync(App.DocumentManager, async _ =>
+    void ExecuteBody()
     {
+      progress?.RecordCallbackEntered();
       var executionStartedAt = benchmarkMeasurement == null
         ? (long?)null
         : Stopwatch.GetTimestamp();
@@ -94,7 +103,18 @@ public static class CivilExecution
                     if (write)
                     {
                       progress?.SetStage(OperationStage.CommittingTransaction);
-                      transaction.Commit();
+                      progress?.RecordCommit(null);
+                      try
+                      {
+                        transaction.Commit();
+                        operationCommitted = true;
+                        progress?.RecordCommit(true);
+                      }
+                      catch
+                      {
+                        progress?.RecordCommit(false);
+                        throw;
+                      }
                     }
 
                     return actionResult;
@@ -118,6 +138,7 @@ public static class CivilExecution
           try
           {
             progress?.SetStage(OperationStage.SavingDrawing);
+            progress?.RecordSave(null);
             // Saving inside the Roslyn transaction can fail with eFilerError.
             // Run it only after both the transaction and document lock are disposed.
             database.SaveAs(
@@ -126,9 +147,11 @@ public static class CivilExecution
               database.OriginalFileVersion,
               database.SecurityParameters
             );
+            progress?.RecordSave(true);
           }
           catch (Exception ex)
           {
+            progress?.RecordSave(false);
             throw new JsonRpcDispatchException(
               "CIVIL3D.SAVE_FAILED",
               $"Drawing changes were committed in memory, but saving the active drawing failed: {ex.Message}",
@@ -147,13 +170,27 @@ public static class CivilExecution
         {
           benchmarkMeasurement!.RecordExecution(Stopwatch.GetElapsedTime(startedAt));
         }
-        // This marker does not release the gate. The Autodesk task must still
-        // finish, even when the callback has disposed every drawing resource.
+        // This marker does not release the gate. The host command must still
+        // finish, even when the body has disposed every drawing resource.
         progress?.SetStage(OperationStage.WaitingForCommandContextCompletion);
+        progress?.RecordCallbackExited(capturedException != null);
       }
 
-      await Task.CompletedTask;
-    }, null, commandContextStartCancellationToken);
+    }
+
+    if (UseNativeBackend)
+    {
+      await CommandContextAdmission.ExecuteAsync(App.DocumentManager, async _ =>
+      {
+        ExecuteBody();
+        await Task.CompletedTask;
+      }, null, commandContextStartCancellationToken, progress);
+    }
+    else
+    {
+      await ModalCommandAdmission.ExecuteAsync(
+        ExecuteBody, commandContextStartCancellationToken, () => operationCommitted);
+    }
 
     progress?.SetStage(OperationStage.ReturningResult);
 

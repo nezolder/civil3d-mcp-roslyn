@@ -133,8 +133,11 @@ C3DMCPSTATUS → verify running
 | `CIVIL3D_CONNECT_TIMEOUT` | `5000` | TCP connection timeout (ms) |
 | `CIVIL3D_DISCOVERY_TIMEOUT` | `5000` | Timeout for private health and drawing-identity probes (ms) |
 | `CIVIL3D_COMMAND_TIMEOUT` | `120000` | Execution timeout (ms) |
+| `CIVIL3D_MCP_EXECUTION_BACKEND` | `modal` | Plugin process: `native` selects the legacy route for a controlled comparison in a fresh Civil session. |
 | `CIVIL3D_SAVE_TIMEOUT` | `600000` | Timeout for execute requests with `saveDrawing: true` (ms) |
 | `LOG_LEVEL` | `info` | Log level |
+
+Civil requests run as correlated modal commands. The existing serialization gate stays held until the script has disposed its resources and that command ends; completing the script body alone does not release it. A request that has not started within 15 seconds is abandoned, and its late token cannot execute another request. The legacy backend is never selected automatically after a timeout.
 
 ## Multiple Civil 3D instances
 
@@ -152,7 +155,7 @@ The phase 2A host-independent recorder, the phase 2A.1 opt-in internal live trac
 
 `civil3d_query` and `civil3d_execute` keep their existing text error content and `isError: true`, while also returning `structuredContent` with schema `civil3d-mcp-error/v1`. The stable error fields are `code`, `category`, `message`, `source`, `outcome`, and `retryable`. A command timeout or a connection loss after sending has `outcome: "unknown"` and `retryable: false`; the server never retries it automatically. Successful responses and the three-tool public surface are unchanged.
 
-An operation whose Civil command-context callback has not started within 15 seconds instead returns `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` with `outcome: "not_started"` and `retryable: false`. A subsequently arriving abandoned callback performs no drawing work. This deadline limits admission, not execution: a started operation retains the serialized gate until native completion, and an uncertain write must still be reconciled rather than repeated. A completion recheck also closes a reproduced lost-notification window in Civil 3D 2025's native awaitable. Private health exposes fixed execution-stage names and elapsed times without drawing content; these scoped corrections do not prove that every intermittent hang is eliminated.
+An operation whose Civil command has not started within 15 seconds returns `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` with `outcome: "not_started"` and `retryable: false`. A subsequently arriving abandoned token performs no drawing work. This deadline limits admission, not execution: started work retains the serialized gate until the selected backend's host completion, and an uncertain write must still be reconciled rather than repeated. Private health exposes the execution backend, fixed stage names and elapsed times without drawing content. The targeted completion checks do not establish that every possible hang is eliminated.
 
 ## Private TCP framing (phase 2C.1)
 

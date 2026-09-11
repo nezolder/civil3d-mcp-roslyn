@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using System.Reflection;
 using System.Reflection.Emit;
 using Autodesk.AutoCAD.ApplicationServices;
@@ -29,6 +30,8 @@ internal static class PluginCoreTests
     var tests = new (string Name, Func<Task> Run)[]
     {
       ("direct execute guard is required and malformed guards fail closed", DirectGuardContractAsync),
+      ("modal dispatch preserves transaction, save, and gate through own host end", ModalDispatchAsync),
+      ("modal admission rejects stale tokens, wrong documents, and unstarted work", ModalAdmissionSafetyAsync),
       ("drawing identity is checked before lock, transaction, and Roslyn", DrawingIdentityOrderingAsync),
       ("private drawing identity is read without Roslyn or a commit", PrivateDrawingIdentityAsync),
       ("save runs after commit and releases transaction resources", SaveAfterCommitOrderingAsync),
@@ -38,6 +41,12 @@ internal static class PluginCoreTests
       ("listener fallback publishes and removes a per-instance endpoint", EndpointRegistrationLifecycleAsync),
       ("parallel dispatch is serialized with exact waiting and active status", SerializedDispatchStatusAsync),
       ("native ExecutionResult bridge closes the lost continuation race", NativeExecutionResultBridgeAsync),
+      ("completion diagnostics distinguish callback task and synchronization context", CallbackReturnDiagnosticsAsync),
+      ("completion first-chance observer is bounded and data-free", CompletionFirstChanceObserverAsync),
+      ("completion diagnostics retain a suppressed native continuation without fallback", CompletionDiagnosticsNoFallbackAsync),
+      ("completion diagnostics record callback, commit, save, and GetResult outcomes", CompletionDiagnosticsOutcomesAsync),
+      ("completion diagnostic sampling is bounded and stops safely", CompletionDiagnosticSamplingAsync),
+      ("completion diagnostics are default-off without changing gate behavior", CompletionDiagnosticsDefaultOffAsync),
       ("unstarted command context times out without running stale Civil work", CommandContextAdmissionTimeoutAsync),
       ("command-context scheduler failures propagate and late faults are observed", CommandContextAdmissionFaultsAsync),
       ("progress reports a queued AutoCAD command context while health remains responsive", WaitingForCommandContextProgressAsync),
@@ -84,6 +93,110 @@ internal static class PluginCoreTests
         Directory.Delete(EndpointDirectory, recursive: true);
       }
     }
+  }
+
+  private static async Task ModalDispatchAsync()
+  {
+    ResetEnvironment();
+    CivilExecution.UseNativeBackendOverrideForTests = false;
+    ModalCommandAdmission.Initialize();
+    var nativeCalls = Application.DocumentManager.CommandContextCallCount;
+    using var stop = new CancellationTokenSource();
+    var write = PluginRuntime.HandleRawRequestAsync(CreateGuardedWriteRequest("modal-write", "modal-body", saveDrawing: true), stop.Token);
+    Application.RaiseIdle();
+    ModalCommandAdmission.RunCommand();
+    Assert(CurrentDatabase.TransactionManager.CommittedCount == 1 && CurrentDatabase.SaveAsCallCount == 1,
+      "modal body must retain original commit and save behavior");
+    Assert(CurrentDatabase.TransactionManager.ActiveCount == 0 && CurrentDocument.ActiveLockCount == 0,
+      "body resources must be disposed before command end");
+    Assert(!write.IsCompleted && PluginRuntime.GetStatus().OperationInProgress,
+      "body exit cannot release the existing operation gate");
+    stop.Cancel();
+    CurrentDocument.EndCommand("UNRELATED");
+    Assert(!write.IsCompleted, "neither cancellation nor unrelated command end can free started work");
+    var read = SendAsync(CreateRequest("modal-read", readOnly: true));
+    Assert(PluginRuntime.GetStatus().QueueDepth == 1, "next operation must wait behind the same gate");
+    CurrentDocument.EndCommand(ModalCommandAdmission.CommandName);
+    AssertResult(await write.WaitAsync(TimeSpan.FromSeconds(2)), "ok");
+    // The gate continuation queues the next request asynchronously.
+    for (var i = 0; i < 100 && !read.IsCompleted; i++)
+    {
+      Application.RaiseIdle();
+      ModalCommandAdmission.RunCommand();
+      CurrentDocument.EndCommand(ModalCommandAdmission.CommandName);
+      await Task.Delay(1);
+    }
+    AssertResult(await read.WaitAsync(TimeSpan.FromSeconds(2)), "ok");
+    Application.RaiseIdle();
+    Assert(Application.DocumentManager.CommandContextCallCount == nativeCalls,
+      "modal dispatch must never call ExecuteInCommandContextAsync");
+    Assert(CurrentDocument.CommandHandlerCount == 0 && RoslynExecutor.CallCount == 2,
+      "both operations run once and detach their handlers");
+    ModalCommandAdmission.Terminate();
+    AssertCleanStatus();
+  }
+
+  private static async Task ModalAdmissionSafetyAsync()
+  {
+    ResetEnvironment();
+    ModalCommandAdmission.Initialize();
+    var calls = 0;
+    using var cancel = new CancellationTokenSource();
+    var stale = ModalCommandAdmission.ExecuteAsync(() => calls++, cancel.Token, () => false);
+    Application.RaiseIdle();
+    var staleToken = CurrentDocument.Editor.CommandToken;
+    cancel.Cancel();
+    try { await stale; throw new Exception("Expected cancellation"); } catch (OperationCanceledException) { }
+    var next = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => false);
+    Application.RaiseIdle();
+    var token = CurrentDocument.Editor.CommandToken;
+    CurrentDocument.Editor.CommandToken = staleToken;
+    ModalCommandAdmission.RunCommand();
+    CurrentDocument.EndCommand(ModalCommandAdmission.CommandName);
+    Assert(calls == 0 && !next.IsCompleted, "late abandoned token must not consume or finish a newer request");
+    CurrentDocument.Editor.CommandToken = token;
+    ModalCommandAdmission.RunCommand();
+    CurrentDocument.EndCommand(ModalCommandAdmission.CommandName);
+    await next;
+    Assert(calls == 1, "current token executes once");
+
+    var original = CurrentDocument;
+    var wrong = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => false);
+    Application.RaiseIdle();
+    var other = new Document(new Database());
+    other.Editor.CommandToken = original.Editor.CommandToken;
+    Application.DocumentManager.MdiActiveDocument = other;
+    ModalCommandAdmission.RunCommand();
+    try { await wrong; throw new Exception("Expected wrong-document rejection"); }
+    catch (JsonRpcDispatchException ex) { Assert(ex.Code == "CIVIL3D.DRAWING_MISMATCH", "wrong document error"); }
+    Application.DocumentManager.MdiActiveDocument = original;
+    Application.RaiseIdle();
+    Assert(calls == 1, "wrong document must never execute");
+
+    ModalCommandAdmission.StartDeadlineOverrideForTests = TimeSpan.FromMilliseconds(10);
+    var timedOut = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => false);
+    try { await timedOut; throw new Exception("Expected admission timeout"); }
+    catch (JsonRpcDispatchException ex) { Assert(ex.Code == "CIVIL3D.COMMAND_CONTEXT_TIMEOUT", "start deadline error"); }
+    Application.RaiseIdle();
+    Assert(calls == 1 && original.CommandHandlerCount == 0, "timeout must leave no executable work or handlers");
+    ModalCommandAdmission.StartDeadlineOverrideForTests = null;
+
+    var bodyError = ModalCommandAdmission.ExecuteAsync(() => throw new InvalidOperationException("body"), CancellationToken.None, () => false);
+    Application.RaiseIdle();
+    ModalCommandAdmission.RunCommand();
+    Assert(!bodyError.IsCompleted, "a body error still needs the real host end");
+    original.EndCommand(ModalCommandAdmission.CommandName);
+    try { await bodyError; throw new Exception("Expected body failure"); } catch (InvalidOperationException) { }
+    Application.RaiseIdle();
+    var committedCancel = ModalCommandAdmission.ExecuteAsync(() => { }, CancellationToken.None, () => true);
+    Application.RaiseIdle();
+    ModalCommandAdmission.RunCommand();
+    original.CancelCommand(ModalCommandAdmission.CommandName);
+    try { await committedCancel; throw new Exception("Expected host cancellation"); }
+    catch (JsonRpcDispatchException ex) { Assert(ex.OperationCommitted, "host cancellation must preserve a completed commit"); }
+    Application.RaiseIdle();
+    Assert(original.CommandHandlerCount == 0, "error paths must detach once");
+    ModalCommandAdmission.Terminate();
   }
 
   private static async Task PrivateDrawingIdentityAsync()
@@ -339,6 +452,7 @@ internal static class PluginCoreTests
 
   private static async Task NativeExecutionResultBridgeAsync()
   {
+    using var diagnostics = SetCompletionDiagnostics("1");
     ResetEnvironment();
     RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
     AssertResult(
@@ -368,6 +482,629 @@ internal static class PluginCoreTests
       "completion during OnCompleted registration must take one document lock");
     Assert(CurrentDatabase.TransactionManager.StartedCount == 1,
       "completion during OnCompleted registration must start one transaction");
+    var registrationRace = PluginRuntime.GetStatus().LastCompletionDiagnostics
+      ?? throw new InvalidOperationException("registration-race diagnostics must be retained");
+    Assert(registrationRace.PostRegistrationNativeIsCompleted == true,
+      "registration-race diagnostics must preserve the native post-registration completion read");
+    Assert(registrationRace.ContinuationInvocations == 0,
+      "a managed fallback must not be recorded as a native continuation invocation");
+    AssertCleanStatus();
+  }
+
+  private static async Task CallbackReturnDiagnosticsAsync()
+  {
+    using var diagnostics = SetCompletionDiagnostics("1");
+    ResetEnvironment();
+    var originalContext = SynchronizationContext.Current;
+    try
+    {
+      SynchronizationContext.SetSynchronizationContext(null);
+      var nullContextProgress = new OperationProgress();
+      await CommandContextAdmission.ExecuteAsync(
+        Application.DocumentManager,
+        _ => Task.CompletedTask,
+        null,
+        CancellationToken.None,
+        nullContextProgress
+      );
+      var nullContextStatus = nullContextProgress.GetStatus();
+      var nullContext = nullContextStatus.CompletionDiagnostics
+        ?? throw new InvalidOperationException("enabled callback diagnostics must be retained");
+      Assert(nullContext.CallbackSynchronizationContextBefore == "Null" &&
+        nullContext.CallbackSynchronizationContextAfter == "Null" &&
+        nullContext.ReturnedCallbackTaskStatus == "RanToCompletion" &&
+        nullContext.CallbackReturnTaskScheduler == "DefaultThreadPool" &&
+        nullContext.ReturnedCallbackTaskObservedElapsedMs is double callbackTaskObservedElapsedMs &&
+        callbackTaskObservedElapsedMs >= 0 &&
+        callbackTaskObservedElapsedMs <= nullContextStatus.OperationElapsedMs,
+        "a synchronous callback must record only fixed null-context and completed-task scalars");
+
+      SynchronizationContext.SetSynchronizationContext(new SynchronizationContext());
+      var otherContextProgress = new OperationProgress();
+      await CommandContextAdmission.ExecuteAsync(
+        Application.DocumentManager,
+        _ => Task.CompletedTask,
+        null,
+        CancellationToken.None,
+        otherContextProgress
+      );
+      var otherContext = otherContextProgress.GetStatus().CompletionDiagnostics
+        ?? throw new InvalidOperationException("enabled callback diagnostics must be retained");
+      Assert(otherContext.CallbackSynchronizationContextBefore == "Other" &&
+        otherContext.CallbackSynchronizationContextAfter == "Other",
+        "a non-Autodesk synchronization context must remain a fixed Other classification");
+
+      SynchronizationContext.SetSynchronizationContext(
+        new TestAutodeskNamespaceSynchronizationContext()
+      );
+      var namespaceContextProgress = new OperationProgress();
+      await CommandContextAdmission.ExecuteAsync(
+        Application.DocumentManager,
+        _ => Task.CompletedTask,
+        null,
+        CancellationToken.None,
+        namespaceContextProgress
+      );
+      var namespaceContext = namespaceContextProgress.GetStatus().CompletionDiagnostics
+        ?? throw new InvalidOperationException("enabled callback diagnostics must be retained");
+      Assert(namespaceContext.CallbackSynchronizationContextBefore == "Other" &&
+        namespaceContext.CallbackSynchronizationContextAfter == "Other",
+        "an unrelated Autodesk namespace context must remain Other");
+
+      SynchronizationContext.SetSynchronizationContext(
+        new Autodesk.AutoCAD.Runtime.SynchronizationContext()
+      );
+      var autodeskContextProgress = new OperationProgress();
+      await CommandContextAdmission.ExecuteAsync(
+        Application.DocumentManager,
+        _ => Task.CompletedTask,
+        null,
+        CancellationToken.None,
+        autodeskContextProgress
+      );
+      var autodeskContext = autodeskContextProgress.GetStatus().CompletionDiagnostics
+        ?? throw new InvalidOperationException("enabled callback diagnostics must be retained");
+      Assert(autodeskContext.CallbackSynchronizationContextBefore == "AutodeskAutoCAD" &&
+        autodeskContext.CallbackSynchronizationContextAfter == "AutodeskAutoCAD",
+        "an Autodesk synchronization context must not expose its implementation type");
+
+      SynchronizationContext.SetSynchronizationContext(new SynchronizationContext());
+      var changedContextProgress = new OperationProgress();
+      await CommandContextAdmission.ExecuteAsync(
+        Application.DocumentManager,
+        _ =>
+        {
+          SynchronizationContext.SetSynchronizationContext(
+            new Autodesk.AutoCAD.Runtime.SynchronizationContext()
+          );
+          return Task.CompletedTask;
+        },
+        null,
+        CancellationToken.None,
+        changedContextProgress
+      );
+      var changedContext = changedContextProgress.GetStatus().CompletionDiagnostics
+        ?? throw new InvalidOperationException("enabled callback diagnostics must be retained");
+      Assert(changedContext.CallbackSynchronizationContextBefore == "Other" &&
+        changedContext.CallbackSynchronizationContextAfter == "AutodeskAutoCAD",
+        "callback context diagnostics must capture the immediate post-return context");
+
+      SynchronizationContext.SetSynchronizationContext(null);
+      var pendingCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var pendingProgress = new OperationProgress();
+      var pendingOperation = CommandContextAdmission.ExecuteAsync(
+        Application.DocumentManager,
+        _ => pendingCallback.Task,
+        null,
+        CancellationToken.None,
+        pendingProgress
+      );
+      await WaitUntilAsync(() => ReferenceEquals(
+        Application.DocumentManager.LastCallbackTask,
+        pendingCallback.Task
+      ));
+      var pendingSnapshot = pendingProgress.GetStatus().CompletionDiagnostics
+        ?? throw new InvalidOperationException("enabled callback diagnostics must be retained");
+      Assert(!pendingOperation.IsCompleted &&
+        pendingSnapshot.InitialNativeIsCompleted == false &&
+        pendingSnapshot.PostRegistrationNativeIsCompleted == false &&
+        pendingSnapshot.ReturnedCallbackTaskStatus == "WaitingForActivation",
+        "the original pending callback task must remain native-pending without a wrapper");
+      pendingCallback.SetResult();
+      await pendingOperation;
+
+      var nullTaskProgress = new OperationProgress();
+      var nullTaskOperation = CommandContextAdmission.ExecuteAsync(
+        Application.DocumentManager,
+        _ => null!,
+        null,
+        CancellationToken.None,
+        nullTaskProgress
+      );
+      var nullTaskThrew = false;
+      try
+      {
+        await nullTaskOperation;
+      }
+      catch (NullReferenceException)
+      {
+        nullTaskThrew = true;
+      }
+      var nullTaskSnapshot = nullTaskProgress.GetStatus().CompletionDiagnostics
+        ?? throw new InvalidOperationException("enabled callback diagnostics must be retained");
+      Assert(nullTaskThrew && Application.DocumentManager.LastCallbackTask == null &&
+        nullTaskSnapshot.ReturnedCallbackTaskStatus == "Null",
+        "diagnostics must return a callback null unchanged instead of masking it");
+
+      var expectedCallbackException = new InvalidOperationException("expected callback failure");
+      Exception? observedCallbackException = null;
+      try
+      {
+        await CommandContextAdmission.ExecuteAsync(
+          Application.DocumentManager,
+          _ => throw expectedCallbackException,
+          null,
+          CancellationToken.None,
+          new OperationProgress()
+        );
+      }
+      catch (Exception exception)
+      {
+        observedCallbackException = exception;
+      }
+      Assert(ReferenceEquals(observedCallbackException, expectedCallbackException),
+        "enabled diagnostics must preserve callback exception identity");
+
+      var disabledProgress = new OperationProgress(false);
+      await CommandContextAdmission.ExecuteAsync(
+        Application.DocumentManager,
+        _ => Task.CompletedTask,
+        null,
+        CancellationToken.None,
+        disabledProgress
+      );
+      Assert(disabledProgress.GetStatus().CompletionDiagnostics == null,
+        "the default-off path must not create callback task or context diagnostics");
+    }
+    finally
+    {
+      SynchronizationContext.SetSynchronizationContext(originalContext);
+    }
+  }
+
+  private static async Task CompletionFirstChanceObserverAsync()
+  {
+    using var diagnostics = SetCompletionDiagnostics("1");
+    ResetEnvironment();
+    Assert(FirstChanceCompletionObserver.ActiveSubscriptionsForTests == 0,
+      "first-chance tests must begin without a process-global subscription");
+
+    var progress = new OperationProgress();
+    using var observer = FirstChanceCompletionObserver.Start(progress)
+      ?? throw new InvalidOperationException("enabled diagnostics must subscribe");
+    Assert(FirstChanceCompletionObserver.ActiveSubscriptionsForTests == 1,
+      "enabled diagnostics must install exactly one short-lived observer");
+    try
+    {
+      throw new InvalidOperationException("unrelated-first-chance-marker");
+    }
+    catch (InvalidOperationException)
+    {
+      // Deliberately unrelated to the exact Autodesk continuation/Post frames.
+    }
+    Assert(progress.GetStatus().CompletionDiagnostics?.MatchingFirstChanceExceptionCount == 0 &&
+      progress.GetStatus().CompletionDiagnostics?.FirstChanceObserverState == "Running" &&
+      FirstChanceCompletionObserver.ActiveSubscriptionsForTests == 1,
+      "unrelated first-chance exceptions must leave the bounded observer active");
+    try
+    {
+      new Autodesk.AutoCAD.Runtime.SynchronizationContext().Post(null!, null);
+    }
+    catch (InvalidOperationException)
+    {
+      // The observer only sees this first-chance exception; normal propagation is unchanged.
+    }
+    var detected = progress.GetStatus().CompletionDiagnostics
+      ?? throw new InvalidOperationException("enabled diagnostics must retain a snapshot");
+    Assert(detected.MatchingFirstChanceExceptionCount == 1,
+      "the exact Autodesk continuation/Post path must record one first-chance event");
+    Assert(detected.FirstMatchingFirstChanceExceptionCategory == "InvalidOperation",
+      "the observer must retain the fixed exception category only");
+    Assert(detected.FirstMatchingSynchronizationContext == "Null" &&
+      detected.FirstMatchingTaskScheduler == "DefaultThreadPool",
+      "the observer must retain fixed event-time context and scheduler categories only");
+    Assert(detected.FirstMatchingStackHasExecutionResultContinuation == true &&
+      detected.FirstMatchingStackHasSynchronizationContextPost == true,
+      "the observer must classify both exact Autodesk stack frames");
+    Assert(detected.FirstMatchingFirstChanceExceptionElapsedMs >= 0,
+      "the observer must record an operation-relative timestamp");
+    Assert(FirstChanceCompletionObserver.ActiveSubscriptionsForTests == 0,
+      "the first matching event must immediately unsubscribe the observer");
+    Assert(detected.FirstChanceObserverState == "Matched",
+      "the first matching event must publish the fixed matched observer state");
+    Assert(!JsonSerializer.Serialize(detected).Contains("firstchance-private-marker", StringComparison.Ordinal),
+      "first-chance diagnostics must not retain exception messages or stack text");
+    observer.Dispose();
+    Assert(FirstChanceCompletionObserver.ActiveSubscriptionsForTests == 0,
+      "disposing the observer must unsubscribe it immediately");
+
+    FirstChanceCompletionObserver.LifetimeOverrideForTests = TimeSpan.FromMilliseconds(10);
+    try
+    {
+      var expiringProgress = new OperationProgress();
+      var expiring = FirstChanceCompletionObserver.Start(expiringProgress)
+        ?? throw new InvalidOperationException("enabled diagnostics must subscribe");
+      await WaitUntilAsync(() => FirstChanceCompletionObserver.ActiveSubscriptionsForTests == 0);
+      Assert(expiringProgress.GetStatus().CompletionDiagnostics?.FirstChanceObserverState == "Expired",
+        "the hard deadline must publish the fixed expired observer state");
+      expiring.Dispose();
+    }
+    finally
+    {
+      FirstChanceCompletionObserver.LifetimeOverrideForTests = null;
+    }
+
+    FirstChanceCompletionObserver.LifetimeOverrideForTests = TimeSpan.FromMilliseconds(-2);
+    try
+    {
+      var failedProgress = new OperationProgress();
+      Assert(FirstChanceCompletionObserver.Start(failedProgress) == null &&
+        FirstChanceCompletionObserver.ActiveSubscriptionsForTests == 0 &&
+        failedProgress.GetStatus().CompletionDiagnostics?.FirstChanceObserverState == "Failed",
+        "observer setup failure must clean up and leave native scheduling available");
+    }
+    finally
+    {
+      FirstChanceCompletionObserver.LifetimeOverrideForTests = null;
+    }
+
+    var disabled = new OperationProgress(false);
+    Assert(FirstChanceCompletionObserver.Start(disabled) == null &&
+      FirstChanceCompletionObserver.ActiveSubscriptionsForTests == 0,
+      "default-off diagnostics must not subscribe to process-global first-chance events");
+
+    var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var integrationProgress = new OperationProgress();
+    var operation = CommandContextAdmission.ExecuteAsync(
+      Application.DocumentManager,
+      _ => pending.Task,
+      null,
+      CancellationToken.None,
+      integrationProgress
+    );
+    await WaitUntilAsync(() => ReferenceEquals(Application.DocumentManager.LastCallbackTask, pending.Task));
+    Assert(ReferenceEquals(Application.DocumentManager.LastCallbackTask, pending.Task),
+      "the observer must not wrap or replace the callback task");
+    pending.SetResult();
+    await operation;
+    Assert(FirstChanceCompletionObserver.ActiveSubscriptionsForTests == 0,
+      "native scheduling completion must unsubscribe the observer");
+    Assert(integrationProgress.GetStatus().CompletionDiagnostics?.FirstChanceObserverState == "Stopped",
+      "native scheduling completion must publish the fixed stopped observer state");
+  }
+
+  private static async Task CompletionDiagnosticsNoFallbackAsync()
+  {
+    using var diagnostics = SetCompletionDiagnostics("1");
+    ResetEnvironment();
+    CommandContextAdmission.NativeSampleOffsetsOverrideForTests =
+      [TimeSpan.Zero, TimeSpan.FromMilliseconds(250)];
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    Application.DocumentManager.SuppressCompletionContinuation = true;
+    var callbackExited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var releaseNativeCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    Task<string>? first = null;
+    Task<string>? second = null;
+    Application.DocumentManager.AfterCommandContextAsync = async () =>
+    {
+      callbackExited.TrySetResult();
+      await releaseNativeCompletion.Task;
+    };
+
+    try
+    {
+      first = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+        "completion-suppressed-first",
+        "completion-suppressed-first"
+      )));
+      await callbackExited.Task;
+      await WaitUntilAsync(() =>
+        PluginRuntime.GetStatus().CompletionDiagnostics?.PostRegistrationNativeIsCompleted == false);
+
+      var beforeNativeCompletion = await GetHealthAsync();
+      var beforeDiagnostic = beforeNativeCompletion["completionDiagnostics"]?.AsObject();
+      var beforeStatusDiagnostic = PluginRuntime.GetStatus().CompletionDiagnostics
+        ?? throw new InvalidOperationException("active completion diagnostics must be retained");
+      Assert(beforeDiagnostic != null,
+        "active health must expose a data-free completion diagnostic snapshot");
+      Assert(beforeStatusDiagnostic.InitialNativeIsCompleted == false,
+        "the native result must initially be incomplete before the held outer task finishes");
+      Assert(beforeStatusDiagnostic.PostRegistrationNativeIsCompleted == false,
+        "the post-registration recheck must remain false before native completion");
+      Assert(beforeStatusDiagnostic.ContinuationInvocations == 0,
+        "no native continuation may be invented before completion");
+      Assert(beforeStatusDiagnostic.GetResultOutcome == "NotStarted",
+        "GetResult must wait for native notification");
+      Assert(beforeStatusDiagnostic.CallbackEnteredElapsedMs != null &&
+        beforeStatusDiagnostic.CallbackExitedElapsedMs is double callbackExitedElapsedMs &&
+        beforeStatusDiagnostic.ReturnedCallbackTaskObservedElapsedMs is double callbackTaskObservedElapsedMs &&
+        callbackTaskObservedElapsedMs >= callbackExitedElapsedMs,
+        "callback entry, exit, and returned-task observation must use operation-relative timing");
+      var healthJson = beforeNativeCompletion.ToJsonString();
+      Assert(!healthJson.Contains("Target.dwg", StringComparison.Ordinal) &&
+        !healthJson.Contains(ActualFingerprint.ToString("D"), StringComparison.OrdinalIgnoreCase) &&
+        !healthJson.Contains("completion-suppressed-first", StringComparison.Ordinal),
+        "health diagnostics must not expose drawing identity or caller code");
+
+      second = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+        "completion-suppressed-second",
+        "completion-suppressed-second"
+      )));
+      await WaitUntilAsync(() => PluginRuntime.GetStatus().QueueDepth == 1);
+
+      releaseNativeCompletion.SetResult();
+      await WaitUntilAsync(() =>
+        PluginRuntime.GetStatus().CompletionDiagnostics?.LastSampledNativeIsCompleted == true);
+      var heldHealth = await GetHealthAsync();
+      var heldDiagnostic = PluginRuntime.GetStatus().CompletionDiagnostics;
+      Assert(!first.IsCompleted,
+        "observing a native completed state without its continuation must not finish the operation");
+      Assert(PluginRuntime.GetStatus().OperationInProgress && PluginRuntime.GetStatus().QueueDepth == 1,
+        "a missing native continuation must retain the serialized gate and its waiter");
+      Assert(heldDiagnostic?.ContinuationInvocations == 0,
+        "sampled completion must not fabricate a native continuation");
+      Assert(heldDiagnostic?.GetResultOutcome == "NotStarted",
+        "sampled completion must not call GetResult as a fallback");
+      Assert(heldDiagnostic?.LastSampledNativeIsCompleted == true,
+        "the bounded observer must record the native completed state as data only");
+
+      Application.DocumentManager.SuppressCompletionContinuation = false;
+      Assert(Application.DocumentManager.DeliverSuppressedCompletionContinuation(),
+        "the test stub must explicitly release the suppressed native continuation for cleanup");
+      AssertResult(await first, "completion-suppressed-first");
+      AssertResult(await second, "completion-suppressed-second");
+    }
+    finally
+    {
+      Application.DocumentManager.SuppressCompletionContinuation = false;
+      releaseNativeCompletion.TrySetResult();
+      Application.DocumentManager.DeliverSuppressedCompletionContinuation();
+      if (first != null && !first.IsCompleted) await first.WaitAsync(TimeSpan.FromSeconds(1));
+      if (second != null && !second.IsCompleted) await second.WaitAsync(TimeSpan.FromSeconds(1));
+      Application.DocumentManager.AfterCommandContextAsync = null;
+      CommandContextAdmission.NativeSampleOffsetsOverrideForTests = null;
+    }
+
+    AssertCleanStatus();
+  }
+
+  private static async Task CompletionDiagnosticsOutcomesAsync()
+  {
+    using var diagnostics = SetCompletionDiagnostics("1");
+    ResetEnvironment();
+    CommandContextAdmission.NativeSampleOffsetsOverrideForTests = [TimeSpan.FromSeconds(1)];
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    var callbackExited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var releaseNativeCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    Application.DocumentManager.AfterCommandContextAsync = async () =>
+    {
+      callbackExited.TrySetResult();
+      await releaseNativeCompletion.Task;
+    };
+    var successfulSave = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+      "completion-outcome-success",
+      "completion-outcome-success",
+      saveDrawing: true
+    )));
+    await callbackExited.Task;
+    await WaitUntilAsync(() =>
+      PluginRuntime.GetStatus().CompletionDiagnostics is
+      {
+        ContinuationRegisteredElapsedMs: not null,
+        PostRegistrationNativeIsCompleted: false,
+      });
+    var active = PluginRuntime.GetStatus().CompletionDiagnostics
+      ?? throw new InvalidOperationException("active completion diagnostics must be retained");
+    Assert(active.CapturedException == false,
+      "a completed callback with successful commit and save must not report a captured exception");
+    Assert(active.CommitOutcome == "Succeeded" && active.SaveOutcome == "Succeeded",
+      "diagnostics must distinguish a successful commit and save before native completion");
+    Assert(active.GetResultOutcome == "NotStarted" && active.ContinuationInvocations == 0,
+      "GetResult must remain pending until the actual native continuation arrives");
+    releaseNativeCompletion.SetResult();
+    AssertResult(await successfulSave, "completion-outcome-success");
+    var successfulSnapshot = PluginRuntime.GetStatus().LastCompletionDiagnostics
+      ?? throw new InvalidOperationException("successful completion diagnostics must be retained");
+    Assert(successfulSnapshot.ContinuationInvocations == 1 &&
+      successfulSnapshot.GetResultOutcome == "Succeeded",
+      "a delivered native continuation must lead to successful GetResult exactly once");
+    Assert(successfulSnapshot.SamplingState == "Stopped",
+      "the sparse observer must stop when the native continuation completes the bridge");
+
+    ResetEnvironment();
+    RoslynExecutor.Handler = (_, _) => throw new InvalidOperationException("expected action failure");
+    AssertError(
+      await SendAsync(CreateGuardedWriteRequest("completion-outcome-action", "action-failure")),
+      "CIVIL3D.TRANSACTION_FAILED"
+    );
+    var actionFailure = PluginRuntime.GetStatus().LastCompletionDiagnostics;
+    Assert(actionFailure?.CapturedException == true &&
+      actionFailure.CommitOutcome == "NotStarted" && actionFailure.SaveOutcome == "NotRequested",
+      "a captured action exception must be separated from commit and save outcomes");
+
+    ResetEnvironment();
+    CurrentDatabase.TransactionManager.CommitException = new InvalidOperationException("expected commit failure");
+    AssertError(
+      await SendAsync(CreateGuardedWriteRequest("completion-outcome-commit", "commit-failure")),
+      "CIVIL3D.TRANSACTION_FAILED"
+    );
+    var commitFailure = PluginRuntime.GetStatus().LastCompletionDiagnostics;
+    Assert(commitFailure?.CapturedException == true &&
+      commitFailure.CommitOutcome == "Threw" && commitFailure.SaveOutcome == "NotRequested",
+      "a commit failure must be recorded separately from a captured script exception");
+
+    ResetEnvironment();
+    CurrentDatabase.SaveAsException = new InvalidOperationException("expected save failure");
+    AssertError(
+      await SendAsync(CreateGuardedWriteRequest(
+        "completion-outcome-save",
+        "save-failure",
+        saveDrawing: true
+      )),
+      "CIVIL3D.SAVE_FAILED"
+    );
+    var saveFailure = PluginRuntime.GetStatus().LastCompletionDiagnostics;
+    Assert(saveFailure?.CapturedException == true &&
+      saveFailure.CommitOutcome == "Succeeded" && saveFailure.SaveOutcome == "Threw",
+      "a save failure must retain the completed in-memory commit outcome");
+
+    ResetEnvironment();
+    CommandContextAdmission.NativeSampleOffsetsOverrideForTests = [TimeSpan.FromSeconds(1)];
+    callbackExited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    releaseNativeCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    Application.DocumentManager.AfterCommandContextAsync = async () =>
+    {
+      callbackExited.TrySetResult();
+      await releaseNativeCompletion.Task;
+    };
+    Application.DocumentManager.CommandContextCompletionException =
+      new InvalidOperationException("expected native completion fault");
+    var nativeFault = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+      "completion-outcome-native-fault",
+      "native-fault"
+    )));
+    await callbackExited.Task;
+    await WaitUntilAsync(() =>
+      PluginRuntime.GetStatus().CompletionDiagnostics is
+      {
+        ContinuationRegisteredElapsedMs: not null,
+        PostRegistrationNativeIsCompleted: false,
+      });
+    releaseNativeCompletion.SetResult();
+    AssertError(await nativeFault, "CIVIL3D.TRANSACTION_FAILED");
+    var nativeFaultSnapshot = PluginRuntime.GetStatus().LastCompletionDiagnostics;
+    Assert(nativeFaultSnapshot?.CapturedException == false &&
+      nativeFaultSnapshot.ContinuationInvocations == 1 &&
+      nativeFaultSnapshot.GetResultOutcome == "Threw",
+      "a native completion fault must be observed through continuation and GetResult, not as callback failure");
+    Application.DocumentManager.AfterCommandContextAsync = null;
+    CommandContextAdmission.NativeSampleOffsetsOverrideForTests = null;
+    FirstChanceCompletionObserver.LifetimeOverrideForTests = null;
+    AssertCleanStatus();
+  }
+
+  private static async Task CompletionDiagnosticSamplingAsync()
+  {
+    using var diagnostics = SetCompletionDiagnostics("1");
+    ResetEnvironment();
+    CommandContextAdmission.NativeSampleOffsetsOverrideForTests =
+      [TimeSpan.Zero, TimeSpan.Zero];
+    var exhaustedProgress = new OperationProgress();
+    await CommandContextAdmission.SampleNativeCompletionAsync(
+      () => false,
+      exhaustedProgress,
+      CancellationToken.None
+    );
+    var exhausted = exhaustedProgress.GetStatus().CompletionDiagnostics
+      ?? throw new InvalidOperationException("opt-in sampler must retain diagnostics");
+    Assert(exhausted.SampleCount == 2 && exhausted.LastSampledNativeIsCompleted == false &&
+      exhausted.SamplingState == "Exhausted",
+      "a false native state must use the configured sparse sample budget and then stop");
+
+    var abandonedProgress = new OperationProgress();
+    using var abandoned = new CancellationTokenSource();
+    abandoned.Cancel();
+    await CommandContextAdmission.SampleNativeCompletionAsync(
+      () => throw new InvalidOperationException("abandoned sampler must not read native state"),
+      abandonedProgress,
+      abandoned.Token
+    );
+    var abandonedSnapshot = abandonedProgress.GetStatus().CompletionDiagnostics
+      ?? throw new InvalidOperationException("opt-in sampler must retain diagnostics");
+    Assert(abandonedSnapshot.SampleCount == 0 && abandonedSnapshot.SamplingState == "Stopped",
+      "an abandoned observer start must stop without reading native state or surfacing an exception");
+
+    var readFaultProgress = new OperationProgress();
+    await CommandContextAdmission.SampleNativeCompletionAsync(
+      () => throw new InvalidOperationException("private sampler read fault"),
+      readFaultProgress,
+      CancellationToken.None
+    );
+    var readFault = readFaultProgress.GetStatus().CompletionDiagnostics
+      ?? throw new InvalidOperationException("opt-in sampler must retain diagnostics");
+    Assert(readFault.SampleCount == 0 && readFault.SamplingState == "ReadFailed" &&
+      !JsonSerializer.Serialize(readFault).Contains("private sampler read fault", StringComparison.Ordinal),
+      "a sampler read fault must be data-free and must not affect execution");
+    CommandContextAdmission.NativeSampleOffsetsOverrideForTests = null;
+  }
+
+  private static async Task CompletionDiagnosticsDefaultOffAsync()
+  {
+    using var diagnostics = SetCompletionDiagnostics(null);
+    ResetEnvironment();
+    CommandContextAdmission.NativeSampleOffsetsOverrideForTests = [TimeSpan.Zero];
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(
+      await SendAsync(CreateGuardedWriteRequest("completion-disabled-complete", "completion-disabled-complete")),
+      "completion-disabled-complete"
+    );
+    var completedStatus = PluginRuntime.GetStatus();
+    Assert(completedStatus.CompletionDiagnostics == null &&
+      completedStatus.LastCompletionDiagnostics == null,
+      "a default-off operation must create and retain no completion diagnostic snapshot");
+
+    ResetEnvironment();
+    CommandContextAdmission.NativeSampleOffsetsOverrideForTests = [TimeSpan.Zero];
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    Application.DocumentManager.SuppressCompletionContinuation = true;
+    var callbackExited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var releaseNativeCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    Task<string>? first = null;
+    Task<string>? second = null;
+    Application.DocumentManager.AfterCommandContextAsync = async () =>
+    {
+      callbackExited.TrySetResult();
+      await releaseNativeCompletion.Task;
+    };
+
+    try
+    {
+      first = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+        "completion-disabled-held",
+        "completion-disabled-held"
+      )));
+      await callbackExited.Task;
+      second = Task.Run(() => SendAsync(CreateGuardedWriteRequest(
+        "completion-disabled-waiter",
+        "completion-disabled-waiter"
+      )));
+      await WaitUntilAsync(() => PluginRuntime.GetStatus().QueueDepth == 1);
+      releaseNativeCompletion.SetResult();
+      await Task.Delay(25);
+
+      var heldStatus = PluginRuntime.GetStatus();
+      Assert(!first.IsCompleted && heldStatus.OperationInProgress && heldStatus.QueueDepth == 1,
+        "default-off diagnostics must not release a native operation that is still missing its continuation");
+      Assert(heldStatus.CompletionDiagnostics == null && heldStatus.LastCompletionDiagnostics == null,
+        "a default-off held operation must not allocate snapshots or start an observer");
+
+      Application.DocumentManager.SuppressCompletionContinuation = false;
+      Assert(Application.DocumentManager.DeliverSuppressedCompletionContinuation(),
+        "the suppressed native continuation must remain explicitly deliverable for cleanup");
+      AssertResult(await first, "completion-disabled-held");
+      AssertResult(await second, "completion-disabled-waiter");
+    }
+    finally
+    {
+      Application.DocumentManager.SuppressCompletionContinuation = false;
+      releaseNativeCompletion.TrySetResult();
+      Application.DocumentManager.DeliverSuppressedCompletionContinuation();
+      if (first != null && !first.IsCompleted) await first.WaitAsync(TimeSpan.FromSeconds(1));
+      if (second != null && !second.IsCompleted) await second.WaitAsync(TimeSpan.FromSeconds(1));
+      Application.DocumentManager.AfterCommandContextAsync = null;
+      CommandContextAdmission.NativeSampleOffsetsOverrideForTests = null;
+    }
+
     AssertCleanStatus();
   }
 
@@ -981,6 +1718,7 @@ internal static class PluginCoreTests
 
   private static async Task HealthBypassesSerializedQueueAsync()
   {
+    using var diagnostics = SetCompletionDiagnostics(null);
     ResetEnvironment();
     PluginRuntime.StartServer();
     var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1029,6 +1767,8 @@ internal static class PluginCoreTests
         "operationStage",
         "operationElapsedMs",
         "stageElapsedMs",
+        "completionDiagnostics",
+        "lastCompletionDiagnostics",
         "queueDepth",
         "instanceId",
         "processId",
@@ -1036,6 +1776,7 @@ internal static class PluginCoreTests
         "startedAtUtc",
         "mode",
         "roslyn",
+        "executionBackend",
       };
       Assert(health!.Count == expectedFields.Count && health.All(item => expectedFields.Contains(item.Key)),
         "health response must remain limited to the stable status fields");
@@ -1051,6 +1792,8 @@ internal static class PluginCoreTests
         "health must report a nonnegative active-operation elapsed time");
       Assert(health["stageElapsedMs"]?.GetValue<double>() >= 0,
         "health must report a nonnegative active-stage elapsed time");
+      Assert(health["completionDiagnostics"] == null && health["lastCompletionDiagnostics"] == null,
+        "health must leave completion diagnostics null until explicitly enabled");
       Assert(health["queueDepth"]?.GetValue<int>() == 1,
         "health must report the waiting executeCode request only");
       Assert(health["instanceId"]?.GetValue<string>() == PluginRuntime.InstanceId,
@@ -1307,18 +2050,48 @@ internal static class PluginCoreTests
   private static Database CurrentDatabase => CurrentDocument.Database;
   private static Document CurrentDocument => Application.DocumentManager.MdiActiveDocument!;
 
+  private static IDisposable SetCompletionDiagnostics(string? value)
+    => new EnvironmentVariableScope(
+      OperationProgress.CompletionDiagnosticsEnvironmentVariable,
+      value
+    );
+
+  private sealed class EnvironmentVariableScope : IDisposable
+  {
+    private readonly string _name;
+    private readonly string? _previousValue;
+    private bool _disposed;
+
+    public EnvironmentVariableScope(string name, string? value)
+    {
+      _name = name;
+      _previousValue = Environment.GetEnvironmentVariable(name);
+      Environment.SetEnvironmentVariable(name, value);
+    }
+
+    public void Dispose()
+    {
+      if (_disposed) return;
+      _disposed = true;
+      Environment.SetEnvironmentVariable(_name, _previousValue);
+    }
+  }
+
   private static void ResetEnvironment(
     string actualPath = ActualPath,
     bool? dwgTitled = null)
   {
+    CivilExecution.UseNativeBackendOverrideForTests = true;
     Application.DocumentManager.BeforeCommandContextAsync = null;
     Application.DocumentManager.AfterCommandContextAsync = null;
     Application.DocumentManager.CommandContextScheduleException = null;
     Application.DocumentManager.CommandContextCompletionException = null;
     Application.DocumentManager.CommandContextScheduleOverrideAsync = null;
     Application.DocumentManager.CompleteDuringOnCompletedRegistration = false;
+    Application.DocumentManager.SuppressCompletionContinuation = false;
     CommandContextAdmission.StartDeadlineOverrideForTests = null;
     CommandContextAdmission.LateFaultObserverForTests = null;
+    CommandContextAdmission.NativeSampleOffsetsOverrideForTests = null;
     AssertCleanStatus();
     PluginRuntime.ResetIdempotencyForTests();
     var database = new Database

@@ -92,6 +92,8 @@ public static class CommandDispatcher
       operationStage = status.OperationStage,
       operationElapsedMs = status.OperationElapsedMs,
       stageElapsedMs = status.StageElapsedMs,
+      completionDiagnostics = status.CompletionDiagnostics,
+      lastCompletionDiagnostics = status.LastCompletionDiagnostics,
       queueDepth = status.QueueDepth,
       instanceId = status.InstanceId,
       processId = status.ProcessId,
@@ -99,6 +101,7 @@ public static class CommandDispatcher
       startedAtUtc = status.StartedAtUtc,
       mode = "code_execution",
       roslyn = true,
+      executionBackend = CivilExecution.UseNativeBackend ? "native" : "modal",
     });
   }
 

@@ -6,7 +6,8 @@ internal sealed record SerializedOperationStatus(
   int WaitingCount,
   bool IsActive,
   string? CurrentOperation,
-  OperationProgressSnapshot? Progress
+  OperationProgressSnapshot? Progress,
+  CommandContextDiagnosticSnapshot? LastCompletionDiagnostics
 );
 
 /// <summary>
@@ -21,6 +22,7 @@ internal sealed class SerializedOperationGate
   private bool _isActive;
   private string? _currentOperation;
   private OperationProgress? _progress;
+  private CommandContextDiagnosticSnapshot? _lastCompletionDiagnostics;
 
   public SerializedOperationStatus GetStatus()
   {
@@ -30,7 +32,8 @@ internal sealed class SerializedOperationGate
         _waitingCount,
         _isActive,
         _currentOperation,
-        _progress?.GetStatus()
+        _progress?.GetStatus(),
+        _lastCompletionDiagnostics
       );
     }
   }
@@ -98,6 +101,9 @@ internal sealed class SerializedOperationGate
   {
     lock (_sync)
     {
+      // Keep exactly one immutable, data-free receipt for fast control calls.
+      // Retaining a receipt never changes admission or semaphore ownership.
+      _lastCompletionDiagnostics = _progress?.GetStatus().CompletionDiagnostics;
       _isActive = false;
       _currentOperation = null;
       _progress = null;

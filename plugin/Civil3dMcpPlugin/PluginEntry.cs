@@ -16,6 +16,7 @@ public sealed class PluginEntry : IExtensionApplication
 {
   public void Initialize()
   {
+    if (!CivilExecution.UseNativeBackend) ModalCommandAdmission.Initialize();
     try
     {
       PluginRuntime.StartServer();
@@ -30,6 +31,7 @@ public sealed class PluginEntry : IExtensionApplication
   public void Terminate()
   {
     PluginRuntime.StopServer();
+    ModalCommandAdmission.Terminate();
   }
 
   /// <summary>Manually start the MCP TCP listener.</summary>
@@ -60,6 +62,11 @@ public sealed class PluginEntry : IExtensionApplication
       $"current: {status.CurrentOperation ?? "<none>"}"
     );
   }
+
+  // Internal native command, not an additional public MCP tool. Only an opaque
+  // one-use request token enters AutoCAD's command input.
+  [CommandMethod(ModalCommandAdmission.CommandName, CommandFlags.Modal | CommandFlags.NoHistory)]
+  public void RunModalCommand() => ModalCommandAdmission.RunCommand();
 
   private static void WriteMessage(string message)
   {

@@ -1,6 +1,18 @@
 namespace Autodesk.AutoCAD.EditorInput
 {
-  public sealed class Editor { }
+  public enum PromptStatus { OK, Cancel }
+  public sealed class PromptStringOptions(string message)
+  {
+    public string Message { get; } = message;
+    public bool AllowSpaces { get; set; }
+  }
+  public sealed record PromptResult(PromptStatus Status, string StringResult);
+  public sealed class Editor
+  {
+    public bool IsQuiescent { get; set; } = true;
+    public string CommandToken { get; set; } = string.Empty;
+    public PromptResult GetString(PromptStringOptions options) => new(PromptStatus.OK, CommandToken);
+  }
 }
 
 namespace Autodesk.AutoCAD.DatabaseServices
@@ -80,6 +92,7 @@ namespace Autodesk.AutoCAD.DatabaseServices
     public int ActiveCount => Volatile.Read(ref _activeCount);
     public int CommittedCount => Volatile.Read(ref _committedCount);
     public int StartedCount => Volatile.Read(ref _startedCount);
+    public Exception? CommitException { get; set; }
 
     public Transaction StartTransaction()
     {
@@ -105,6 +118,7 @@ namespace Autodesk.AutoCAD.DatabaseServices
     public void Commit()
     {
       if (_committed) return;
+      if (_owner!.CommitException != null) throw _owner.CommitException;
       _committed = true;
       _owner!.RecordCommit();
     }
@@ -129,6 +143,10 @@ namespace Autodesk.AutoCAD.ApplicationServices
   using Autodesk.AutoCAD.DatabaseServices;
   using Autodesk.AutoCAD.EditorInput;
 
+  public sealed class TestAutodeskNamespaceSynchronizationContext : SynchronizationContext { }
+
+  public sealed class CommandEventArgs(string name) : EventArgs { public string GlobalCommandName => name; }
+
   public sealed class Document
   {
     private int _activeLockCount;
@@ -144,6 +162,16 @@ namespace Autodesk.AutoCAD.ApplicationServices
     public string Name { get; set; } = "TestDrawing";
     public int ActiveLockCount => Volatile.Read(ref _activeLockCount);
     public int LockCount => Volatile.Read(ref _lockCount);
+    public event EventHandler<CommandEventArgs>? CommandEnded;
+    public event EventHandler<CommandEventArgs>? CommandCancelled;
+    public event EventHandler<CommandEventArgs>? CommandFailed;
+    public int CommandHandlerCount => (CommandEnded?.GetInvocationList().Length ?? 0)
+      + (CommandCancelled?.GetInvocationList().Length ?? 0) + (CommandFailed?.GetInvocationList().Length ?? 0);
+    public void SendStringToExecute(string command, bool activate, bool wrapUpInactiveDoc, bool echo)
+      => Editor.CommandToken = command.Trim().Split(' ')[1];
+    public void EndCommand(string name) => CommandEnded?.Invoke(this, new(name));
+    public void CancelCommand(string name) => CommandCancelled?.Invoke(this, new(name));
+    public void FailCommand(string name) => CommandFailed?.Invoke(this, new(name));
 
     public IDisposable LockDocument()
     {
@@ -180,6 +208,11 @@ namespace Autodesk.AutoCAD.ApplicationServices
     public Func<Func<object?, Task>, object?, Task>? CommandContextScheduleOverrideAsync { get; set; }
     public bool CompleteDuringOnCompletedRegistration { get; set; }
     /// <summary>
+    /// Host-free test hook that models a native awaiter which becomes complete
+    /// but never invokes the continuation registered by managed code.
+    /// </summary>
+    public bool SuppressCompletionContinuation { get; set; }
+    /// <summary>
     /// Host-free test hook invoked after command-context dispatch is requested
     /// but before AutoCAD enters the supplied callback.
     /// </summary>
@@ -192,12 +225,26 @@ namespace Autodesk.AutoCAD.ApplicationServices
     public Func<Task>? AfterCommandContextAsync { get; set; }
 
     public int CommandContextCallCount => Volatile.Read(ref _commandContextCallCount);
+    public Task? LastCallbackTask { get; private set; }
+    private ExecutionResult? LastExecutionResult { get; set; }
+
+    /// <summary>
+    /// Explicitly releases a continuation that was intentionally suppressed by
+    /// <see cref="SuppressCompletionContinuation"/>. Tests use this only to
+    /// clean up a deliberately pending operation.
+    /// </summary>
+    public bool DeliverSuppressedCompletionContinuation()
+      => LastExecutionResult?.DeliverCapturedContinuation() ?? false;
 
     public ExecutionResult ExecuteInCommandContextAsync(
       Func<object?, Task> callback,
       object? userData)
     {
-      var result = new ExecutionResult();
+      var result = new ExecutionResult
+      {
+        SuppressCompletionContinuation = SuppressCompletionContinuation,
+      };
+      LastExecutionResult = result;
       if (CompleteDuringOnCompletedRegistration)
       {
         result.CompleteDuringOnCompletedRegistration = () =>
@@ -243,7 +290,9 @@ namespace Autodesk.AutoCAD.ApplicationServices
       {
         await Task.Delay(CommandContextDelay);
       }
-      await callback(userData);
+      var callbackTask = callback(userData);
+      LastCallbackTask = callbackTask;
+      await callbackTask;
       var after = AfterCommandContextAsync;
       if (after != null)
       {
@@ -262,6 +311,7 @@ namespace Autodesk.AutoCAD.ApplicationServices
       private Exception? _exception;
 
       internal Action? CompleteDuringOnCompletedRegistration { get; set; }
+      internal bool SuppressCompletionContinuation { get; set; }
       public bool IsCompleted => Volatile.Read(ref _completed) != 0;
       public ExecutionResult GetAwaiter() => this;
 
@@ -277,6 +327,10 @@ namespace Autodesk.AutoCAD.ApplicationServices
       {
         if (_exception != null) throw _exception;
       }
+
+      [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+      public static void Continuation()
+        => throw new InvalidOperationException("firstchance-private-marker");
 
       internal void CompleteFromTask(Task task)
       {
@@ -313,13 +367,26 @@ namespace Autodesk.AutoCAD.ApplicationServices
       {
         _exception = exception;
         Volatile.Write(ref _completed, 1);
-        _continuation?.Invoke();
+        if (!SuppressCompletionContinuation)
+        {
+          DeliverCapturedContinuation();
+        }
+      }
+
+      internal bool DeliverCapturedContinuation()
+      {
+        var continuation = Interlocked.Exchange(ref _continuation, null);
+        if (continuation == null) return false;
+        continuation();
+        return true;
       }
     }
   }
 
   public static class Application
   {
+    public static event EventHandler? Idle;
+    public static void RaiseIdle() => Idle?.Invoke(null, EventArgs.Empty);
     public static DocumentCollection DocumentManager { get; } = new();
     public static int DwgTitled { get; set; } = 1;
 
@@ -327,6 +394,16 @@ namespace Autodesk.AutoCAD.ApplicationServices
       => name == "DWGTITLED"
         ? DwgTitled
         : throw new InvalidOperationException($"Unsupported test system variable: {name}");
+  }
+}
+
+namespace Autodesk.AutoCAD.Runtime
+{
+  public sealed class SynchronizationContext : global::System.Threading.SynchronizationContext
+  {
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    public override void Post(SendOrPostCallback d, object? state)
+      => Autodesk.AutoCAD.ApplicationServices.DocumentCollection.ExecutionResult.Continuation();
   }
 }
 

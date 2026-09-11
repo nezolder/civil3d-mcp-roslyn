@@ -12,8 +12,10 @@
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ApiLookup.cs" Link="ApiLookup.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\CommandDispatcher.cs" Link="CommandDispatcher.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\CommandContextAdmission.cs" Link="CommandContextAdmission.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ModalCommandAdmission.cs" Link="ModalCommandAdmission.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\DrawingGuard.cs" Link="DrawingGuard.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\EndpointRegistration.cs" Link="EndpointRegistration.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\FirstChanceCompletionObserver.cs" Link="FirstChanceCompletionObserver.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\InternalBenchmarkMeasurement.cs" Link="InternalBenchmarkMeasurement.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\IdempotencyRegistry.cs" Link="IdempotencyRegistry.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\OperationProgress.cs" Link="OperationProgress.cs" />

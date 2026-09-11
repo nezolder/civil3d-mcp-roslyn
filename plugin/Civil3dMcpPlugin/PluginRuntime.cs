@@ -16,7 +16,9 @@ public sealed record PluginStatus(
   DateTimeOffset StartedAtUtc,
   string? OperationStage = null,
   double? OperationElapsedMs = null,
-  double? StageElapsedMs = null
+  double? StageElapsedMs = null,
+  CommandContextDiagnosticSnapshot? CompletionDiagnostics = null,
+  CommandContextDiagnosticSnapshot? LastCompletionDiagnostics = null
 );
 
 /// <summary>
@@ -124,7 +126,9 @@ public static class PluginRuntime
       StartedAtUtc,
       operationStatus.Progress?.Stage,
       operationStatus.Progress?.OperationElapsedMs,
-      operationStatus.Progress?.StageElapsedMs
+      operationStatus.Progress?.StageElapsedMs,
+      operationStatus.Progress?.CompletionDiagnostics,
+      operationStatus.LastCompletionDiagnostics
     );
   }
 
