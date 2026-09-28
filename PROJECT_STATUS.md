@@ -38,6 +38,12 @@ The recipe and its tests are now published with their evidence limits. The plugi
 
 **Proven offline on the publication files:** TypeScript build, all 14 skill/API-discovery tests, metadata compilation of all 25 C# templates, 18 fixed-primitive and 11 surface-profile input cases, and the three-tool/23-skill MCP smoke check passed. These checks did not open or modify a Civil drawing. Dependency vulnerability auditing was disabled for the metadata test restore; this is not a dependency-security audit.
 
+## Offline C# code-body checks (2026-09-28)
+
+The skill test runner now accepts `--code` followed by an absolute `.cs` file path. It uses the local Civil 3D metadata and standard context parameters to report compilation diagnostics without executing the body. Invalid arguments, missing input files and missing Autodesk references return exit code 2; compilation errors return 1. The no-argument catalog checks remain available.
+
+**Proven offline on the publication files:** all 25 template compilations and 29 input cases still pass. Eight focused command-line checks passed: a valid Civil API body, an invalid API member, a throwing body that was not executed, relative paths, missing files, wrong extensions, unknown flags and missing reference assemblies. **Unverified:** successful metadata compilation does not prove live Civil behavior or runtime loading.
+
 ## Modal command completion
 
 - **Selection compatibility follow-up:** the internal modal command also carries `UsePickSet | Redraw`, preserving implied/PickFirst selection when entering the command and reading it. It remains modal and does not suppress Undo markers; no `NoUndoMarker` flag was added.

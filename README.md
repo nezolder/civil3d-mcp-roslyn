@@ -157,6 +157,16 @@ The phase 2A host-independent recorder, the phase 2A.1 opt-in internal live trac
 
 An operation whose Civil command has not started within 15 seconds returns `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` with `outcome: "not_started"` and `retryable: false`. A subsequently arriving abandoned token performs no drawing work. This deadline limits admission, not execution: started work retains the serialized gate until the selected backend's host completion, and an uncertain write must still be reconciled rather than repeated. Private health exposes the execution backend, fixed stage names and elapsed times without drawing content. The targeted completion checks do not establish that every possible hang is eliminated.
 
+### Compile a single C# code body offline
+
+The skill test runner can check an individual UTF-8 `.cs` code body against locally supplied Civil 3D 2025 assemblies:
+
+```powershell
+dotnet run --project tests/skills/Civil3dMcp.SkillTests.csproj --configuration Release -- --code (Resolve-Path ./probe.cs).Path
+```
+
+The file contains a method body, using the provided `Document`, `CivilDoc`, `Database`, `Transaction` and `Editor` parameters. This checks compilation diagnostics only: it does not execute the code or connect to Civil 3D. Exit codes are `0` for success, `1` for compilation errors, and `2` for invalid arguments, a missing input file or missing Autodesk references. Calling the runner without arguments still checks every skill template and its input tests. A successful compile is not live behavior evidence.
+
 ## Private TCP framing (phase 2C.1)
 
 Each localhost TCP connection carries one UTF-8 JSON-RPC request and one response. Each JSON body is followed by LF and is limited to 8 MiB, measured as UTF-8 bytes without the LF. The Node client still accepts the previous plugin's unframed response when that complete JSON body is followed by an orderly connection close. Oversized requests are rejected before they are written; oversized or malformed responses and interrupted connections produce non-retryable structured transport errors. If execution completed but the plugin could not return an oversized result, the reported outcome is `unknown`.

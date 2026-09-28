@@ -3,6 +3,27 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
 var repositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory);
+string? singleCodePath = null;
+if (args.Length > 0)
+{
+  if (args.Length != 2 || !string.Equals(args[0], "--code", StringComparison.Ordinal)
+      || !Path.IsPathFullyQualified(args[1])
+      || !string.Equals(Path.GetExtension(args[1]), ".cs", StringComparison.OrdinalIgnoreCase))
+  {
+    Console.Error.WriteLine("Usage: Civil3dMcp.SkillTests [--code <absolute .cs body file>]");
+    Environment.ExitCode = 2;
+    return;
+  }
+
+  singleCodePath = Path.GetFullPath(args[1]);
+  if (!File.Exists(singleCodePath))
+  {
+    Console.Error.WriteLine($"C# code file was not found: {singleCodePath}");
+    Environment.ExitCode = 2;
+    return;
+  }
+}
+
 var civilReferenceDirectory = Path.Combine(repositoryRoot, "C_References");
 var civilReferencePaths = new[]
 {
@@ -13,9 +34,14 @@ var civilReferencePaths = new[]
   "AeccDbMgd.dll",
 }.Select(name => Path.Combine(civilReferenceDirectory, name)).ToArray();
 
-if (civilReferencePaths.Any(path => !File.Exists(path)))
+var missingCivilReferences = civilReferencePaths.Where(path => !File.Exists(path)).ToArray();
+if (missingCivilReferences.Length > 0)
 {
-  Console.WriteLine("Civil 3D skill template compilation skipped: local C_References DLLs are incomplete.");
+  Console.Error.WriteLine(
+    "Civil 3D metadata compilation cannot run because references are missing: " +
+    string.Join(", ", missingCivilReferences.Select(Path.GetFileName))
+  );
+  Environment.ExitCode = 2;
   return;
 }
 
@@ -27,6 +53,63 @@ var references = trustedPlatformAssemblies
   .Distinct(StringComparer.OrdinalIgnoreCase)
   .Select(path => MetadataReference.CreateFromFile(path))
   .ToArray();
+
+if (singleCodePath is not null)
+{
+  var code = File.ReadAllText(singleCodePath);
+  var source = $$"""
+    #nullable disable
+    using System;
+    using System.Linq;
+    using System.Collections.Generic;
+    using System.Text;
+    using Autodesk.AutoCAD.ApplicationServices;
+    using Autodesk.AutoCAD.DatabaseServices;
+    using Autodesk.AutoCAD.EditorInput;
+    using Autodesk.AutoCAD.Geometry;
+    using Autodesk.AutoCAD.Runtime;
+    using Autodesk.Civil;
+    using Autodesk.Civil.ApplicationServices;
+    using Autodesk.Civil.DatabaseServices;
+    using Autodesk.Civil.Settings;
+
+    public static class SingleCivilCodeProbe
+    {
+      public static object Run(
+        Document Document,
+        CivilDocument CivilDoc,
+        Database Database,
+        Transaction Transaction,
+        Editor Editor)
+      {
+    {{code}}
+      }
+    }
+    """;
+
+  var singleCompilation = CSharpCompilation.Create(
+    "Civil3dSingleCodeProbe",
+    new[] { CSharpSyntaxTree.ParseText(
+      source,
+      new CSharpParseOptions(LanguageVersion.Latest),
+      singleCodePath
+    ) },
+    references,
+    new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
+  );
+  var singleErrors = singleCompilation.GetDiagnostics()
+    .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+    .ToArray();
+  if (singleErrors.Length > 0)
+  {
+    Console.Error.WriteLine(string.Join(Environment.NewLine, singleErrors.Select(error => error.ToString())));
+    Environment.ExitCode = 1;
+    return;
+  }
+
+  Console.WriteLine($"Civil 3D single C# code-body compilation passed: {singleCodePath}");
+  return;
+}
 
 var codeBlockPattern = new Regex(
   "```csharp\\s*\\r?\\n([\\s\\S]*?)\\r?\\n```",
