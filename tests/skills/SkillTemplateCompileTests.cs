@@ -113,6 +113,8 @@ try
 {
   FixedPrimitiveInputTests.Run(repositoryRoot,
     trustedPlatformAssemblies.Select(path => MetadataReference.CreateFromFile(path)));
+  SurfaceProfileInputTests.Run(repositoryRoot,
+    trustedPlatformAssemblies.Select(path => MetadataReference.CreateFromFile(path)));
 }
 catch (Exception error)
 {

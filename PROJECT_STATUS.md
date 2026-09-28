@@ -1,8 +1,8 @@
 # Published development status
 
-Updated: 2026-09-11
+Updated: 2026-09-28
 
-This repository contains the complete current accepted source snapshot, not just a corrective patch on the initial release. Unvalidated local experiments, client data, live-run artifacts, proprietary assemblies and private development history are excluded.
+This repository contains the accepted runtime and skill snapshot plus an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
 
 ## Boundaries and evidence
 
@@ -25,11 +25,18 @@ This repository contains the complete current accepted source snapshot, not just
 | Alignment from an identified polyline | **Proven live**, including saved-file reopen. The source is preserved; this narrow recipe adds no automatic curves or standards decisions. |
 | Connected alignment geometry audit | **Proven offline and live** on straight and compound line/arc/clothoid geometry. Standards compliance is explicitly not evaluated. |
 | Fixed-primitive alignment replacement | **Proven offline and in one isolated live case**, including save/reopen of an eight-primitive reverse-clothoid chain. The recipe requires an audited independent, siteless, zero-station centreline without station equations, superelevation, criteria/check state, profiles or corridor dependencies. |
+| Experimental surface profile and ordinary profile view | **Proven offline; live authoring Unverified.** Creates one full-length dynamic profile from an explicitly identified local alignment and TIN surface, plus one view using existing named styles. Rejects reference/volume sources, duplicate names and invalid inputs. Finite endpoint elevations do not prove that the surface has no interior gaps. |
 | Post-commit saving | **Proven live** with `saveDrawing: true`, `DBMOD=0` and independent readback. Saving occurs after transaction/lock disposal; scripts must not call `Database.SaveAs` or queue `QSAVE`. |
 
-The accepted catalog contains **22 skills** and **24 C# templates**, behind the same three public tools. Build instructions and test commands remain in [README.md](README.md) and `package.json`; Autodesk reference assemblies must be supplied locally and are not distributed.
+The published catalog contains **23 skills** and **25 C# templates**, behind the same three public tools. The surface-profile recipe is experimental and has no live authoring evidence. Build instructions and test commands remain in [README.md](README.md) and `package.json`; Autodesk reference assemblies must be supplied locally and are not distributed.
 
-**Proven offline for the previous accepted snapshot (2026-09-03):** TypeScript typecheck/build, plugin Release build, benchmark/error/discovery/routing tests, plugin core and serialization tests, transport tests, the three-tool MCP smoke check, all 24 template metadata compilations and 18 fixed-primitive input checks passed. The catalog and Node implementation are unchanged in this update. NuGet vulnerability-feed retrieval produced an environment warning; these checks are not a dependency-security audit.
+**Proven offline for the previous accepted snapshot (2026-09-03):** TypeScript typecheck/build, plugin Release build, benchmark/error/discovery/routing tests, plugin core and serialization tests, transport tests, the three-tool MCP smoke check, all 24 template metadata compilations and 18 fixed-primitive input checks passed. NuGet vulnerability-feed retrieval produced an environment warning; these checks are not a dependency-security audit.
+
+## Experimental surface-profile recipe (2026-09-28)
+
+The recipe and its tests are now published with their evidence limits. The plugin runtime and Node implementation are unchanged. Use the existing drawing guard, outer transaction and optional `saveDrawing` path; the recipe does not save or commit independently. A fresh targeted Civil 3D 2025 authoring/save/readback test is still required before claiming live validation.
+
+**Proven offline on the publication files:** TypeScript build, all 14 skill/API-discovery tests, metadata compilation of all 25 C# templates, 18 fixed-primitive and 11 surface-profile input cases, and the three-tool/23-skill MCP smoke check passed. These checks did not open or modify a Civil drawing. Dependency vulnerability auditing was disabled for the metadata test restore; this is not a dependency-security audit.
 
 ## Modal command completion
 
@@ -55,6 +62,6 @@ The publication build is checked offline; it is not a separate live installation
 
 ## Not yet included
 
-Dynamic surface-profile/profile-view authoring remains local development work. Its offline checks passed, but its recipe has not been run live, so it is excluded from this accepted snapshot. Designed grades, general corridor authoring, automatic standards compliance and later Civil version support are not claimed.
+Designed grades, general corridor authoring, automatic standards compliance and later Civil version support are not claimed. The included experimental surface-profile/profile-view recipe does not establish these capabilities or live authoring validation.
 
 Further development should address an observed work problem or explicitly approved validation. Do not introduce a general refactor or new public tool without a concrete demonstrated need.

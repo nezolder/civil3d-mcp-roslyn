@@ -60,7 +60,7 @@ Result: [{ "Name": "EG", "Layer": "C-TOPO-EG" }, ...]
 
 Skills are documented C# code templates in `skills/`:
 
-The current accepted catalog contains 22 skills. It includes bounded road-model inventories, template-style readiness, controlled alignment creation from an identified polyline, connected curve/spiral auditing, and a narrowly guarded fixed-primitive replacement recipe. Dynamic surface-profile/view authoring is still under development and is not included in this published catalog. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the tested scope and remaining limitations.
+The published catalog contains 23 skills. It includes bounded road-model inventories, template-style readiness, controlled alignment creation from an identified polyline, connected curve/spiral auditing, and a narrowly guarded fixed-primitive replacement recipe. The experimental `create_surface_profile_view` recipe adds one full-length dynamic TIN surface profile and an ordinary profile view from explicitly identified local sources and existing named styles. Its input validation and Civil 3D 2025 metadata compilation are **Proven offline**; live authoring, saving and rollback remain **Unverified**. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the tested scope and remaining limitations.
 
 ```
 skills/

@@ -346,7 +346,7 @@ test("known Civil 3D 2025 skill regressions stay corrected", async () => {
 test("phase 3A.1 read-only inventory skills stay discoverable and bounded", async () => {
   await withSkillsClient(async (client) => {
     const inventory = await callSkills(client, { action: "list", limit: 50 });
-    assert.equal(inventory.total, 22);
+    assert.equal(inventory.total, 23);
 
     const expectedParameters = {
       selected_objects_summary: ["limit"],
@@ -398,6 +398,33 @@ test("phase 3A.1 read-only inventory skills stay discoverable and bounded", asyn
     assert.match(drawingInfo.content, /hasUnsavedChanges = dbmod != 0/);
     assert.match(drawingInfo.content, /isSavedAndClean = isNamed && dbmod == 0/);
 
+  });
+});
+
+test("surface-profile creation is discoverable with explicit source and presentation choices", async () => {
+  await withSkillsClient(async (client) => {
+    const result = await callSkills(client, {
+      action: "search", category: "profiles", query: "dynamic", limit: 50,
+    });
+    assert.ok(result.results.some(skill => skill.name === "create_surface_profile_view"));
+    const skill = await callSkills(client, {
+      action: "get", skillName: "create_surface_profile_view",
+    });
+    assert.equal(skill.category, "profiles");
+    assert.equal(skill.requires_write, true);
+    assert.deepEqual(skill.parameters.map(({ name, type, required }) => ({ name, type, required })), [
+      { name: "alignmentHandle", type: "string", required: true },
+      { name: "surfaceHandle", type: "string", required: true },
+      { name: "profileName", type: "string", required: true },
+      { name: "profileViewName", type: "string", required: true },
+      { name: "insertionX", type: "number", required: true },
+      { name: "insertionY", type: "number", required: true },
+      { name: "profileStyleName", type: "string", required: false },
+      { name: "profileViewStyleName", type: "string", required: false },
+      { name: "profileLabelSetName", type: "string", required: true },
+      { name: "bandSetStyleName", type: "string", required: true },
+    ]);
+    assert.doesNotMatch(skill.content, /Database\.SaveAs\s*\(|SendStringToExecute\s*\(|Transaction\.Commit\s*\(/);
   });
 });
 
