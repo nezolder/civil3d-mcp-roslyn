@@ -165,16 +165,29 @@ function getSkills(category?: string, query?: string): SkillFile[] {
   }
 
   if (query) {
-    const q = query.toLowerCase();
-    skills = skills.filter(
-      (s) =>
-        s.metadata.name.toLowerCase().includes(q) ||
-        s.metadata.description.toLowerCase().includes(q) ||
-        s.metadata.category.toLowerCase().includes(q)
-    );
+    // Every whitespace-separated word must occur somewhere in the skill's
+    // metadata. Underscores count as spaces so "surface volume" finds
+    // surface_volume, and word order does not matter.
+    const tokens = normalizeSearchText(query).split(" ").filter(Boolean);
+    if (tokens.length === 0) return [];
+    skills = skills.filter((s) => {
+      const haystack = normalizeSearchText(
+        [
+          s.metadata.name,
+          s.metadata.category,
+          s.metadata.description,
+          ...s.metadata.parameters.map((p) => `${p.name} ${p.description ?? ""}`),
+        ].join(" ")
+      );
+      return tokens.every((token) => haystack.includes(token));
+    });
   }
 
   return skills;
+}
+
+function normalizeSearchText(value: string): string {
+  return value.toLowerCase().replace(/[_\s]+/g, " ").trim();
 }
 
 function sortSkills(skills: SkillFile[]): SkillFile[] {
@@ -333,10 +346,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
                       returned: summary.length,
                       truncated: page.truncated,
                       nextCursor: page.nextCursor,
-                    },
-                    null,
-                    2
-                  ),
+                    }),
                 },
               ],
             };
@@ -375,10 +385,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
                       returned: results.length,
                       truncated: page.truncated,
                       nextCursor: page.nextCursor,
-                    },
-                    null,
-                    2
-                  ),
+                    }),
                 },
               ],
             };
@@ -418,10 +425,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
                     {
                       ...skill.metadata,
                       content: skill.content,
-                    },
-                    null,
-                    2
-                  ),
+                    }),
                 },
               ],
             };
@@ -451,7 +455,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
               args.instanceId
             );
             return {
-              content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+              content: [{ type: "text" as const, text: JSON.stringify(result) }],
             };
           }
         }

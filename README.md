@@ -65,6 +65,8 @@ Skills are documented C# code templates in `skills/`:
 
 The catalog contains **29 skills**. Six focused engineering recipes cover design profiles from explicit PVIs, individual section views, existing native material quantities, sampled TIN elevation comparison, data-reference state and corridor target audits. Use `civil3d_skills` to search/get a recipe, bind project-approved inputs and run it through the existing query/execute tools. See [the recipe guide](docs/ENGINEERING_SKILLS.md) for inputs, limits and upstream attribution.
 
+Skill search matches every supplied word across names, categories, descriptions and parameter metadata, in any order. Underscores and whitespace are equivalent: `surface volume` and `volume surface` both find `surface_volume`. A query with no normalized word returns no matches. Successful tool results use compact JSON with the same fields and values.
+
 **Proven:** offline compilation for all six and scoped Civil 3D 2025 synthetic-fixture checks for profiles, section views, surface comparison and native quantities. Reference reporting was checked only on local/empty objects, and target auditing on an empty corridor. Populated DREF/target cases, populated section-view bands, section-view saved-file reopen/print quality and general model/standards correctness remain **Unverified**. The separate `create_surface_profile_view` recipe is proven offline; live authoring and saving remain **Unverified**. Full evidence boundaries are in the guide and [PROJECT_STATUS.md](PROJECT_STATUS.md).
 
 ```
@@ -134,7 +136,7 @@ C3DMCPSTATUS → verify running
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CIVIL3D_HOST` | `localhost` | Plugin host |
+| `CIVIL3D_HOST` | `127.0.0.1` | Plugin host. The plugin listens on IPv4 loopback only. |
 | `CIVIL3D_PORT` | unset | Optional fixed-port override. When omitted, local instance discovery is active and the plugin prefers port 8080. |
 | `CIVIL3D_CONNECT_TIMEOUT` | `5000` | TCP connection timeout (ms) |
 | `CIVIL3D_DISCOVERY_TIMEOUT` | `5000` | Timeout for private health and drawing-identity probes (ms) |
@@ -142,6 +144,8 @@ C3DMCPSTATUS → verify running
 | `CIVIL3D_MCP_EXECUTION_BACKEND` | `modal` | Plugin process: `native` selects the legacy route for a controlled comparison in a fresh Civil session. |
 | `CIVIL3D_SAVE_TIMEOUT` | `600000` | Timeout for execute requests with `saveDrawing: true` (ms) |
 | `LOG_LEVEL` | `info` | Log level |
+
+Command/save timeouts must resolve to a positive integer of at most `2147483647` milliseconds; invalid or empty settings use the listed defaults. Log levels are `debug`, `info`, `warn` and `error`, ignoring case and surrounding whitespace; unrecognized values use `info`. Invalid timeout warnings omit the supplied value.
 
 Civil requests run as correlated modal commands. The existing serialization gate stays held until the script has disposed its resources and that command ends; completing the script body alone does not release it. A request that has not started within 15 seconds is abandoned, and its late token cannot execute another request. The legacy backend is never selected automatically after a timeout.
 

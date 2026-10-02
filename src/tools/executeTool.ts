@@ -58,7 +58,8 @@ export function registerExecuteTool(server: McpServer) {
     "civil3d_execute",
     "Execute C# code in Civil 3D with write access. The code runs inside a committed transaction. " +
       "Available globals: Document, CivilDoc, Database, Transaction, Editor. " +
-      "All Civil 3D namespaces are auto-imported. Return a value to get results back as JSON. " +
+      "Common Civil 3D and AutoCAD namespaces are auto-imported. Return a value to get results back as JSON. " +
+      "The script rules of civil3d_query apply. " +
       "Use this for operations that MODIFY the drawing (create, edit, delete objects). " +
       "expectedDrawing must come from a prior read-only identity query. " +
       "To persist the drawing file, set saveDrawing=true; do not call Database.SaveAs or queue QSAVE from the C# code.",
@@ -128,7 +129,7 @@ export function registerExecuteTool(server: McpServer) {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result) ?? "null",
             },
           ],
         };

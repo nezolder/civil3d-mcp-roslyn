@@ -33,6 +33,16 @@ The published catalog contains **29 skills** and **32 C# templates**, behind the
 
 **Proven offline for the previous accepted snapshot (2026-09-03):** TypeScript typecheck/build, plugin Release build, benchmark/error/discovery/routing tests, plugin core and serialization tests, transport tests, the three-tool MCP smoke check, all 24 template metadata compilations and 18 fixed-primitive input checks passed. NuGet vulnerability-feed retrieval produced an environment warning; these checks are not a dependency-security audit.
 
+## Node search, output and configuration correction (2026-10-02)
+
+The Node server now matches all normalized search words across skill and parameter metadata, returns compact success JSON, defaults to the plugin's IPv4 loopback listener and falls back safely for invalid command/save timeouts or log levels. Public tool descriptions clarify synchronous Civil scripts and the bounded return-value contract. The unused direct WebSocket dependency was removed, and six transitive packages were updated within the dependency lockfile.
+
+The submitted patch was reviewed against the current public source. The review corrected inherited-property names being accepted as log levels, normalized-empty searches returning the whole catalog, and incomplete namespace/result guidance. Timeout, logging, parameter-search, empty-search and compact query/execute/save regressions are covered by focused tests.
+
+**Proven offline on the publication files:** TypeScript build, all 88 Node tests (benchmark, errors, routing, transport, drawing guards and skill discovery), and the three-tool/29-skill MCP smoke check passed. A clean lockfile installation with lifecycle scripts disabled succeeded; npm's dependency audit reported zero known vulnerabilities at the time of the check. This audit is limited to the package advisory data.
+
+**Unverified:** general runtime latency/token savings and fresh live Civil 3D behavior after this Node update. The integration tests use an isolated local TCP mock; they do not load or modify a Civil drawing. The Civil plugin and its C# execution/save/retry contracts are unchanged. Existing recipe evidence below retains its original scope.
+
 ## Reusable engineering recipes and publication checks (2026-10-02)
 
 Six focused recipes use the existing skill catalog and dynamic C# execution path. The plugin runtime and Node implementation are unchanged. Profiles require explicit approved PVI values; section views require an existing sampled group and named styles. The four read recipes report existing native quantities, sampled elevations, reference state or target assignments without repairing the model.

@@ -28,6 +28,19 @@ import {
 const log = createLogger("QueryTool");
 
 /**
+ * Guidance for the synchronous Civil command context and bounded result
+ * serializer. Stated once here; civil3d_execute refers back to it.
+ */
+export const SCRIPT_RULES =
+  "Script rules: keep Civil API code synchronous; do not await inside the command context. " +
+  "Return only primitives, strings, Guid, anonymous objects, arrays/List (call .ToList() on LINQ), " +
+  "Dictionary<string,...>, ObjectId, Handle, Point2d/3d, Vector2d/3d; enums return as numbers, so use .ToString() for names. " +
+  "Not returnable: DBObject instances, DateTime, tuples, custom classes, NaN/Infinity; " +
+  "at most 1000 items per collection, depth 8 and 10000 total result nodes. " +
+  "Other namespaces (e.g. Autodesk.Civil.DatabaseServices.Styles, Autodesk.AutoCAD.Colors, System.IO) need a using line or a full name. " +
+  "Surface, Entity and Exception are ambiguous between AutoCAD and Civil/System: write the full name.";
+
+/**
  * civil3d_query — Executes C# code in Civil 3D in READ-ONLY mode.
  * The transaction is NOT committed — no changes are persisted.
  *
@@ -39,10 +52,11 @@ export function registerQueryTool(server: McpServer) {
     "civil3d_query",
     "Execute C# code in Civil 3D in READ-ONLY mode (no changes saved). " +
       "Available globals: Document, CivilDoc, Database, Transaction, Editor. " +
-      "All Civil 3D namespaces are auto-imported. Return a value to get results as JSON. " +
+      "Common Civil 3D and AutoCAD namespaces are auto-imported. Return a value to get results as JSON. " +
       "Use this for querying data: listing objects, getting properties, analyzing surfaces, etc. " +
       "Omit expectedDrawing only to bootstrap Database.Filename and Database.FingerprintGuid; " +
-      "otherwise supply it to guard the active drawing.",
+      "otherwise supply it to guard the active drawing. " +
+      SCRIPT_RULES,
     {
       code: z.string().describe(
         "C# code to query data. Has access to Document, CivilDoc, Database, Transaction, Editor. " +
@@ -96,7 +110,7 @@ export function registerQueryTool(server: McpServer) {
           content: [
             {
               type: "text" as const,
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result) ?? "null",
             },
           ],
         };
