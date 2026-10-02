@@ -12,7 +12,10 @@ const LOG_LEVELS: Record<LogLevel, number> = {
   error: 3,
 };
 
-const CURRENT_LEVEL: LogLevel = (process.env.LOG_LEVEL as LogLevel) ?? "info";
+const REQUESTED_LEVEL = (process.env.LOG_LEVEL ?? "").trim().toLowerCase();
+// An unknown value used to silence every log line; fall back to "info".
+const CURRENT_LEVEL: LogLevel =
+  Object.hasOwn(LOG_LEVELS, REQUESTED_LEVEL) ? (REQUESTED_LEVEL as LogLevel) : "info";
 
 function shouldLog(level: LogLevel): boolean {
   return LOG_LEVELS[level] >= LOG_LEVELS[CURRENT_LEVEL];

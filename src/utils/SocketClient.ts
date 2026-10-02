@@ -16,9 +16,24 @@ import {
 } from "../errors/structuredError.js";
 
 const log = createLogger("SocketClient");
-const COMMAND_TIMEOUT_MS = parseInt(process.env.CIVIL3D_COMMAND_TIMEOUT ?? "120000", 10);
+const COMMAND_TIMEOUT_MS = readTimeoutEnvironment("CIVIL3D_COMMAND_TIMEOUT", 120_000);
 const JSON_FRAME_DELIMITER = 0x0a;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+
+/**
+ * An unparsable timeout would become NaN, which makes setTimeout fire at once
+ * and every command appear to time out. Fall back to the default instead.
+ */
+export function readTimeoutEnvironment(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw.trim());
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 2_147_483_647) {
+    log.warn("Ignoring invalid timeout setting", { name, fallback });
+    return fallback;
+  }
+  return parsed;
+}
 
 export const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
 

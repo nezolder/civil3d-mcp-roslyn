@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { performance } from "node:perf_hooks";
 import { z } from "zod";
 import { withApplicationConnection } from "../utils/ConnectionManager.js";
+import { readTimeoutEnvironment } from "../utils/SocketClient.js";
 import { createLogger } from "../utils/logger.js";
 import {
   Civil3dMcpError,
@@ -26,10 +27,7 @@ import {
 } from "../utils/operationAudit.js";
 
 const log = createLogger("ExecuteTool");
-const SAVE_COMMAND_TIMEOUT_MS = parseInt(
-  process.env.CIVIL3D_SAVE_TIMEOUT ?? "600000",
-  10
-);
+const SAVE_COMMAND_TIMEOUT_MS = readTimeoutEnvironment("CIVIL3D_SAVE_TIMEOUT", 600_000);
 const idempotencyKeySchema = z
   .string()
   .min(1)

@@ -7,7 +7,9 @@ import { Civil3dMcpError } from "../errors/structuredError.js";
 
 const log = createLogger("ConnectionManager");
 
-const DEFAULT_HOST = "localhost";
+// The plugin listens on IPv4 loopback only. "localhost" can resolve to ::1
+// first on Windows and delay every connection before falling back.
+const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8080;
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 5_000;
