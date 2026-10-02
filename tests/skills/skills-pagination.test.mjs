@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -194,8 +195,10 @@ test("category and search filters are applied before pagination", async () => {
       category: "surfaces",
       query: "elevation",
     });
-    assert.equal(intersection.total, 1);
-    assert.equal(intersection.results[0].name, "surface_elevation");
+    assert.equal(intersection.total, 2);
+    assert.deepEqual(intersection.results.map(result => result.name), [
+      "compare_surface_elevations", "surface_elevation",
+    ]);
 
     const emptyIntersection = await callSkills(client, {
       action: "search",
@@ -346,7 +349,9 @@ test("known Civil 3D 2025 skill regressions stay corrected", async () => {
 test("phase 3A.1 read-only inventory skills stay discoverable and bounded", async () => {
   await withSkillsClient(async (client) => {
     const inventory = await callSkills(client, { action: "list", limit: 50 });
-    assert.equal(inventory.total, 23);
+    const recipeFileCount = fs.readdirSync(new URL("../../skills/", import.meta.url), { recursive: true })
+      .filter(path => path.endsWith(".skill.md")).length;
+    assert.equal(inventory.total, recipeFileCount);
 
     const expectedParameters = {
       selected_objects_summary: ["limit"],
