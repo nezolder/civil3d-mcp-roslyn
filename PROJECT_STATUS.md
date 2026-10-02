@@ -1,8 +1,8 @@
 # Published development status
 
-Updated: 2026-09-28
+Updated: 2026-10-02
 
-This repository contains the accepted runtime and skill snapshot plus an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
+This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
 
 ## Boundaries and evidence
 
@@ -25,12 +25,25 @@ This repository contains the accepted runtime and skill snapshot plus an explici
 | Alignment from an identified polyline | **Proven live**, including saved-file reopen. The source is preserved; this narrow recipe adds no automatic curves or standards decisions. |
 | Connected alignment geometry audit | **Proven offline and live** on straight and compound line/arc/clothoid geometry. Standards compliance is explicitly not evaluated. |
 | Fixed-primitive alignment replacement | **Proven offline and in one isolated live case**, including save/reopen of an eight-primitive reverse-clothoid chain. The recipe requires an audited independent, siteless, zero-station centreline without station equations, superelevation, criteria/check state, profiles or corridor dependencies. |
+| Six reusable engineering recipes | Explicit-PVI design profiles, individual section views, native material quantities, sampled TIN differences, data-reference state and corridor targets. **Proven offline**, with the scoped live evidence and remaining limits below. See the [recipe guide](docs/ENGINEERING_SKILLS.md). |
 | Experimental surface profile and ordinary profile view | **Proven offline; live authoring Unverified.** Creates one full-length dynamic profile from an explicitly identified local alignment and TIN surface, plus one view using existing named styles. Rejects reference/volume sources, duplicate names and invalid inputs. Finite endpoint elevations do not prove that the surface has no interior gaps. |
 | Post-commit saving | **Proven live** with `saveDrawing: true`, `DBMOD=0` and independent readback. Saving occurs after transaction/lock disposal; scripts must not call `Database.SaveAs` or queue `QSAVE`. |
 
-The published catalog contains **23 skills** and **25 C# templates**, behind the same three public tools. The surface-profile recipe is experimental and has no live authoring evidence. Build instructions and test commands remain in [README.md](README.md) and `package.json`; Autodesk reference assemblies must be supplied locally and are not distributed.
+The published catalog contains **29 skills** and **32 C# templates**, behind the same three public tools. The surface-profile recipe is experimental and has no live authoring evidence. Build instructions and test commands remain in [README.md](README.md) and `package.json`; Autodesk reference assemblies must be supplied locally and are not distributed.
 
 **Proven offline for the previous accepted snapshot (2026-09-03):** TypeScript typecheck/build, plugin Release build, benchmark/error/discovery/routing tests, plugin core and serialization tests, transport tests, the three-tool MCP smoke check, all 24 template metadata compilations and 18 fixed-primitive input checks passed. NuGet vulnerability-feed retrieval produced an environment warning; these checks are not a dependency-security audit.
+
+## Reusable engineering recipes and publication checks (2026-10-02)
+
+Six focused recipes use the existing skill catalog and dynamic C# execution path. The plugin runtime and Node implementation are unchanged. Profiles require explicit approved PVI values; section views require an existing sampled group and named styles. The four read recipes report existing native quantities, sampled elevations, reference state or target assignments without repairing the model.
+
+**Proven offline on the publication files:** TypeScript build, all 15 skill/API-discovery tests, metadata compilation of all 32 C# templates, 18 fixed-primitive, 11 surface-profile and 54 engineering input/math cases, and the three-tool/29-skill MCP smoke check passed. These checks did not open or modify a Civil drawing.
+
+**Proven in retained, scoped Civil 3D 2025 evidence (2026-10-01):** a three-PVI design profile with one symmetric parabola survived authoring/save/independent reopen. Three section views passed complete independent saved-state readback, empty-band checks, requested bounds and grid-overlap checks. A known +1 TIN comparison and an out-of-surface point exercised all-point statistics and coverage; an existing three-section native material list returned the independently expected fill total. All four targeted read recipes retained `DBMOD=0`. Reference reporting was checked on local objects, and the corridor audit on an empty corridor with one baseline.
+
+**Unverified:** data-bearing DREF source states, populated corridor target warnings, broader profile combinations, populated section-view bands, section-view saved-file reopen/print quality, model freshness and road-standard compliance. Saved-state readback is not a section-view reopen. Post-creation native dirty flags were reconciled with a geometry-neutral host-managed save and independent `DBMOD=0` checks; successful creation was not repeated and the runtime save/retry contract did not change.
+
+Detail caps do not establish complete coverage. Surface statistics include all supplied valid points; reference and target scans report incomplete coverage explicitly. Native material rows represent intervals ending at their stations, so selected rows do not prove an exactly clipped volume at arbitrary range boundaries. Inputs, limits and upstream idea/license attribution are recorded in [docs/ENGINEERING_SKILLS.md](docs/ENGINEERING_SKILLS.md).
 
 ## Experimental surface-profile recipe (2026-09-28)
 
@@ -68,6 +81,6 @@ The publication build is checked offline; it is not a separate live installation
 
 ## Not yet included
 
-Designed grades, general corridor authoring, automatic standards compliance and later Civil version support are not claimed. The included experimental surface-profile/profile-view recipe does not establish these capabilities or live authoring validation.
+Automatic grade design, general corridor authoring, automatic standards compliance and later Civil version support are not claimed. The explicit-PVI recipe creates a profile from supplied values; it does not choose design criteria. The experimental surface-profile/profile-view recipe still has no live authoring validation.
 
 Further development should address an observed work problem or explicitly approved validation. Do not introduce a general refactor or new public tool without a concrete demonstrated need.

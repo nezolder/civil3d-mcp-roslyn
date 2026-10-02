@@ -13,16 +13,19 @@ This independent project is not affiliated with or endorsed by Autodesk. Autodes
 ## Architecture
 
 ```
-┌─────────────────┐     stdio      ┌──────────────────┐     TCP/JSON-RPC    ┌──────────────────┐
-│   AI Assistant   │ ◄────────────► │  MCP Server (TS) │ ◄──────────────────► │  Civil 3D Plugin │
-│ (Codex, clients) │               │   3 meta-tools    │  discovered locally │  Roslyn Engine   │
-└─────────────────┘               └──────────────────┘                      └──────────────────┘
-                                         │                                         │
-                                    Skills Library                           C# Code Execution
-                                   (.skill.md files)                      (full Civil 3D API)
++-------------------------+--------+-------------------------+--------+-------------------------+
+| AI Assistant            | <----> | MCP server              | <----> | Civil 3D plugin         |
+| (Codex, clients)        | stdio  | 3 public MCP tools      | TCP    | Dynamic Roslyn engine   |
++-------------------------+--------+-------------------------+--------+-------------------------+
+                                                |                                  |
+                                                v                                  v
+                                   +-------------------------+--------+-------------------------+
+                                   | Skills Library          |--------| C# execution            |
+                                   | (*.skill.md)            |--------| Civil 3D API            |
+                                   +-------------------------+--------+-------------------------+
 ```
 
-## 3 Meta-Tools
+## Exactly 3 Public MCP Tools
 
 | Tool | Purpose | Safety |
 |------|---------|--------|
@@ -60,16 +63,19 @@ Result: [{ "Name": "EG", "Layer": "C-TOPO-EG" }, ...]
 
 Skills are documented C# code templates in `skills/`:
 
-The published catalog contains 23 skills. It includes bounded road-model inventories, template-style readiness, controlled alignment creation from an identified polyline, connected curve/spiral auditing, and a narrowly guarded fixed-primitive replacement recipe. The experimental `create_surface_profile_view` recipe adds one full-length dynamic TIN surface profile and an ordinary profile view from explicitly identified local sources and existing named styles. Its input validation and Civil 3D 2025 metadata compilation are **Proven offline**; live authoring, saving and rollback remain **Unverified**. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the tested scope and remaining limitations.
+The catalog contains **29 skills**. Six focused engineering recipes cover design profiles from explicit PVIs, individual section views, existing native material quantities, sampled TIN elevation comparison, data-reference state and corridor target audits. Use `civil3d_skills` to search/get a recipe, bind project-approved inputs and run it through the existing query/execute tools. See [the recipe guide](docs/ENGINEERING_SKILLS.md) for inputs, limits and upstream attribution.
+
+**Proven:** offline compilation for all six and scoped Civil 3D 2025 synthetic-fixture checks for profiles, section views, surface comparison and native quantities. Reference reporting was checked only on local/empty objects, and target auditing on an empty corridor. Populated DREF/target cases, populated section-view bands, section-view saved-file reopen/print quality and general model/standards correctness remain **Unverified**. The separate `create_surface_profile_view` recipe is proven offline; live authoring and saving remain **Unverified**. Full evidence boundaries are in the guide and [PROJECT_STATUS.md](PROJECT_STATUS.md).
 
 ```
 skills/
 ├── surfaces/           # Surface operations
 ├── alignments/         # Alignment + station/offset
-├── profiles/           # Profile inventory + elevation lookup
-├── corridors/          # Corridor and baseline summaries
-├── sections/           # Sample-line and section inventory
-├── pipe_networks/      # Gravity pipe-network QC
+├── profiles/           # Profile inventory + controlled profile creation
+├── corridors/          # Corridor summaries + target audit
+├── sections/           # Inventory, controlled views + native material quantities
+├── references/         # Bounded data-reference state audit
+├── pipe_networks/       # Gravity pipe-network QC
 ├── points/             # COGO points
 ├── geometry/           # Lines, polylines, text
 ├── drawing/            # Drawing info
@@ -90,7 +96,7 @@ Code executed via `civil3d_execute` or `civil3d_query` has access to:
 
 All Civil 3D namespaces are auto-imported.
 
-Committing the `civil3d_execute` transaction changes the open drawing but does not by itself write the DWG file to disk. Set `saveDrawing: true` when the completed change should also be saved. The plugin saves only after the script transaction and document lock are closed; scripts must not call `Database.SaveAs` or queue `QSAVE` themselves. The save request uses a separate 10-minute default timeout and is never retried automatically.
+Committing the `civil3d_execute` transaction changes the open drawing but does not by itself write the DWG file to disk. First identify the active drawing with `civil3d_query`, then pass its full `Database.Filename` and `FingerprintGuid` as `expectedDrawing`; the plugin checks that identity immediately before Civil API access. Set `saveDrawing: true` when the completed change should also be saved. The plugin saves only after the script transaction and document lock are closed; scripts must not call `Database.SaveAs` or queue `QSAVE` themselves. The save request uses a separate 10-minute default timeout and is never retried automatically.
 
 ## Setup
 
@@ -155,7 +161,7 @@ The phase 2A host-independent recorder, the phase 2A.1 opt-in internal live trac
 
 `civil3d_query` and `civil3d_execute` keep their existing text error content and `isError: true`, while also returning `structuredContent` with schema `civil3d-mcp-error/v1`. The stable error fields are `code`, `category`, `message`, `source`, `outcome`, and `retryable`. A command timeout or a connection loss after sending has `outcome: "unknown"` and `retryable: false`; the server never retries it automatically. Successful responses and the three-tool public surface are unchanged.
 
-An operation whose Civil command has not started within 15 seconds returns `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` with `outcome: "not_started"` and `retryable: false`. A subsequently arriving abandoned token performs no drawing work. This deadline limits admission, not execution: started work retains the serialized gate until the selected backend's host completion, and an uncertain write must still be reconciled rather than repeated. Private health exposes the execution backend, fixed stage names and elapsed times without drawing content. The targeted completion checks do not establish that every possible hang is eliminated.
+An operation whose Civil command has not started within 15 seconds returns `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` with `outcome: "not_started"` and `retryable: false`. A subsequently arriving abandoned token performs no drawing work. This deadline limits admission, not execution: started work retains the serialized gate until the selected backend's host completion, and an uncertain write must still be reconciled rather than repeated. The targeted completion checks do not establish that every possible hang is eliminated.
 
 ### Compile a single C# code body offline
 
@@ -165,7 +171,7 @@ The skill test runner can check an individual UTF-8 `.cs` code body against loca
 dotnet run --project tests/skills/Civil3dMcp.SkillTests.csproj --configuration Release -- --code (Resolve-Path ./probe.cs).Path
 ```
 
-The file contains a method body, using the provided `Document`, `CivilDoc`, `Database`, `Transaction` and `Editor` parameters. This checks compilation diagnostics only: it does not execute the code or connect to Civil 3D. Exit codes are `0` for success, `1` for compilation errors, and `2` for invalid arguments, a missing input file or missing Autodesk references. Calling the runner without arguments still checks every skill template and its input tests. A successful compile is not live behavior evidence.
+The file contains a method body that uses the provided `Document`, `CivilDoc`, `Database`, `Transaction` and `Editor` parameters. This checks compilation diagnostics only; it does not execute the code or connect to Civil 3D. Exit codes are `0` for success, `1` for compilation errors, and `2` for invalid arguments, a missing input file or missing Autodesk references. Calling the runner without arguments still checks every skill template and its input tests. A successful compile is not live behavior evidence.
 
 ## Private TCP framing (phase 2C.1)
 
