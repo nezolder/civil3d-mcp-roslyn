@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
@@ -13,22 +12,47 @@ namespace Civil3DMcpPlugin;
 /// </summary>
 public static class RoslynExecutor
 {
-  /// <summary>Cache of compiled scripts by code hash.</summary>
-  private static readonly ConcurrentDictionary<int, Script<object>> _scriptCache = new();
+  /// <summary>Upper bound on cached compiled scripts.</summary>
+  internal const int ScriptCacheCapacity = 64;
+
+  /// <summary>Compiled scripts by exact code text; failed compilations are not kept.</summary>
+  private static readonly ScriptCache<Script<object>> _scriptCache = new(ScriptCacheCapacity);
+
+  private static readonly object _optionsSync = new();
+  private static ScriptOptions? _options;
+  private static int _optionsAssemblyCount = -1;
 
   /// <summary>Max script execution time (default 120 seconds).</summary>
   public static TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(120);
 
   /// <summary>
-  /// Build ScriptOptions with all necessary references and imports.
+  /// Return ScriptOptions referencing every loaded assembly. The options are
+  /// reused until another assembly loads, so Roslyn can keep the metadata it
+  /// already read for those references.
   /// </summary>
-  private static ScriptOptions BuildOptions()
+  private static ScriptOptions GetOptions()
   {
     // Collect assemblies from the current AppDomain (Civil 3D loads everything)
     var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies()
       .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
       .ToArray();
 
+    lock (_optionsSync)
+    {
+      if (_options is null || _optionsAssemblyCount != loadedAssemblies.Length)
+      {
+        _options = BuildOptions(loadedAssemblies);
+        _optionsAssemblyCount = loadedAssemblies.Length;
+      }
+      return _options;
+    }
+  }
+
+  /// <summary>
+  /// Build ScriptOptions with all necessary references and imports.
+  /// </summary>
+  private static ScriptOptions BuildOptions(Assembly[] loadedAssemblies)
+  {
     var options = ScriptOptions.Default
       .WithReferences(loadedAssemblies)
       .WithImports(
@@ -73,31 +97,27 @@ public static class RoslynExecutor
     // Validate with sandbox
     ScriptSandbox.Validate(code);
 
-    var options = BuildOptions();
-    // Preserve the existing cache key semantics. The benchmark-only code ID is
-    // a separate SHA-256 and deliberately does not replace this key in phase 2A.1.
-    var codeHash = code.GetHashCode();
-
     // Try cache first
-    var cacheHit = _scriptCache.TryGetValue(codeHash, out var script);
+    var cacheHit = _scriptCache.TryGet(code, out var script);
     benchmarkMeasurement?.RecordCacheLookup(cacheHit);
     if (!cacheHit)
     {
       progress?.SetStage(OperationStage.CompilingScript);
-      script = CSharpScript.Create<object>(code, options, typeof(ScriptContext));
+      script = CSharpScript.Create<object>(code, GetOptions(), typeof(ScriptContext));
+      bool failed;
       try
       {
         var diagnostics = script.Compile(); // Pre-compile for better error messages
-        benchmarkMeasurement?.RecordCompilationAttempt(
-          diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
-        );
+        failed = diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        benchmarkMeasurement?.RecordCompilationAttempt(failed);
       }
       catch
       {
         benchmarkMeasurement?.RecordCompilationAttempt(failed: true);
         throw;
       }
-      _scriptCache.TryAdd(codeHash, script);
+      // A failed script still reaches RunAsync below, which reports its errors.
+      if (!failed) _scriptCache.Add(code, script);
     }
 
     // Execute with timeout

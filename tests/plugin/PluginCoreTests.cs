@@ -101,6 +101,7 @@ internal static class PluginCoreTests
       }
 
       ResultSerializerTests.RunAll();
+      ScriptCacheTests.RunAll();
     }
     catch (Exception ex)
     {
