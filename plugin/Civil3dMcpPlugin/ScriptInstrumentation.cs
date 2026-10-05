@@ -34,6 +34,22 @@ internal static class ScriptInstrumentation
     return instrumented;
   }
 
+  /// <summary>
+  /// One-based line and column of the first <c>await</c> keyword, or null.
+  /// Scripts run synchronously on the Civil 3D main thread, so an await there
+  /// can wait forever for a continuation queued to that same thread; unlike a
+  /// loop, no checkpoint ever runs to stop it. A variable named "await" in a
+  /// synchronous method is an identifier, not this keyword, and is allowed.
+  /// </summary>
+  public static (int Line, int Column)? FindAwait(string code)
+  {
+    var tree = CSharpSyntaxTree.ParseText(code, ParseOptions);
+    var keyword = tree.GetRoot().DescendantTokens().FirstOrDefault(token => token.IsKind(SyntaxKind.AwaitKeyword));
+    if (keyword == default) return null;
+    var start = keyword.GetLocation().GetLineSpan().StartLinePosition;
+    return (start.Line + 1, start.Character + 1);
+  }
+
   private static int CountLineBreaks(string text) => text.Count(character => character == '\n');
 
   private sealed class CheckpointRewriter : CSharpSyntaxRewriter

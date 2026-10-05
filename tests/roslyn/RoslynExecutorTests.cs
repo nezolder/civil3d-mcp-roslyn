@@ -25,6 +25,8 @@ var tests = new (string Name, Func<Task> Run)[]
   ("runtime line numbers are unchanged around loops", LoopRuntimeLineAsync),
   ("compile errors inside loops report the caller's column", LoopCompileErrorColumnAsync),
   ("a declaration as loop body stays a compile error", DeclarationLoopBodyAsync),
+  ("await is refused with its position before compiling", AwaitIsRefusedAsync),
+  ("an identifier named await in a synchronous method is allowed", AwaitIdentifierAllowedAsync),
 };
 
 foreach (var (name, run) in tests)
@@ -266,6 +268,34 @@ static async Task DeclarationLoopBodyAsync()
   var error = await FailAsync("while (false) var z = 1;\nreturn 0;");
   Assert(error.Code == "CIVIL3D.COMPILATION_ERROR" && error.Message.Contains("CS1023", StringComparison.Ordinal),
     $"unexpected message: {error.Message}");
+}
+
+static async Task AwaitIsRefusedAsync()
+{
+  RoslynExecutor.ClearCache();
+  foreach (var code in new[]
+  {
+    "var x = 1;\nawait System.Threading.Tasks.Task.Delay(1);\nreturn x;",
+    "return await System.Threading.Tasks.Task.FromResult(1);",
+    "async System.Threading.Tasks.Task<int> F() { return await System.Threading.Tasks.Task.FromResult(2); }\nreturn F().Result;",
+    "async System.Collections.Generic.IAsyncEnumerable<int> G() { yield return 1; }\nvar n = 0;\nawait foreach (var i in G()) n += i;\nreturn n;",
+  })
+  {
+    var lines = code.Split('\n');
+    var line = Array.FindIndex(lines, text => text.Contains("await ", StringComparison.Ordinal)) + 1;
+    var column = lines[line - 1].IndexOf("await ", StringComparison.Ordinal) + 1;
+    var error = await FailAsync(code);
+    Assert(error.Code == "CIVIL3D.COMPILATION_ERROR", $"await must be a compilation error: {code}");
+    Assert(error.Message.StartsWith($"C# compilation failed:\n({line},{column}): error MCP0001: 'await' is not supported.",
+      StringComparison.Ordinal), $"unexpected message: {error.Message}");
+  }
+  Assert(RoslynExecutor.CachedScriptCount == 0, "refused scripts must not be cached");
+}
+
+static async Task AwaitIdentifierAllowedAsync()
+{
+  var result = await RoslynExecutor.ExecuteAsync("int F() { var @await = 3; return @await; }\nreturn F();", Context());
+  Assert(Equals(result, 3), $"unexpected result: {result}");
 }
 
 static void Assert(bool condition, string message)

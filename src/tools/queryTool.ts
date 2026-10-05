@@ -38,7 +38,7 @@ const log = createLogger("QueryTool");
  * serializer. Stated once here; civil3d_execute refers back to it.
  */
 export const SCRIPT_RULES =
-  "Script rules: keep Civil API code synchronous; do not await inside the command context. " +
+  "Script rules: keep code synchronous; a script that uses await is rejected because it could deadlock Civil 3D. " +
   "Return only primitives, strings, Guid, anonymous objects, arrays/List (call .ToList() on LINQ), " +
   "Dictionary<string,...>, ObjectId, Handle, Point2d/3d, Vector2d/3d; enums return as numbers, so use .ToString() for names. " +
   "Not returnable: DBObject instances, DateTime, tuples, custom classes, NaN/Infinity; " +
