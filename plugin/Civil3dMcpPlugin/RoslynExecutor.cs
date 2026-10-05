@@ -110,6 +110,15 @@ public static class RoslynExecutor
     if (!cacheHit)
     {
       progress?.SetStage(OperationStage.CompilingScript);
+      if (ScriptInstrumentation.FindAwait(code) is { } awaitPosition)
+      {
+        throw new JsonRpcDispatchException(
+          "CIVIL3D.COMPILATION_ERROR",
+          $"C# compilation failed:\n({awaitPosition.Line},{awaitPosition.Column}): error MCP0001: " +
+            "'await' is not supported. Scripts run synchronously on the Civil 3D main thread, " +
+            "where awaiting can deadlock the application; call the synchronous API instead."
+        );
+      }
       var options = GetOptions();
       var instrumented = ScriptInstrumentation.AddCancellationCheckpoints(code);
       script = CSharpScript.Create<object>(instrumented, options, typeof(ScriptContext));
