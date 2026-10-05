@@ -21,6 +21,12 @@ import {
 import { expectedDrawingSchema } from "./expectedDrawing.js";
 import { instanceIdSchema } from "./instanceSelection.js";
 import {
+  ScriptSourceOptions,
+  resolveScriptCode,
+  skillNameSchema,
+  skillParamsSchema,
+} from "./scriptSource.js";
+import {
   createOperationAuditContext,
   logOperationFailure,
   logOperationSuccess,
@@ -53,7 +59,7 @@ const idempotencyKeySchema = z
  * The script can use all Civil 3D and AutoCAD namespaces (auto-imported).
  * Return a value to send it back as JSON to the AI.
  */
-export function registerExecuteTool(server: McpServer) {
+export function registerExecuteTool(server: McpServer, options: ScriptSourceOptions = {}) {
   server.tool(
     "civil3d_execute",
     "Execute C# code in Civil 3D with write access. The code runs inside a committed transaction. " +
@@ -62,12 +68,15 @@ export function registerExecuteTool(server: McpServer) {
       "The script rules of civil3d_query apply. " +
       "Use this for operations that MODIFY the drawing (create, edit, delete objects). " +
       "expectedDrawing must come from a prior read-only identity query. " +
+      "Instead of code you can pass skill and params to run a skill whose run_by_name is true. " +
       "To persist the drawing file, set saveDrawing=true; do not call Database.SaveAs or queue QSAVE from the C# code.",
     {
-      code: z.string().describe(
+      code: z.string().optional().describe(
         "C# code to execute. Has access to Document, CivilDoc, Database, Transaction, Editor. " +
           "Example: var id = TinSurface.Create(Database, \"MySurface\"); return new { success = true };"
       ),
+      skill: skillNameSchema,
+      params: skillParamsSchema,
       description: z.string().optional().describe(
         "Optional human-readable summary; excluded from operation audit logs."
       ),
@@ -99,14 +108,20 @@ export function registerExecuteTool(server: McpServer) {
         );
       }
       const benchmarkFallbackStartedAt = benchmarkTrace ? performance.now() : undefined;
-      const audit = createOperationAuditContext("civil3d_execute", args.code, performance.now());
+      let code: string;
+      try {
+        code = resolveScriptCode(args, "civil3d_execute", options);
+      } catch (error) {
+        return createStructuredToolErrorResult(error, "Execution failed: ");
+      }
+      const audit = createOperationAuditContext("civil3d_execute", code, performance.now());
       try {
         const commandResult = await withApplicationConnection(
           async (client) =>
             await client.sendCommand(
               "executeCode",
               {
-                code: args.code,
+                code,
                 readOnly: false,
                 description: args.description,
                 expectedDrawing: args.expectedDrawing,
@@ -149,7 +164,7 @@ export function registerExecuteTool(server: McpServer) {
               ? getOrCreateTransportFailureEvent(
                   error,
                   benchmarkTrace,
-                  args.code,
+                  code,
                   performance.now() - benchmarkFallbackStartedAt
                 )
               : undefined,

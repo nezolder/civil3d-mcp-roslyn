@@ -77,6 +77,7 @@ test("list/search keep compatible fields, deterministic order, and metadata-only
         "name",
         "parameters",
         "requires_write",
+        "run_by_name",
         "tested_civil_version",
         "validation_summary",
         "workflow_tags",
@@ -91,7 +92,7 @@ test("list/search keep compatible fields, deterministic order, and metadata-only
     assertPageContract(search, "results");
     for (const result of search.results) {
       assert.deepEqual(Object.keys(result).sort(), [
-        "category", "description", "name", "requires_write",
+        "category", "description", "name", "requires_write", "run_by_name",
         "tested_civil_version", "validation_summary", "workflow_tags",
       ]);
     }
@@ -284,6 +285,7 @@ test("get remains unpaginated with original fields plus discovery metadata", asy
       "name",
       "parameters",
       "requires_write",
+      "run_by_name",
       "tested_civil_version",
       "validation_summary",
       "workflow_tags",

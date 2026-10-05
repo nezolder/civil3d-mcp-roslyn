@@ -20,12 +20,21 @@ Existing response fields and pagination fields remain. `search` additionally ret
 | `workflow_tags` | A small set of task roles, such as `drawing_view`, `quantity_read` or `source_state`. | `list`, `search`, `get`. |
 | `tested_civil_version` | Civil version covered by the recorded checks, including offline API compilation. It is not a live certification. | `list`, `search`, `get`. |
 | `validation_summary` | Short scoped evidence and remaining limitations. Read the body for the full evidence. | `list`, `search`, `get`. |
+| `run_by_name` | Whether the recipe can run by name with bound parameters (see below). | `list`, `search`, `get`. |
 
 Absent or invalid string evidence fields are `null`, meaning unknown; absent or invalid alias/tag arrays are empty. The loader does not infer live, saved or reopened success from an action name, the version, or a successful run. The read/write flag does not replace drawing guards, authorized scope, backups or independent saved-state checks.
 
 The reviewed catalogue is compiled against Civil 3D 2025 API metadata. Some recipes have only an empty-fixture live check, some have a scoped data-bearing save/readback or reopen, and `create_surface_profile_view` has offline evidence while live creation/save/reopen remain unverified. These distinctions are intentionally visible before loading the full code.
 
 This is an additive metadata extension. Consumers that require an exact response-key set must accept the additional fields; existing field values and pagination behavior are retained. The new Node module is used by a newly started MCP server. Existing processes retain their already-loaded module until the client reconnects/restarts that server; the Civil plugin does not need rebuilding or reinstallation for this change.
+
+## Run a recipe by name
+
+A recipe whose `run_by_name` is `true` does not have to be fetched and sent back as code. Read its parameters with `get` and `includeCode: false`, then call `civil3d_query` (read recipes) or `civil3d_execute` (write recipes) with `skill` set to its name and `params` holding the values instead of `code`. The Node server binds the values into the reviewed template and sends that code; drawing guards, idempotency keys, save options and audit events behave exactly as for code sent directly. A write recipe is refused by `civil3d_query`.
+
+Binding replaces only the default of each parameter's declaration, and every value becomes a C# literal, so a value can never add code. Unknown parameter names, a missing required parameter or a value of the wrong type is refused before anything reaches Civil 3D; an omitted optional parameter keeps the template default. Tuple-array parameters such as `samplePoints` accept objects with exactly the tuple's field names (`{"x": 1, "y": 2}`) or positional arrays (`[1, 2]`).
+
+A template is runnable by name when every parameter in its frontmatter is declared exactly once at the start of a top-level line as `var`, `string`, `int`, `long`, `double` or `bool` with a single literal default (`"text"`, `100`, `0.0`, `double.NaN`, `true`), or as `var name = new (double x, double y)[] { };`. Other recipes stay available through `get` and adapted code. `get` keeps returning the full template unless `includeCode` is `false`.
 
 ## Authoring the optional frontmatter
 
