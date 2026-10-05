@@ -98,3 +98,13 @@ These are scoped summary measurements; raw traces and machine-specific receipts 
 **Unverified:** a general speedup or long-session memory behavior. This is one host, one process per version, ten warm samples, baseline first; command scheduling and host state can affect latency. The six cache unit tests are host-independent, and the live sequence was read-only on an empty fixture. It does not establish production authoring/save behavior or prolonged stress performance.
 
 Only this validation report is added to the branch; the tested implementation was not edited.
+
+## Follow-up: dependency vulnerability audit
+
+The `NU1900` gap above was closed separately on 2026-10-05 from a Linux environment with access to the NuGet service index (.NET SDK 8.0.131), against commit `08a603c`.
+
+```text
+dotnet list <project> package --vulnerable --include-transitive
+```
+
+**Proven:** `Civil3dMcpPlugin`, `Civil3dMcpPlugin.CoreTests`, `Civil3dMcpPlugin.TransportTests` and `Civil3dMcp.SkillTests` report no vulnerable direct or transitive packages from `https://api.nuget.org/v3/index.json`. `npm audit` on the Node server reports 0 vulnerabilities.
