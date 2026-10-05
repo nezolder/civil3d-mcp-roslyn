@@ -81,7 +81,7 @@ public sealed class RpcTcpServer
     {
       try
       {
-        await ProcessStreamAsync(stream, _handler, cancellationToken);
+        await ProcessStreamAsync(stream, _handler, cancellationToken, watchForPeerClose: true);
       }
       catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
       {
@@ -97,7 +97,8 @@ public sealed class RpcTcpServer
   internal static async Task ProcessStreamAsync(
     Stream stream,
     Func<string, CancellationToken, Task<string>> handler,
-    CancellationToken cancellationToken)
+    CancellationToken cancellationToken,
+    bool watchForPeerClose = false)
   {
     string request;
     try
@@ -114,9 +115,71 @@ public sealed class RpcTcpServer
       return;
     }
 
-    var response = await handler(request, cancellationToken);
+    using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+    var handling = handler(request, requestCancellation.Token);
+    if (watchForPeerClose)
+    {
+      _ = CancelWhenPeerClosesAsync(stream, handling, requestCancellation, cancellationToken);
+    }
+
+    string response;
+    try
+    {
+      response = await handling;
+    }
+    catch (OperationCanceledException) when (
+      requestCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+    {
+      // The client closed the connection; there is nobody left to answer.
+      return;
+    }
+
     var boundedResponse = CreateBoundedResponse(request, response);
     await WriteFramedResponseAsync(stream, boundedResponse, cancellationToken);
+  }
+
+  /// <summary>
+  /// Cancels the request when the client closes its connection before the
+  /// response. The client sends nothing after its single request frame and
+  /// does not half-close while waiting, so end of stream or a reset means it
+  /// gave up, typically after its own command timeout. Work that has not
+  /// started is then dropped instead of running later.
+  /// </summary>
+  private static async Task CancelWhenPeerClosesAsync(
+    Stream stream,
+    Task handling,
+    CancellationTokenSource requestCancellation,
+    CancellationToken serverCancellation)
+  {
+    try
+    {
+      var probe = new byte[1];
+      if (await stream.ReadAsync(probe, serverCancellation).ConfigureAwait(false) > 0)
+      {
+        // Unexpected data after the request frame; leave the request alone.
+        return;
+      }
+    }
+    catch (OperationCanceledException)
+    {
+      return;
+    }
+    catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException)
+    {
+      // A reset connection is closed as well.
+    }
+
+    // The read also ends when this side disposes the connection after
+    // answering; only an unfinished request is cancelled.
+    if (handling.IsCompleted) return;
+    try
+    {
+      requestCancellation.Cancel();
+    }
+    catch (ObjectDisposedException)
+    {
+      // The request finished in the meantime.
+    }
   }
 
   internal static async Task<string> ReadFramedJsonBodyAsync(

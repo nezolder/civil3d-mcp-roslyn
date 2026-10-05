@@ -17,7 +17,9 @@
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\OperationProgress.cs" Link="OperationProgress.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\RoslynExecutor.cs" Link="RoslynExecutor.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptCache.cs" Link="ScriptCache.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptCancellation.cs" Link="ScriptCancellation.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptDiagnostics.cs" Link="ScriptDiagnostics.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptInstrumentation.cs" Link="ScriptInstrumentation.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptSandbox.cs" Link="ScriptSandbox.cs" />
     <Compile Include="RoslynTestStubs.cs" />
     <Compile Include="RoslynExecutorTests.cs" />
