@@ -3,6 +3,10 @@ name: create_alignment_from_polyline
 category: alignments
 description: Create a siteless alignment from one open non-degenerate 2D polyline while preserving its source
 requires_write: true
+aliases: ["nyomvonal létrehozása 2D polivonalból", "create alignment from open 2D polyline", "open polyline to alignment conversion"]
+workflow_tags: ["modeling"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: open ModelSpace polyline to siteless alignment, save and independent reopen. Spirals, profiles and corridors are outside scope."
 parameters:
   - name: sourceHandle
     type: string

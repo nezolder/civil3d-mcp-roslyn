@@ -3,6 +3,10 @@ name: earthwork_report
 category: workflows
 description: Summarize an existing ground surface, alignments, and existing profiles in a read-only report
 requires_write: false
+aliases: ["meglévő terepfelület nyomvonal és profil leltára", "existing ground surface alignment and profile inventory", "földmunka modell adatainak read-only összefoglalója"]
+workflow_tags: ["source_state"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Recipe-specific live coverage is not recorded here; verify the required case before use."
 parameters:
   - name: surfaceName
     type: string

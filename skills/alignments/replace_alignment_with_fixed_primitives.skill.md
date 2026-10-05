@@ -3,6 +3,10 @@ name: replace_alignment_with_fixed_primitives
 category: alignments
 description: Replace a pre-audited plain siteless alignment with a bounded, pre-planned chain of native fixed lines, arcs, and clothoids while preserving identity and design-speed records
 requires_write: true
+aliases: ["előzetesen auditált nyomvonal geometria cseréje", "replace alignment with planned fixed lines arcs and spirals", "audited alignment replacement from fixed primitives"]
+workflow_tags: ["modeling"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: one eight-primitive independent alignment, save and reopen. Broader inputs, dependents and standards compliance unverified."
 parameters:
   - name: alignmentHandle
     type: string

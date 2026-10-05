@@ -3,6 +3,10 @@ name: drawing_info
 category: drawing
 description: Get comprehensive information about the active Civil 3D drawing
 requires_write: false
+aliases: ["aktív rajz adatai és koordináta-beállításai", "active drawing metadata and coordinate information", "rajzadatok összefoglalója"]
+workflow_tags: ["source_state"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Live: empty inventory fixture only; data-bearing cases remain unverified."
 parameters: []
 ---
 

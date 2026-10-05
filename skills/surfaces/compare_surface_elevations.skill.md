@@ -3,6 +3,10 @@ name: compare_surface_elevations
 category: surfaces
 description: Compare two existing TIN surfaces at explicit bounded XY control points with coverage and signed elevation statistics
 requires_write: false
+aliases: ["két TIN felület magasságának összehasonlítása pontokon", "compare two surfaces at XY control points", "felületi magasságkülönbség és lefedettségi statisztika"]
+workflow_tags: ["quality_control"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: synthetic +1 TIN difference, out-of-surface point and detail cap. Full-mesh equivalence and survey accuracy unverified."
 parameters:
   - name: surfaceAHandle
     type: string

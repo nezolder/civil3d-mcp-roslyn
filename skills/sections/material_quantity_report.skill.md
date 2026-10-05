@@ -3,6 +3,10 @@ name: material_quantity_report
 category: sections
 description: Read bounded station-based cut/fill/usable quantities from one explicitly selected existing Civil material list
 requires_write: false
+aliases: ["meglévő QTO anyaglista mennyiségei szelvényenként", "existing material list cut fill quantities by station", "Civil 3D kész mennyiségi eredmény lekérdezése"]
+workflow_tags: ["quantity_read"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: existing three-section AverageEndArea QTO and detail caps. Source freshness, exact boundary clipping and other configurations unverified."
 parameters:
   - name: groupHandle
     type: string

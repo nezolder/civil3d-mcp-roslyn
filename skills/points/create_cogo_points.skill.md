@@ -3,6 +3,10 @@ name: create_cogo_points
 category: points
 description: Create COGO points from coordinates with optional descriptions
 requires_write: true
+aliases: ["COGO pontok létrehozása koordinátákból", "create COGO points from coordinates and descriptions", "mérési pontok felvétele koordinátákkal"]
+workflow_tags: ["modeling"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Recipe-specific live coverage is not recorded here; verify the required case before use."
 parameters:
   - name: points
     type: array

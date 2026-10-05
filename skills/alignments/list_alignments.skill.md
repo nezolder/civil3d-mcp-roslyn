@@ -3,6 +3,10 @@ name: list_alignments
 category: alignments
 description: List all alignments in the drawing with name, length, start/end stations
 requires_write: false
+aliases: ["nyomvonalak listázása kezdő és végszelvénnyel", "list alignments with length and station range", "nyomvonalleltár"]
+workflow_tags: ["source_state"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Recipe-specific live coverage is not recorded here; verify the required case before use."
 parameters: []
 ---
 

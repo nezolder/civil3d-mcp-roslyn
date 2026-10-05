@@ -2,6 +2,8 @@
 
 Six focused recipes reuse the existing dynamic C# execution path. Retrieve them with `civil3d_skills`, bind the explicit inputs, then use `civil3d_query` for reads or `civil3d_execute` for approved writes. The public interface remains exactly three tools; the Civil plugin is unchanged.
 
+The [catalogue contract](SKILL_CATALOG.md) explains task aliases, workflow tags, and the short version/validation fields returned before loading code. A version or keyword match does not expand the scoped evidence below.
+
 | Work problem | Recipe | Inputs and scope |
 | --- | --- | --- |
 | Create a design profile from approved breakpoints | `create_design_profile_from_pvis` | One local alignment, explicit PVI stations/elevations/symmetric curve lengths, named existing styles. Creates a new profile. |

@@ -3,6 +3,10 @@ name: alignment_geometry_audit
 category: alignments
 description: Audit one existing alignment's horizontal geometry and configured design-criteria state without editing it
 requires_write: false
+aliases: ["nyomvonal vízszintes geometriájának auditja", "alignment geometry and criteria-configuration inventory", "nyomvonal ívek és átmenetiívek ellenőrzése"]
+workflow_tags: ["audit"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: straight and compound geometry, saved-fixture readback. Populated criteria/check sets and standards compliance unverified."
 parameters:
   - name: alignmentHandle
     type: string

@@ -3,6 +3,10 @@ name: section_inventory
 category: sections
 description: Inventory sample-line groups and return a bounded list of sample lines with section and view counts
 requires_write: false
+aliases: ["mintavonalak és keresztszelvény nézetek leltára", "cross section inventory with sample-line and view counts", "keresztszelvény darabszám nyomvonalanként"]
+workflow_tags: ["source_state"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Live: empty inventory fixture only; data-bearing cases remain unverified."
 parameters:
   - name: alignmentName
     type: string

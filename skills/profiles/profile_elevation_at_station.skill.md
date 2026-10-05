@@ -3,6 +3,10 @@ name: profile_elevation_at_station
 category: profiles
 description: Read the elevation of an existing profile at one station
 requires_write: false
+aliases: ["hossz-szelvény magassága adott szelvénynél", "profile elevation query at one station", "profil magasság lekérdezése szelvényszám alapján"]
+workflow_tags: ["geometry_query"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Live: empty inventory fixture only; data-bearing cases remain unverified."
 parameters:
   - name: alignmentName
     type: string

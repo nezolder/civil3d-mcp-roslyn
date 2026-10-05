@@ -3,6 +3,10 @@ name: pipe_network_qc
 category: pipe_networks
 description: Check gravity pipe networks for basic connectivity and invalid-length warnings with bounded examples
 requires_write: false
+aliases: ["gravitációs csőhálózat kapcsolati és hosszellenőrzése", "gravity pipe network connectivity and invalid-length QC", "gravitációs közműhálózat alapellenőrzése"]
+workflow_tags: ["quality_control"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Live: empty inventory fixture only; data-bearing cases remain unverified."
 parameters:
   - name: networkName
     type: string

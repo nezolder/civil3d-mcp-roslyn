@@ -3,6 +3,10 @@ name: corridor_summary
 category: corridors
 description: Summarize corridors, baselines, regions, surfaces, targets, and rebuild state with bounded details
 requires_write: false
+aliases: ["nyomterv baseline régió felület és target állapot", "corridor summary with rebuild state and targets", "nyomterv állapotösszegzés"]
+workflow_tags: ["source_state"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Live: empty inventory fixture only; data-bearing cases remain unverified."
 parameters:
   - name: corridorName
     type: string

@@ -3,6 +3,10 @@ name: corridor_target_audit
 category: corridors
 description: Audit target mappings for one corridor handle with optional baseline and region name filters
 requires_write: false
+aliases: ["nyomterv targetkapcsolatok auditja", "corridor target mapping audit by baseline and region", "corridor target object mapping review"]
+workflow_tags: ["audit"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: empty corridor with one baseline, DBMOD unchanged. Populated target mappings and self-surface dependencies unverified."
 parameters:
   - name: corridorHandle
     type: string

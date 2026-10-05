@@ -3,6 +3,10 @@ name: surface_definition_summary
 category: surfaces
 description: Summarize TIN surface source-definition counts and rebuild state without returning source file paths
 requires_write: false
+aliases: ["TIN felület forrásdefinícióinak és újraépítési állapotának összegzése", "surface source-definition counts and rebuild state", "felületdefiníció összesítés fájlútvonalak nélkül"]
+workflow_tags: ["source_state"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Live: empty inventory fixture only; data-bearing cases remain unverified."
 parameters:
   - name: surfaceName
     type: string

@@ -3,6 +3,10 @@ name: surface_elevation
 category: surfaces
 description: Get the elevation of a surface at a specific X,Y coordinate
 requires_write: false
+aliases: ["terepmagasság lekérdezése XY koordinátán", "surface elevation at an XY point", "felületi magasság egy adott pontban"]
+workflow_tags: ["geometry_query"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Recipe-specific live coverage is not recorded here; verify the required case before use."
 parameters:
   - name: surfaceName
     type: string

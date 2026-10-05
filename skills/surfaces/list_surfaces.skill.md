@@ -3,6 +3,10 @@ name: list_surfaces
 category: surfaces
 description: List all surfaces in the active Civil 3D drawing with name, type, layer, and basic statistics
 requires_write: false
+aliases: ["Civil 3D felületek listázása típus és alapstatisztika szerint", "list surfaces with type and basic statistics", "terepfelület leltár"]
+workflow_tags: ["source_state"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Recipe-specific live coverage is not recorded here; verify the required case before use."
 parameters: []
 ---
 

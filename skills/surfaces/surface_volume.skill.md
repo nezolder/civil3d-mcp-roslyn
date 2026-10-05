@@ -3,6 +3,10 @@ name: surface_volume
 category: surfaces
 description: Read cut/fill volumes from an existing TIN volume surface
 requires_write: false
+aliases: ["meglévő TIN térfogatfelület vágás és töltés térfogata", "read cut and fill volume from existing TIN volume surface", "meglévő térfogatfelület mennyiségének olvasása"]
+workflow_tags: ["quantity_read"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: read existing TIN volume surface, counts and DBMOD unchanged. Temporary volume creation is outside the read-only recipe."
 parameters:
   - name: surfaceName
     type: string

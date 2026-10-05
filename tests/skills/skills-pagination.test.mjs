@@ -77,6 +77,9 @@ test("list/search keep compatible fields, deterministic order, and metadata-only
         "name",
         "parameters",
         "requires_write",
+        "tested_civil_version",
+        "validation_summary",
+        "workflow_tags",
       ]);
     }
 
@@ -87,7 +90,10 @@ test("list/search keep compatible fields, deterministic order, and metadata-only
     });
     assertPageContract(search, "results");
     for (const result of search.results) {
-      assert.deepEqual(Object.keys(result).sort(), ["category", "description", "name"]);
+      assert.deepEqual(Object.keys(result).sort(), [
+        "category", "description", "name", "requires_write",
+        "tested_civil_version", "validation_summary", "workflow_tags",
+      ]);
     }
   });
 });
@@ -263,7 +269,7 @@ test("invalid limits and cursors return controlled errors", async () => {
   });
 });
 
-test("get response remains unpaginated and unchanged in shape", async () => {
+test("get remains unpaginated with original fields plus discovery metadata", async () => {
   await withSkillsClient(async (client) => {
     const skill = await callSkills(client, {
       action: "get",
@@ -271,12 +277,16 @@ test("get response remains unpaginated and unchanged in shape", async () => {
     });
 
     assert.deepEqual(Object.keys(skill).sort(), [
+      "aliases",
       "category",
       "content",
       "description",
       "name",
       "parameters",
       "requires_write",
+      "tested_civil_version",
+      "validation_summary",
+      "workflow_tags",
     ]);
     assert.equal(skill.name, "drawing_info");
     assert.equal(typeof skill.content, "string");
