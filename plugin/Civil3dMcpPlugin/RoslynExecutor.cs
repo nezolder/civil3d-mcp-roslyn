@@ -73,7 +73,9 @@ public static class RoslynExecutor
         "Autodesk.Civil.DatabaseServices",
         "Autodesk.Civil.Settings"
       )
-      .WithAllowUnsafe(false);
+      .WithAllowUnsafe(false)
+      // Line numbers for runtime failures; compiler messages are unchanged.
+      .WithEmitDebugInformation(true);
 
     return options;
   }
@@ -138,13 +140,23 @@ public static class RoslynExecutor
     }
     catch (CompilationErrorException ex)
     {
-      var errors = string.Join("\n", ex.Diagnostics.Select(d => d.ToString()));
       throw new JsonRpcDispatchException(
         "CIVIL3D.COMPILATION_ERROR",
-        $"C# compilation failed:\n{errors}"
+        ScriptDiagnostics.DescribeCompilationFailure(script!, ex.Diagnostics)
+      );
+    }
+    catch (Exception ex) when (ex is not JsonRpcDispatchException)
+    {
+      // Same code the host already reported for script failures, now with
+      // the exception type and the failing script line.
+      throw new JsonRpcDispatchException(
+        "CIVIL3D.TRANSACTION_FAILED",
+        ScriptDiagnostics.DescribeRuntimeFailure(ex)
       );
     }
   }
+
+  internal static int CachedScriptCount => _scriptCache.Count;
 
   /// <summary>Clear the script cache.</summary>
   public static void ClearCache()

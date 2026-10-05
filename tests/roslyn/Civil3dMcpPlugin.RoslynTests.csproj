@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <!-- Same Roslyn version as the plugin; Autodesk types are replaced by RoslynTestStubs.cs. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.12.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\InternalBenchmarkMeasurement.cs" Link="InternalBenchmarkMeasurement.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\OperationProgress.cs" Link="OperationProgress.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\RoslynExecutor.cs" Link="RoslynExecutor.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptCache.cs" Link="ScriptCache.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptDiagnostics.cs" Link="ScriptDiagnostics.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptSandbox.cs" Link="ScriptSandbox.cs" />
+    <Compile Include="RoslynTestStubs.cs" />
+    <Compile Include="RoslynExecutorTests.cs" />
+  </ItemGroup>
+</Project>

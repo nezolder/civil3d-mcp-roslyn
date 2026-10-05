@@ -12,6 +12,8 @@ tests/plugin/bin/
 tests/plugin/obj/
 tests/skills/bin/
 tests/skills/obj/
+tests/roslyn/bin/
+tests/roslyn/obj/
 *.dll
 *.pdb
 *.user
