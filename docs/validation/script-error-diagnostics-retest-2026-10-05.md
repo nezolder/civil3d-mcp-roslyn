@@ -26,7 +26,7 @@ The prior debug-enabled DLL measured 531.4 ms for first runs. This retest's 281.
 
 ## Unknown names and runtime error
 
-Three consecutive distinct unknown names each returned the expected `CIVIL3D.COMPILATION_ERROR` with `CS0103), no hint, one cache miss and one failed compilation. The type-name index is initially absent, so the first request includes its construction according to the tested source.
+Three consecutive distinct unknown names each returned the expected `CIVIL3D.COMPILATION_ERROR` with `CS0103`, no hint, one cache miss and one failed compilation. The type-name index is initially absent, so the first request includes its construction according to the tested source.
 
 | Unknown-name call | Internal `execution_ms` | Node-to-plugin end-to-end |
 | --- | ---: | ---: |
