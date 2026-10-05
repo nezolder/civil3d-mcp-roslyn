@@ -68,7 +68,7 @@ public static class CommandDispatcher
 
       // Run the Roslyn script synchronously within the command context
       // (we're already on the main thread here)
-      var rawResult = RoslynExecutor.ExecuteAsync(code, context, benchmarkMeasurement, progress)
+      var rawResult = RoslynExecutor.ExecuteAsync(code, context, benchmarkMeasurement, progress, cancellationToken)
         .GetAwaiter()
         .GetResult();
       progress?.SetStage(OperationStage.SerializingResult);

@@ -47,7 +47,8 @@ public static class RoslynExecutor
     string code,
     ScriptContext context,
     InternalBenchmarkMeasurement? benchmarkMeasurement,
-    OperationProgress? progress = null)
+    OperationProgress? progress = null,
+    CancellationToken cancellationToken = default)
   {
     progress?.SetStage(OperationStage.RunningScript);
     Interlocked.Increment(ref _callCount);

@@ -18,6 +18,13 @@ var tests = new (string Name, Func<Task> Run)[]
   ("missing static class names the namespace to import", MissingStaticClassAsync),
   ("unknown name without a match keeps the previous message exactly", UnknownNameAsync),
   ("hints are capped", HintsAreCappedAsync),
+  ("instrumentation keeps every line break and leaves loop-free code alone", InstrumentationKeepsLinesAsync),
+  ("loops still compute their normal results", LoopResultsAsync),
+  ("runaway while, for, foreach and do loops stop at the timeout", RunawayLoopsStopAtTimeoutAsync),
+  ("caller cancellation stops a running loop", CallerCancellationStopsLoopAsync),
+  ("runtime line numbers are unchanged around loops", LoopRuntimeLineAsync),
+  ("compile errors inside loops report the caller's column", LoopCompileErrorColumnAsync),
+  ("a declaration as loop body stays a compile error", DeclarationLoopBodyAsync),
 };
 
 foreach (var (name, run) in tests)
@@ -160,6 +167,105 @@ static async Task HintsAreCappedAsync()
   var error = await FailAsync(string.Join("\n", lines) + "\nreturn 0;");
   var hintCount = error.Message.Split('\n').Count(line => line.StartsWith("- ", StringComparison.Ordinal));
   Assert(hintCount == ScriptDiagnostics.MaximumHints, $"expected {ScriptDiagnostics.MaximumHints} hints, got {hintCount}");
+}
+
+static Task InstrumentationKeepsLinesAsync()
+{
+  var code = "var total = 0;\nfor (var i = 0; i < 3; i++)\n{\n  total += i;\n}\nwhile (total > 100) total--;\nreturn total;";
+  var instrumented = ScriptInstrumentation.AddCancellationCheckpoints(code);
+  Assert(instrumented != code, "loops must receive checkpoints");
+  Assert(instrumented.Split('\n').Length == code.Split('\n').Length, "line count must not change");
+  Assert(instrumented.Split("ScriptCancellation.ThrowIfCancellationRequested()").Length == 3,
+    $"each loop must receive one checkpoint: {instrumented}");
+  Assert(ScriptInstrumentation.AddCancellationCheckpoints("return 1;") == "return 1;", "loop-free code must be unchanged");
+  Assert(ScriptInstrumentation.AddCancellationCheckpoints("while (true) {") == "while (true) {",
+    "code that does not parse must be unchanged");
+  return Task.CompletedTask;
+}
+
+static async Task LoopResultsAsync()
+{
+  var result = await RoslynExecutor.ExecuteAsync(
+    "var s = 0;\n" +
+    "for (var i = 0; i < 10; i++) s += i;\n" +
+    "foreach (var (a, b) in new[] { (1, 2), (3, 4) }) s += a * b;\n" +
+    "var n = 0; do n++; while (n < 5);\n" +
+    "while (n < 8) { n++; if (n == 7) continue; }\n" +
+    "IEnumerable<int> Three() { for (var k = 0; k < 3; k++) yield return k; }\n" +
+    "return s + n + Three().Sum();", Context());
+  Assert(Equals(result, 45 + 14 + 8 + 3), $"unexpected loop result: {result}");
+}
+
+static async Task RunawayLoopsStopAtTimeoutAsync()
+{
+  var previous = RoslynExecutor.Timeout;
+  RoslynExecutor.Timeout = TimeSpan.FromMilliseconds(200);
+  try
+  {
+    foreach (var code in new[]
+    {
+      "while (true) { }",
+      "for (;;) ;",
+      "IEnumerable<int> Forever() { while (true) yield return 1; }\nforeach (var x in Forever()) { }",
+      "var i = 0;\ndo { i++; } while (true);",
+      "void Spin() { while (true) { } }\nSpin();",
+    })
+    {
+      var watch = System.Diagnostics.Stopwatch.StartNew();
+      var error = await FailAsync(code).WaitAsync(TimeSpan.FromSeconds(10));
+      Assert(error.Code == "CIVIL3D.TIMEOUT", $"runaway loop must time out: {code}");
+      Assert(watch.Elapsed < TimeSpan.FromSeconds(5), $"timeout must stop the loop promptly: {code}");
+    }
+  }
+  finally
+  {
+    RoslynExecutor.Timeout = previous;
+  }
+}
+
+static async Task CallerCancellationStopsLoopAsync()
+{
+  using var caller = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+  try
+  {
+    await RoslynExecutor.ExecuteAsync("while (true) { }", Context(), null, null, caller.Token)
+      .WaitAsync(TimeSpan.FromSeconds(10));
+  }
+  catch (OperationCanceledException) when (caller.IsCancellationRequested)
+  {
+    Assert(ScriptCancellation.Token == default, "the checkpoint token must be reset after the run");
+    return;
+  }
+  throw new InvalidOperationException("caller cancellation must surface as cancellation, not a reply");
+}
+
+static async Task LoopRuntimeLineAsync()
+{
+  var error = await FailAsync(
+    "var items = new[] { 1, 2, 3 };\n" +
+    "foreach (var item in items)\n" +
+    "{\n" +
+    "  if (item == 3) throw new InvalidOperationException(\"third\");\n" +
+    "}\n" +
+    "return 0;");
+  Assert(error.Message == "Script threw System.InvalidOperationException at script line 4: third",
+    $"unexpected message: {error.Message}");
+}
+
+static async Task LoopCompileErrorColumnAsync()
+{
+  var code = "for (var i = 0; i < 2; i++) { var y = Nope; }";
+  var error = await FailAsync(code);
+  var column = code.IndexOf("Nope", StringComparison.Ordinal) + 1;
+  Assert(error.Message == $"C# compilation failed:\n(1,{column}): error CS0103: The name 'Nope' does not exist in the current context",
+    $"unexpected message: {error.Message}");
+}
+
+static async Task DeclarationLoopBodyAsync()
+{
+  var error = await FailAsync("while (false) var z = 1;\nreturn 0;");
+  Assert(error.Code == "CIVIL3D.COMPILATION_ERROR" && error.Message.Contains("CS1023", StringComparison.Ordinal),
+    $"unexpected message: {error.Message}");
 }
 
 static void Assert(bool condition, string message)

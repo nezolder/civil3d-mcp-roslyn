@@ -147,7 +147,7 @@ C3DMCPSTATUS → verify running
 
 Command/save timeouts must resolve to a positive integer of at most `2147483647` milliseconds; invalid or empty settings use the listed defaults. Log levels are `debug`, `info`, `warn` and `error`, ignoring case and surrounding whitespace; unrecognized values use `info`. Invalid timeout warnings omit the supplied value.
 
-Civil requests run as correlated modal commands. The existing serialization gate stays held until the script has disposed its resources and that command ends; completing the script body alone does not release it. A request that has not started within 15 seconds is abandoned, and its late token cannot execute another request. The legacy backend is never selected automatically after a timeout.
+Civil requests run as correlated modal commands. The existing serialization gate stays held until the script has disposed its resources and that command ends; completing the script body alone does not release it. A request that has not started within 15 seconds is abandoned, and its late token cannot execute another request. The legacy backend is never selected automatically after a timeout. Every loop in a script checks for cancellation at the start of each iteration, so a runaway loop stops at the 120-second script timeout and its transaction is rolled back. When the MCP server closes the connection, for example after its own command timeout, a request that has not started is dropped and a running script stops at its next loop iteration, also without committing. Long single Civil API calls cannot be interrupted.
 
 ## Multiple Civil 3D instances
 

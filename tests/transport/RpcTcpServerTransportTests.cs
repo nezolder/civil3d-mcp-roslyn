@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -16,6 +18,8 @@ internal static class RpcTcpServerTransportTests
       ("connection close before LF never reaches handler", MissingDelimiterAsync),
       ("exact response limit is framed", ExactResponseLimitAsync),
       ("oversized post-execution response becomes bounded error", OversizedResponseAsync),
+      ("client closing before the response cancels the request", PeerCloseCancelsRequestAsync),
+      ("watched connection still answers a completed request", WatchedConnectionAnswersAsync),
     };
 
     foreach (var (name, run) in tests)
@@ -163,6 +167,97 @@ internal static class RpcTcpServerTransportTests
     Assert(response != null, "error response must be a JSON object");
     Assert(response!["error"]?["code"]?.GetValue<string>() == expectedCode, "unexpected error code");
     Assert(response["id"]?.GetValue<string?>() == expectedId, "request id must be preserved when known");
+  }
+
+  private static async Task PeerCloseCancelsRequestAsync()
+  {
+    var (server, client) = await ConnectLoopbackAsync();
+    using (server)
+    using (client)
+    {
+      var handlerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var handlerCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+      var processing = RpcTcpServer.ProcessStreamAsync(
+        server.GetStream(),
+        async (_, cancellationToken) =>
+        {
+          handlerStarted.SetResult();
+          try
+          {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+          }
+          catch (OperationCanceledException)
+          {
+            handlerCancelled.SetResult();
+            throw;
+          }
+          return "{}";
+        },
+        CancellationToken.None,
+        watchForPeerClose: true
+      );
+
+      await client.GetStream().WriteAsync(StrictUtf8.GetBytes("{\"id\":\"gone\"}\n"));
+      await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+      client.Close();
+
+      await handlerCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+      await processing.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+  }
+
+  private static async Task WatchedConnectionAnswersAsync()
+  {
+    var (server, client) = await ConnectLoopbackAsync();
+    using (server)
+    using (client)
+    {
+      var tokenWasCancelled = false;
+      var processing = RpcTcpServer.ProcessStreamAsync(
+        server.GetStream(),
+        async (_, cancellationToken) =>
+        {
+          await Task.Delay(50);
+          tokenWasCancelled = cancellationToken.IsCancellationRequested;
+          return "{\"jsonrpc\":\"2.0\",\"id\":\"kept\",\"result\":\"ok\"}";
+        },
+        CancellationToken.None,
+        watchForPeerClose: true
+      );
+
+      var clientStream = client.GetStream();
+      await clientStream.WriteAsync(StrictUtf8.GetBytes("{\"id\":\"kept\"}\n"));
+      var received = new MemoryStream();
+      var buffer = new byte[256];
+      while (received.Length == 0 || received.GetBuffer()[received.Length - 1] != (byte)'\n')
+      {
+        var read = await clientStream.ReadAsync(buffer).AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert(read > 0, "the response must arrive before the connection closes");
+        received.Write(buffer, 0, read);
+      }
+      await processing.WaitAsync(TimeSpan.FromSeconds(5));
+
+      Assert(!tokenWasCancelled, "an open connection must not cancel its request");
+      var response = JsonNode.Parse(received.ToArray()[..^1]) as JsonObject;
+      Assert(response?["result"]?.GetValue<string>() == "ok", "the response must be delivered");
+    }
+  }
+
+  private static async Task<(TcpClient Server, TcpClient Client)> ConnectLoopbackAsync()
+  {
+    var listener = new TcpListener(IPAddress.Loopback, 0);
+    listener.Start();
+    try
+    {
+      var client = new TcpClient();
+      var accepting = listener.AcceptTcpClientAsync();
+      await client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+      return (await accepting, client);
+    }
+    finally
+    {
+      listener.Stop();
+    }
   }
 
   private static void Assert(bool condition, string message)

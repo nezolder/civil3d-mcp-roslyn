@@ -97,7 +97,8 @@ public static class RoslynExecutor
     string code,
     ScriptContext context,
     InternalBenchmarkMeasurement? benchmarkMeasurement,
-    OperationProgress? progress = null)
+    OperationProgress? progress = null,
+    CancellationToken cancellationToken = default)
   {
     progress?.SetStage(OperationStage.PreparingScript);
     // Validate with sandbox
@@ -109,12 +110,20 @@ public static class RoslynExecutor
     if (!cacheHit)
     {
       progress?.SetStage(OperationStage.CompilingScript);
-      script = CSharpScript.Create<object>(code, GetOptions(), typeof(ScriptContext));
+      var options = GetOptions();
+      var instrumented = ScriptInstrumentation.AddCancellationCheckpoints(code);
+      script = CSharpScript.Create<object>(instrumented, options, typeof(ScriptContext));
       bool failed;
       try
       {
-        var diagnostics = script.Compile(); // Pre-compile for better error messages
-        failed = diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+        failed = HasErrors(script.Compile()); // Pre-compile for better error messages
+        if (failed && !string.Equals(instrumented, code, StringComparison.Ordinal))
+        {
+          // Report errors at positions in the caller's own text, and never let
+          // a checkpoint turn a valid script into a failing one.
+          script = CSharpScript.Create<object>(code, options, typeof(ScriptContext));
+          failed = HasErrors(script.Compile());
+        }
         benchmarkMeasurement?.RecordCompilationAttempt(failed);
       }
       catch
@@ -126,14 +135,24 @@ public static class RoslynExecutor
       if (!failed) _scriptCache.Add(code, script);
     }
 
-    // Execute with timeout
-    using var cts = new CancellationTokenSource(Timeout);
+    // Execute with timeout. Loop checkpoints also observe the caller's token,
+    // which the TCP server cancels when the client disconnects.
+    using var timeout = new CancellationTokenSource(Timeout);
+    using var cts = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
+    var previousToken = ScriptCancellation.Token;
+    ScriptCancellation.Token = cts.Token;
 
     try
     {
       progress?.SetStage(OperationStage.RunningScript);
       var result = await script!.RunAsync(context, cts.Token);
       return result.ReturnValue;
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+      // The client is gone. The exception still unwinds before any commit, so
+      // the transaction is rolled back; there is nobody left to answer.
+      throw;
     }
     catch (OperationCanceledException)
     {
@@ -158,7 +177,14 @@ public static class RoslynExecutor
         ScriptDiagnostics.DescribeRuntimeFailure(script!, ex)
       );
     }
+    finally
+    {
+      ScriptCancellation.Token = previousToken;
+    }
   }
+
+  private static bool HasErrors(IEnumerable<Diagnostic> diagnostics)
+    => diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
 
   internal static int CachedScriptCount => _scriptCache.Count;
 
