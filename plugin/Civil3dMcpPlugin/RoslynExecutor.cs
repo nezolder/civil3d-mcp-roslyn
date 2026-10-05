@@ -32,10 +32,7 @@ public static class RoslynExecutor
   /// </summary>
   private static ScriptOptions GetOptions()
   {
-    // Collect assemblies from the current AppDomain (Civil 3D loads everything)
-    var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies()
-      .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-      .ToArray();
+    var loadedAssemblies = GetReferenceAssemblies();
 
     lock (_optionsSync)
     {
@@ -47,6 +44,15 @@ public static class RoslynExecutor
       return _options;
     }
   }
+
+  /// <summary>
+  /// Assemblies scripts can reference: everything loaded from a file in the
+  /// current AppDomain (Civil 3D loads everything). In-memory script
+  /// assemblies have no location and are left out.
+  /// </summary>
+  internal static Assembly[] GetReferenceAssemblies() => AppDomain.CurrentDomain.GetAssemblies()
+    .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+    .ToArray();
 
   /// <summary>
   /// Build ScriptOptions with all necessary references and imports.
@@ -73,9 +79,7 @@ public static class RoslynExecutor
         "Autodesk.Civil.DatabaseServices",
         "Autodesk.Civil.Settings"
       )
-      .WithAllowUnsafe(false)
-      // Line numbers for runtime failures; compiler messages are unchanged.
-      .WithEmitDebugInformation(true);
+      .WithAllowUnsafe(false);
 
     return options;
   }
@@ -151,7 +155,7 @@ public static class RoslynExecutor
       // the exception type and the failing script line.
       throw new JsonRpcDispatchException(
         "CIVIL3D.TRANSACTION_FAILED",
-        ScriptDiagnostics.DescribeRuntimeFailure(ex)
+        ScriptDiagnostics.DescribeRuntimeFailure(script!, ex)
       );
     }
   }

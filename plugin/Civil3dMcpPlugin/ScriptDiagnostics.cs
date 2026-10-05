@@ -1,8 +1,11 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Emit;
 using Microsoft.CodeAnalysis.Scripting;
 
 namespace Civil3DMcpPlugin;
@@ -17,12 +20,12 @@ internal static class ScriptDiagnostics
   private const int MaximumSimilarMembers = 5;
   private const int MaximumNamespaces = 3;
 
-  // Roslyn loads each compiled script as an in-memory assembly named
-  // "ℛ*<guid>#<submission>-<n>"; only those frames are caller code.
-  private const string ScriptAssemblyPrefix = "ℛ*";
-
   // Missing-type hints only look where Civil 3D scripts find their types.
   private static readonly string[] HintNamespaceRoots = { "Autodesk", "System" };
+
+  private static readonly object _typeIndexSync = new();
+  private static IReadOnlyDictionary<string, string[]>? _typeIndex;
+  private static int _typeIndexAssemblyCount = -1;
 
   public static string DescribeCompilationFailure(Script script, IReadOnlyList<Diagnostic> diagnostics)
   {
@@ -38,10 +41,18 @@ internal static class ScriptDiagnostics
     return message.ToString();
   }
 
-  public static string DescribeRuntimeFailure(Exception exception)
+  public static string DescribeRuntimeFailure(Script script, Exception exception)
   {
     var error = Unwrap(exception);
-    var line = FindScriptLine(error) ?? FindScriptLine(exception);
+    int? line = null;
+    try
+    {
+      line = FindScriptLine(script.GetCompilation(), error, exception);
+    }
+    catch (Exception)
+    {
+      // The line is best effort. Type and message are still reported.
+    }
     var location = line is int value ? $" at script line {value}" : string.Empty;
     return $"Script threw {error.GetType().FullName}{location}: {error.Message}";
   }
@@ -58,7 +69,7 @@ internal static class ScriptDiagnostics
         var hint = diagnostic.Id switch
         {
           "CS1061" or "CS0117" => DescribeMissingMember(compilation, diagnostic),
-          "CS0246" or "CS0103" => DescribeMissingType(compilation, diagnostic),
+          "CS0246" or "CS0103" => DescribeMissingType(diagnostic),
           _ => null,
         };
         if (hint is not null && !hints.Contains(hint)) hints.Add(hint);
@@ -100,7 +111,7 @@ internal static class ScriptDiagnostics
     return $"{typeName} has no member '{missing}'. Similar members, including inherited: {string.Join(", ", similar)}.";
   }
 
-  private static string? DescribeMissingType(Compilation compilation, Diagnostic diagnostic)
+  private static string? DescribeMissingType(Diagnostic diagnostic)
   {
     var tree = diagnostic.Location.SourceTree;
     if (tree is null) return null;
@@ -112,33 +123,69 @@ internal static class ScriptDiagnostics
       .Identifier.ValueText;
     if (string.IsNullOrEmpty(name)) return null;
 
-    var namespaces = compilation.GlobalNamespace.GetNamespaceMembers()
-      .Where(root => HintNamespaceRoots.Contains(root.Name, StringComparer.Ordinal))
-      .SelectMany(root => NamespacesDeclaringPublicType(root, name))
-      .Distinct(StringComparer.Ordinal)
-      .OrderBy(ns => ns, StringComparer.Ordinal)
-      .Take(MaximumNamespaces)
-      .ToList();
+    var namespaces = NamespacesDeclaringPublicType(name);
     if (namespaces.Count == 0) return null;
 
     return $"'{name}' is a type in {string.Join(", ", namespaces)}. " +
       $"Add a using line such as `using {namespaces[0]};` or write the full name.";
   }
 
-  private static IEnumerable<string> NamespacesDeclaringPublicType(INamespaceSymbol root, string typeName)
+  /// <summary>
+  /// Namespaces that declare a public top-level type of this name. Walking the
+  /// compiler's namespace symbols took most of a second per error in Civil 3D,
+  /// so the names are indexed once per set of loaded assemblies instead.
+  /// </summary>
+  private static IReadOnlyList<string> NamespacesDeclaringPublicType(string typeName)
   {
-    var pending = new Stack<INamespaceSymbol>();
-    pending.Push(root);
-    while (pending.Count > 0)
+    var assemblies = RoslynExecutor.GetReferenceAssemblies();
+    IReadOnlyDictionary<string, string[]> index;
+    lock (_typeIndexSync)
     {
-      var current = pending.Pop();
-      if (current.GetTypeMembers(typeName).Any(type => type.DeclaredAccessibility == Accessibility.Public))
+      if (_typeIndex is null || _typeIndexAssemblyCount != assemblies.Length)
       {
-        yield return current.ToDisplayString();
+        _typeIndex = BuildTypeIndex(assemblies);
+        _typeIndexAssemblyCount = assemblies.Length;
       }
-      foreach (var child in current.GetNamespaceMembers()) pending.Push(child);
+      index = _typeIndex;
     }
+    return index.TryGetValue(typeName, out var namespaces)
+      ? namespaces.Take(MaximumNamespaces).ToList()
+      : Array.Empty<string>();
   }
+
+  private static IReadOnlyDictionary<string, string[]> BuildTypeIndex(IEnumerable<Assembly> assemblies)
+  {
+    var namespacesByName = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+    foreach (var assembly in assemblies)
+    {
+      Type[] types;
+      try
+      {
+        types = assembly.GetExportedTypes();
+      }
+      catch (Exception)
+      {
+        // A host assembly whose dependencies cannot load offers no hints.
+        continue;
+      }
+
+      foreach (var type in types)
+      {
+        if (type.IsNested || type.Namespace is not { } ns || !IsHintNamespace(ns)) continue;
+        var tick = type.Name.IndexOf('`');
+        var name = tick < 0 ? type.Name : type.Name[..tick];
+        if (!namespacesByName.TryGetValue(name, out var namespaces))
+        {
+          namespacesByName[name] = namespaces = new SortedSet<string>(StringComparer.Ordinal);
+        }
+        namespaces.Add(ns);
+      }
+    }
+    return namespacesByName.ToDictionary(pair => pair.Key, pair => pair.Value.ToArray(), StringComparer.Ordinal);
+  }
+
+  private static bool IsHintNamespace(string ns) => HintNamespaceRoots.Any(root =>
+    ns.Length == root.Length ? ns == root : ns.StartsWith(root + ".", StringComparison.Ordinal));
 
   private static IEnumerable<string> GetMemberNames(ITypeSymbol type)
   {
@@ -213,14 +260,44 @@ internal static class ScriptDiagnostics
     }
   }
 
-  private static int? FindScriptLine(Exception exception)
+  /// <summary>
+  /// Maps the failing script frame to a source line. Scripts run without debug
+  /// information, which cost about 200 ms per compilation in Civil 3D; only
+  /// after a failure is the same compilation emitted again with a PDB, which
+  /// yields the same method tokens and IL offsets.
+  /// </summary>
+  private static int? FindScriptLine(Compilation compilation, params Exception[] exceptions)
   {
-    foreach (var frame in new StackTrace(exception, fNeedFileInfo: true).GetFrames())
+    var frames = exceptions
+      .Distinct()
+      .SelectMany(exception => new StackTrace(exception, fNeedFileInfo: false).GetFrames())
+      .Where(frame => frame.GetILOffset() != StackFrame.OFFSET_UNKNOWN
+        && frame.GetMethod()?.Module.Assembly.GetName().Name == compilation.AssemblyName)
+      .ToList();
+    if (frames.Count == 0) return null;
+
+    using var peStream = new MemoryStream();
+    using var pdbStream = new MemoryStream();
+    var emitted = compilation.Emit(
+      peStream,
+      pdbStream,
+      options: new EmitOptions(debugInformationFormat: DebugInformationFormat.PortablePdb));
+    if (!emitted.Success) return null;
+
+    pdbStream.Position = 0;
+    using var pdb = MetadataReaderProvider.FromPortablePdbStream(pdbStream);
+    var reader = pdb.GetMetadataReader();
+    foreach (var frame in frames)
     {
-      var assemblyName = frame.GetMethod()?.DeclaringType?.Assembly.GetName().Name;
-      if (assemblyName?.StartsWith(ScriptAssemblyPrefix, StringComparison.Ordinal) != true) continue;
-      var line = frame.GetFileLineNumber();
-      if (line > 0) return line;
+      var method = (MethodDefinitionHandle)MetadataTokens.EntityHandle(frame.GetMethod()!.MetadataToken);
+      int? line = null;
+      foreach (var point in reader.GetMethodDebugInformation(method).GetSequencePoints())
+      {
+        if (point.IsHidden) continue;
+        if (point.Offset > frame.GetILOffset()) break;
+        line = point.StartLine;
+      }
+      if (line is not null) return line;
     }
     return null;
   }
