@@ -20,6 +20,12 @@ import {
 import { expectedDrawingSchema } from "./expectedDrawing.js";
 import { instanceIdSchema } from "./instanceSelection.js";
 import {
+  ScriptSourceOptions,
+  resolveScriptCode,
+  skillNameSchema,
+  skillParamsSchema,
+} from "./scriptSource.js";
+import {
   createOperationAuditContext,
   logOperationFailure,
   logOperationSuccess,
@@ -47,7 +53,7 @@ export const SCRIPT_RULES =
  * Same globals as civil3d_execute but safe for data retrieval.
  * Use this for listing objects, getting properties, analyzing data, etc.
  */
-export function registerQueryTool(server: McpServer) {
+export function registerQueryTool(server: McpServer, options: ScriptSourceOptions = {}) {
   server.tool(
     "civil3d_query",
     "Execute C# code in Civil 3D in READ-ONLY mode (no changes saved). " +
@@ -56,15 +62,18 @@ export function registerQueryTool(server: McpServer) {
       "Use this for querying data: listing objects, getting properties, analyzing surfaces, etc. " +
       "Omit expectedDrawing only to bootstrap Database.Filename and Database.FingerprintGuid; " +
       "otherwise supply it to guard the active drawing. " +
+      "Instead of code you can pass skill and params to run a read skill whose run_by_name is true. " +
       SCRIPT_RULES,
     {
-      code: z.string().describe(
+      code: z.string().optional().describe(
         "C# code to query data. Has access to Document, CivilDoc, Database, Transaction, Editor. " +
           "Example: var surfaces = new List<object>(); " +
           "foreach (ObjectId id in CivilDoc.GetSurfaceIds()) { " +
           "var s = Transaction.GetObject(id, OpenMode.ForRead) as TinSurface; " +
           'surfaces.Add(new { s.Name, s.Layer }); } return surfaces;'
       ),
+      skill: skillNameSchema,
+      params: skillParamsSchema,
       expectedDrawing: expectedDrawingSchema.optional(),
       instanceId: instanceIdSchema,
     },
@@ -84,14 +93,20 @@ export function registerQueryTool(server: McpServer) {
         );
       }
       const benchmarkFallbackStartedAt = benchmarkTrace ? performance.now() : undefined;
-      const audit = createOperationAuditContext("civil3d_query", args.code, performance.now());
+      let code: string;
+      try {
+        code = resolveScriptCode(args, "civil3d_query", options);
+      } catch (error) {
+        return createStructuredToolErrorResult(error, "Query failed: ");
+      }
+      const audit = createOperationAuditContext("civil3d_query", code, performance.now());
       try {
         const commandResult = await withApplicationConnection(
           async (client) =>
             await client.sendCommand(
               "executeCode",
               {
-                code: args.code,
+                code,
                 readOnly: true,
                 expectedDrawing: args.expectedDrawing,
               },
@@ -130,7 +145,7 @@ export function registerQueryTool(server: McpServer) {
               ? getOrCreateTransportFailureEvent(
                   error,
                   benchmarkTrace,
-                  args.code,
+                  code,
                   performance.now() - benchmarkFallbackStartedAt
                 )
               : undefined,

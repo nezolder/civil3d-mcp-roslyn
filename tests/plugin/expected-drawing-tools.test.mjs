@@ -81,11 +81,11 @@ test("tools expose drawing, instance, idempotency, and post-commit save safeguar
     const query = tools.find((tool) => tool.name === "civil3d_query");
     assert.ok(execute && query);
     assert.ok(execute.inputSchema.required.includes("expectedDrawing"));
-    assert.equal(query.inputSchema.required.includes("expectedDrawing"), false);
+    assert.equal((query.inputSchema.required ?? []).includes("expectedDrawing"), false);
     assert.ok(execute.inputSchema.properties.instanceId);
     assert.ok(query.inputSchema.properties.instanceId);
     assert.equal(execute.inputSchema.required.includes("instanceId"), false);
-    assert.equal(query.inputSchema.required.includes("instanceId"), false);
+    assert.equal((query.inputSchema.required ?? []).includes("instanceId"), false);
     assert.equal(execute.inputSchema.properties.instanceId.pattern, "^[0-9a-fA-F]{32}$");
     assert.ok(execute.inputSchema.properties.idempotencyKey);
     assert.equal(execute.inputSchema.required.includes("idempotencyKey"), false);

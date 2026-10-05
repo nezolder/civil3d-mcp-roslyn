@@ -7,12 +7,13 @@ import { fileURLToPath } from "url";
 import { withApplicationConnection } from "../utils/ConnectionManager.js";
 import { Civil3dMcpError, createStructuredToolErrorResult } from "../errors/structuredError.js";
 import { instanceIdSchema } from "./instanceSelection.js";
+import { isRunnableByName, omitCodeTemplate } from "./skillBinding.js";
 
 const log = createLogger("SkillsTool");
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const SKILLS_DIR = path.resolve(__dirname, "..", "..", "skills");
+export const SKILLS_DIR = path.resolve(__dirname, "..", "..", "skills");
 const DEFAULT_PAGE_LIMIT = 20;
 const MAX_PAGE_LIMIT = 50;
 const MAX_CURSOR_LENGTH = 256;
@@ -49,7 +50,7 @@ interface SkillMetadata {
   }>;
 }
 
-interface SkillFile {
+export interface SkillFile {
   metadata: SkillMetadata;
   content: string;
   filePath: string;
@@ -145,9 +146,11 @@ function extractDiscoveryStrings(yaml: string, key: string): string[] {
   return [...new Set(value.map((item: string) => item.trim()))];
 }
 
-function discoverySummary(metadata: SkillMetadata) {
+function discoverySummary(skill: SkillFile) {
+  const metadata = skill.metadata;
   // Aliases are a search index and are available in get; keep pages compact.
   return {
+    run_by_name: isRunnableByName(skill.content, metadata.parameters),
     workflow_tags: metadata.workflow_tags,
     tested_civil_version: metadata.tested_civil_version,
     validation_summary: metadata.validation_summary,
@@ -196,6 +199,13 @@ function findSkillFiles(dir: string): string[] {
   }
 
   return results;
+}
+
+/** Find one skill by case-insensitive name. */
+export function findSkill(name: string, skillsDirectory = SKILLS_DIR): SkillFile | undefined {
+  return getSkills(undefined, undefined, skillsDirectory).find(
+    (skill) => skill.metadata.name.toLowerCase() === name.toLowerCase()
+  );
 }
 
 /**
@@ -347,7 +357,9 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
       "'get' to read the full skill with code template, or 'api_lookup' to search public metadata from already-loaded Civil 3D host assemblies. " +
       "Search matches every word across metadata, Hungarian/English aliases and workflow tags, ignoring accents and hyphens. " +
       "List/search include write scope, tested Civil version and a scoped validation summary; missing evidence stays null. " +
-      "Skills are pre-built C# patterns you can adapt and execute via civil3d_execute or civil3d_query.",
+      "Skills are pre-built C# patterns you can adapt and execute via civil3d_execute or civil3d_query. " +
+      "When run_by_name is true, read it with get and includeCode=false, then pass skill and params to " +
+      "civil3d_query (read skills) or civil3d_execute (write skills) instead of sending the code.",
     {
       action: z
         .enum(["list", "search", "get", "api_lookup"])
@@ -355,6 +367,10 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
       category: z.string().optional().describe("Filter by category (surfaces, alignments, points, etc.)"),
       query: z.string().optional().describe("Search query for 'search' or 'api_lookup' action"),
       skillName: z.string().optional().describe("Skill name for 'get' action"),
+      includeCode: z
+        .boolean()
+        .optional()
+        .describe("For 'get': false omits the code template (default true). Use it for skills you run by name."),
       assembly: z.string().optional().describe("Allowlisted loaded host assembly filter for api_lookup"),
       namespace: z.string().optional().describe("Namespace prefix filter for api_lookup"),
       instanceId: instanceIdSchema,
@@ -385,7 +401,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
               description: s.metadata.description,
               requires_write: s.metadata.requires_write,
               parameters: s.metadata.parameters.map((p) => p.name),
-              ...discoverySummary(s.metadata),
+              ...discoverySummary(s),
             }));
 
             return {
@@ -426,7 +442,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
               category: s.metadata.category,
               description: s.metadata.description,
               requires_write: s.metadata.requires_write,
-              ...discoverySummary(s.metadata),
+              ...discoverySummary(s),
             }));
 
             return {
@@ -480,7 +496,8 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
                   text: JSON.stringify(
                     {
                       ...skill.metadata,
-                      content: skill.content,
+                      run_by_name: isRunnableByName(skill.content, skill.metadata.parameters),
+                      content: args.includeCode === false ? omitCodeTemplate(skill.content) : skill.content,
                     }),
                 },
               ],
