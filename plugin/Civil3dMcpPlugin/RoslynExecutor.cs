@@ -32,10 +32,7 @@ public static class RoslynExecutor
   /// </summary>
   private static ScriptOptions GetOptions()
   {
-    // Collect assemblies from the current AppDomain (Civil 3D loads everything)
-    var loadedAssemblies = AppDomain.CurrentDomain.GetAssemblies()
-      .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-      .ToArray();
+    var loadedAssemblies = GetReferenceAssemblies();
 
     lock (_optionsSync)
     {
@@ -47,6 +44,15 @@ public static class RoslynExecutor
       return _options;
     }
   }
+
+  /// <summary>
+  /// Assemblies scripts can reference: everything loaded from a file in the
+  /// current AppDomain (Civil 3D loads everything). In-memory script
+  /// assemblies have no location and are left out.
+  /// </summary>
+  internal static Assembly[] GetReferenceAssemblies() => AppDomain.CurrentDomain.GetAssemblies()
+    .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+    .ToArray();
 
   /// <summary>
   /// Build ScriptOptions with all necessary references and imports.
@@ -138,13 +144,23 @@ public static class RoslynExecutor
     }
     catch (CompilationErrorException ex)
     {
-      var errors = string.Join("\n", ex.Diagnostics.Select(d => d.ToString()));
       throw new JsonRpcDispatchException(
         "CIVIL3D.COMPILATION_ERROR",
-        $"C# compilation failed:\n{errors}"
+        ScriptDiagnostics.DescribeCompilationFailure(script!, ex.Diagnostics)
+      );
+    }
+    catch (Exception ex) when (ex is not JsonRpcDispatchException)
+    {
+      // Same code the host already reported for script failures, now with
+      // the exception type and the failing script line.
+      throw new JsonRpcDispatchException(
+        "CIVIL3D.TRANSACTION_FAILED",
+        ScriptDiagnostics.DescribeRuntimeFailure(script!, ex)
       );
     }
   }
+
+  internal static int CachedScriptCount => _scriptCache.Count;
 
   /// <summary>Clear the script cache.</summary>
   public static void ClearCache()
