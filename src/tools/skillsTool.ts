@@ -28,6 +28,8 @@ interface ApiLookupParameters extends Record<string, unknown> {
 interface SkillsToolOptions {
   // Narrow test seam; production always uses the private apiLookup JSON-RPC method.
   apiLookup?: (parameters: ApiLookupParameters, instanceId?: string) => Promise<unknown>;
+  // Internal fixture directory only; this is not a public MCP input.
+  skillsDirectory?: string;
 }
 
 interface SkillMetadata {
@@ -35,6 +37,10 @@ interface SkillMetadata {
   category: string;
   description: string;
   requires_write: boolean;
+  aliases: string[];
+  workflow_tags: string[];
+  tested_civil_version: string | null;
+  validation_summary: string | null;
   parameters: Array<{
     name: string;
     type: string;
@@ -92,6 +98,10 @@ function parseSkillFile(filePath: string): SkillFile | null {
       category: extractYamlValue(yamlBlock, "category") ?? "general",
       description: extractYamlValue(yamlBlock, "description") ?? "",
       requires_write: extractYamlValue(yamlBlock, "requires_write") === "true",
+      aliases: extractDiscoveryStrings(yamlBlock, "aliases"),
+      workflow_tags: extractDiscoveryStrings(yamlBlock, "workflow_tags"),
+      tested_civil_version: extractDiscoveryString(yamlBlock, "tested_civil_version", 40),
+      validation_summary: extractDiscoveryString(yamlBlock, "validation_summary", 280),
       parameters: extractYamlParameters(yamlBlock),
     };
 
@@ -105,6 +115,43 @@ function parseSkillFile(filePath: string): SkillFile | null {
 function extractYamlValue(yaml: string, key: string): string | undefined {
   const match = yaml.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
   return match ? match[1].trim() : undefined;
+}
+
+// Discovery fields use JSON-compatible inline YAML values. Missing or invalid
+// fields stay unknown; they must never manufacture a validation claim.
+function extractDiscoveryJson(yaml: string, key: string): unknown {
+  const match = yaml.match(new RegExp(`^${key}:[ \\t]*(.*)$`, "m"));
+  if (!match) return undefined;
+  try {
+    return JSON.parse(match[1]);
+  } catch {
+    log.warn("Invalid skill discovery field", { key });
+    return undefined;
+  }
+}
+
+function extractDiscoveryString(yaml: string, key: string, maxLength: number): string | null {
+  const value = extractDiscoveryJson(yaml, key);
+  if (typeof value !== "string" || /\p{Cc}/u.test(value)) return null;
+  const text = value.trim();
+  return text.length > 0 && text.length <= maxLength ? text : null;
+}
+
+function extractDiscoveryStrings(yaml: string, key: string): string[] {
+  const value = extractDiscoveryJson(yaml, key);
+  if (!Array.isArray(value) || value.length > 8 || value.some((item) =>
+    typeof item !== "string" || item.trim().length === 0 || item.length > 100 || /\p{Cc}/u.test(item)
+  )) return [];
+  return [...new Set(value.map((item: string) => item.trim()))];
+}
+
+function discoverySummary(metadata: SkillMetadata) {
+  // Aliases are a search index and are available in get; keep pages compact.
+  return {
+    workflow_tags: metadata.workflow_tags,
+    tested_civil_version: metadata.tested_civil_version,
+    validation_summary: metadata.validation_summary,
+  };
 }
 
 function extractYamlParameters(yaml: string): SkillMetadata["parameters"] {
@@ -154,8 +201,8 @@ function findSkillFiles(dir: string): string[] {
 /**
  * Get all available skills, optionally filtered by category or search query.
  */
-function getSkills(category?: string, query?: string): SkillFile[] {
-  const files = findSkillFiles(SKILLS_DIR);
+function getSkills(category?: string, query?: string, skillsDirectory = SKILLS_DIR): SkillFile[] {
+  const files = findSkillFiles(skillsDirectory);
   let skills = files.map(parseSkillFile).filter((s): s is SkillFile => s !== null);
 
   if (category) {
@@ -176,6 +223,8 @@ function getSkills(category?: string, query?: string): SkillFile[] {
           s.metadata.name,
           s.metadata.category,
           s.metadata.description,
+          ...s.metadata.aliases,
+          ...s.metadata.workflow_tags,
           ...s.metadata.parameters.map((p) => `${p.name} ${p.description ?? ""}`),
         ].join(" ")
       );
@@ -187,7 +236,8 @@ function getSkills(category?: string, query?: string): SkillFile[] {
 }
 
 function normalizeSearchText(value: string): string {
-  return value.toLowerCase().replace(/[_\s]+/g, " ").trim();
+  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+    .replace(/[_\s\-\u2010-\u2015]+/g, " ").trim();
 }
 
 function sortSkills(skills: SkillFile[]): SkillFile[] {
@@ -282,6 +332,7 @@ function paginateSkills(skills: SkillFile[], options: PaginationOptions) {
 }
 
 export function registerSkillsTool(server: McpServer, options: SkillsToolOptions = {}) {
+  const skillsDirectory = options.skillsDirectory ?? SKILLS_DIR;
   const apiLookup = options.apiLookup ?? ((parameters: ApiLookupParameters, instanceId?: string) =>
     withApplicationConnection(
       (client) => client.sendCommand("apiLookup", parameters),
@@ -294,6 +345,8 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
     "Browse and read Civil 3D code skills (documented C# code templates). " +
       "Use 'list' to see available skills, 'search' to find by keyword, " +
       "'get' to read the full skill with code template, or 'api_lookup' to search public metadata from already-loaded Civil 3D host assemblies. " +
+      "Search matches every word across metadata, Hungarian/English aliases and workflow tags, ignoring accents and hyphens. " +
+      "List/search include write scope, tested Civil version and a scoped validation summary; missing evidence stays null. " +
       "Skills are pre-built C# patterns you can adapt and execute via civil3d_execute or civil3d_query.",
     {
       action: z
@@ -320,7 +373,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
       try {
         switch (args.action) {
           case "list": {
-            const page = paginateSkills(getSkills(args.category), {
+            const page = paginateSkills(getSkills(args.category, undefined, skillsDirectory), {
               action: "list",
               category: args.category,
               limit: args.limit,
@@ -332,6 +385,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
               description: s.metadata.description,
               requires_write: s.metadata.requires_write,
               parameters: s.metadata.parameters.map((p) => p.name),
+              ...discoverySummary(s.metadata),
             }));
 
             return {
@@ -360,7 +414,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
               };
             }
 
-            const page = paginateSkills(getSkills(args.category, args.query), {
+            const page = paginateSkills(getSkills(args.category, args.query, skillsDirectory), {
               action: "search",
               category: args.category,
               query: args.query,
@@ -371,6 +425,8 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
               name: s.metadata.name,
               category: s.metadata.category,
               description: s.metadata.description,
+              requires_write: s.metadata.requires_write,
+              ...discoverySummary(s.metadata),
             }));
 
             return {
@@ -399,7 +455,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
               };
             }
 
-            const allSkills = getSkills();
+            const allSkills = getSkills(undefined, undefined, skillsDirectory);
             const skill = allSkills.find(
               (s) => s.metadata.name.toLowerCase() === args.skillName!.toLowerCase()
             );

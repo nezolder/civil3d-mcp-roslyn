@@ -3,6 +3,10 @@ name: create_polyline
 category: geometry
 description: Create a 2D or 3D polyline from a list of vertices
 requires_write: true
+aliases: ["2D vagy 3D polivonal készítése csúcspontokból", "create polyline from vertices with optional layer", "polivonal létrehozás megadott koordinátákkal"]
+workflow_tags: ["modeling"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Recipe-specific live coverage is not recorded here; verify the required case before use."
 parameters:
   - name: vertices
     type: array

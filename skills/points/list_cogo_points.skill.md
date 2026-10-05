@@ -3,6 +3,10 @@ name: list_cogo_points
 category: points
 description: List COGO points in the drawing with a configurable result limit
 requires_write: false
+aliases: ["COGO pontok listázása a rajzban", "list existing COGO points with a result limit", "pontleltár Civil rajzból"]
+workflow_tags: ["source_state"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Recipe-specific live coverage is not recorded here; verify the required case before use."
 parameters:
   - name: limit
     type: int

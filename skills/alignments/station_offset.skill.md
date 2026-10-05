@@ -3,6 +3,10 @@ name: station_offset
 category: alignments
 description: Convert between station+offset and X,Y coordinates along an alignment
 requires_write: false
+aliases: ["nyomvonal szelvény-külpont átszámítása koordinátára", "alignment station offset to XY and back", "szelvény és külpont koordináta lekérdezés"]
+workflow_tags: ["coordinate_conversion"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Recipe-specific live coverage is not recorded here; verify the required case before use."
 parameters:
   - name: alignmentName
     type: string

@@ -3,6 +3,10 @@ name: create_surface_profile_view
 category: profiles
 description: Create one full-length dynamic TIN surface profile and one ordinary profile view from explicitly identified local sources
 requires_write: true
+aliases: ["terep hossz-szelvény és profilnézet létrehozása", "create TIN surface profile and profile view", "felületi hossz-szelvény megjelenítése nyomvonalon"]
+workflow_tags: ["drawing_view", "modeling"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 compilation and input checks. Live creation, save and reopen unverified; setup timed out before this recipe ran."
 parameters:
   - name: alignmentHandle
     type: string

@@ -1,8 +1,18 @@
 # Published development status
 
-Updated: 2026-10-02
+Updated: 2026-10-05
 
 This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
+
+## Recipe discovery metadata (2026-10-05)
+
+The 29 stable recipes now carry specific Hungarian/English task aliases, workflow tags, a tested Civil version and a scoped validation summary. List/search expose write scope and concise evidence; aliases are included in the full `get` response. Search normalizes accents and hyphens while preserving all-word matching, category filtering and pagination. See [the catalogue contract](docs/SKILL_CATALOG.md).
+
+The extension is additive. Missing or invalid evidence remains unknown, and exact-key consumers must accept the new fields. Existing names, categories, descriptions, parameter definitions, write requirements and all C# recipe bodies are unchanged. The Node catalogue module changes; the Civil plugin, transport, save and retry contracts are unchanged. A newly started MCP server loads the new behavior; existing servers need a client reconnect/restart.
+
+**Proven offline:** TypeScript typecheck/build, all 24 skill/API Node tests, metadata compilation of 32 Civil 3D 2025 templates, 83 host-free input/math cases and the three-tool/29-skill MCP catalogue check passed. Fixtures cover legacy defaults, quoted inline metadata, CRLF/Unicode, malformed fields and real Hungarian/English task queries. The control-character regression fails before the fix and passes after it. The catalogue checks do not connect to or modify a Civil drawing.
+
+**Unverified:** automatic task selection quality, general latency/token savings and new live engineering cases. The recorded version includes offline API compilation and does not imply live certification. Existing recipe-specific evidence and remaining limitations are preserved.
 
 ## Boundaries and evidence
 

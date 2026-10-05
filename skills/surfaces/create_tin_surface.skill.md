@@ -3,6 +3,10 @@ name: create_tin_surface
 category: surfaces
 description: Create a new TIN surface and optionally add 3D points to it
 requires_write: true
+aliases: ["TIN felület készítése megadott 3D pontokból", "create TIN surface from 3D points", "új terepfelület létrehozása koordinátákból"]
+workflow_tags: ["modeling"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Recipe-specific live coverage is not recorded here; verify the required case before use."
 parameters:
   - name: surfaceName
     type: string

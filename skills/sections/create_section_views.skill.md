@@ -3,6 +3,10 @@ name: create_section_views
 category: sections
 description: Create bounded individual section views from an existing local sample-line group with explicit styles and measured grid placement
 requires_write: true
+aliases: ["keresztszelvény nézetek létrehozása meglévő mintavonalakból", "create individual cross section views from a sample-line group", "keresztszelvény rajzi nézetek elrendezése"]
+workflow_tags: ["drawing_view"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: three individual views, complete saved-state readback with empty bands. Populated bands, reopen and print quality unverified."
 parameters:
   - name: groupHandle
     type: string

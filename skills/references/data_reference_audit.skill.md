@@ -3,6 +3,10 @@ name: data_reference_audit
 category: references
 description: Audit bounded data-reference state for selected Civil 3D object categories in the active drawing
 requires_write: false
+aliases: ["Civil 3D adatkapcsolatok DREF állapotának auditja", "data reference audit by selected object category", "DREF objektumok állapotvizsgálata rajzban"]
+workflow_tags: ["audit"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: local objects and incomplete-scan limits, DBMOD unchanged. Real invalid/stale DREF source states unverified."
 parameters:
   - name: categoryFilter
     type: string

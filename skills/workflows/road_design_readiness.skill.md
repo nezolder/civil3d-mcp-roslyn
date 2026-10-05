@@ -3,6 +3,10 @@ name: road_design_readiness
 category: workflows
 description: Check whether the active drawing has the proven MT_2025 Hungary baseline styles for a basic road-design workflow
 requires_write: false
+aliases: ["MT_2025 Hungary alap úttervezési stíluskészlet ellenőrzése", "check MT_2025 Hungary baseline road-design styles", "magyar alap stílusok jelenlétének vizsgálata"]
+workflow_tags: ["style_check"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: MT_2025 Hungary empty style fixture only, DBMOD unchanged. Other templates and engineering readiness are not proven."
 parameters: []
 ---
 

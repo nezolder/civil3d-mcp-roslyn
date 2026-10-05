@@ -3,6 +3,10 @@ name: selected_objects_summary
 category: drawing
 description: Summarize the currently preselected objects by type and layer with a bounded sample
 requires_write: false
+aliases: ["kijelölt objektumok típus és fólia szerinti összesítése", "selected objects summary by type and layer", "előre kijelölt rajzi elemek összefoglalása"]
+workflow_tags: ["selection_summary"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Live: empty inventory fixture only; data-bearing cases remain unverified."
 parameters:
   - name: limit
     type: int

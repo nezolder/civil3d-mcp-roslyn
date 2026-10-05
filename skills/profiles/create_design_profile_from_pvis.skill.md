@@ -3,6 +3,10 @@ name: create_design_profile_from_pvis
 category: profiles
 description: Create one local design profile from explicit ordered PVIs and optional symmetric parabolic curves
 requires_write: true
+aliases: ["tervezett hossz-szelvény létrehozása jóváhagyott PVIkből", "create design profile from ordered PVIs and curve lengths", "hossz-szelvény készítése megadott töréspontokból"]
+workflow_tags: ["modeling"]
+tested_civil_version: "2025"
+validation_summary: "Offline + live: three PVIs and one symmetric parabola, save and independent reopen. Broader curves and engineering compliance unverified."
 parameters:
   - name: alignmentHandle
     type: string

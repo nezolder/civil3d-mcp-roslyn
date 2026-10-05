@@ -3,6 +3,10 @@ name: list_profiles
 category: profiles
 description: List existing profiles with alignment, station range, elevation range, and reference state
 requires_write: false
+aliases: ["hossz-szelvények listázása nyomvonallal és szelvénytartománnyal", "list profiles with alignment station and elevation ranges", "profilleltár"]
+workflow_tags: ["source_state"]
+tested_civil_version: "2025"
+validation_summary: "Offline: 2025 API compilation. Live: empty inventory fixture only; data-bearing cases remain unverified."
 parameters:
   - name: alignmentName
     type: string
