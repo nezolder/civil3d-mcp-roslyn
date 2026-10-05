@@ -57,6 +57,16 @@ test("binds scalar values as C# literals and keeps omitted defaults", () => {
   assert.equal(code.split("\n").length, TEMPLATE.split("\n").length - 3, "only the code block is returned");
 });
 
+test("binds templates stored with CRLF line endings and keeps them", () => {
+  const code = bindSkillCode("fixture", TEMPLATE.replace(/\n/g, "\r\n"), PARAMETERS,
+    { handle: "1A2B", tolerance: 2, station: 3 });
+  assert.ok(code.includes('var handle = "1A2B";\r\n'));
+  assert.ok(code.includes("var tolerance = 2d;\r\n"));
+  assert.ok(code.includes("var station = 3d;  // Replace\r\n"));
+  assert.equal(code.includes("\r\r"), false);
+  assert.equal(isRunnableByName(TEMPLATE.replace(/\n/g, "\r\n"), PARAMETERS), true);
+});
+
 test("strings can never break out of their literal", () => {
   const hostile = '"; System.IO.File.Delete("x"); //\\\nnext line ő 🚲';
   const code = bind({ handle: hostile, tolerance: 0 });
@@ -191,7 +201,8 @@ test("query and execute send the bound template; invalid sources never reach the
     assert.notEqual(read.isError, true, JSON.stringify(read));
     const sentRead = plugin.executed().at(-1).params;
     assert.equal(sentRead.readOnly, true);
-    assert.ok(sentRead.code.startsWith('var surfaceAHandle = "1A";\nvar surfaceBHandle = "2B";\n' +
+    // Windows checkouts can store recipes with CRLF line endings.
+    assert.ok(sentRead.code.replace(/\r\n/g, "\n").startsWith('var surfaceAHandle = "1A";\nvar surfaceBHandle = "2B";\n' +
       "var samplePoints = new (double x, double y)[] { (1d, 2d) };\nvar tolerance = 0.1d;\nvar detailLimit = 50;"));
 
     const write = await client.callTool({
