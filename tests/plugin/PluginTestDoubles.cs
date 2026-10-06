@@ -64,6 +64,9 @@ public static class RoslynExecutor
     }
   }
 
+  internal static T RunWithScriptCancellation<T>(Func<T> action, CancellationToken cancellationToken)
+    => action();
+
   public static void Reset()
   {
     Volatile.Write(ref _activeCount, 0);

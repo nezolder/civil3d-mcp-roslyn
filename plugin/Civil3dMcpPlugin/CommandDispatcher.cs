@@ -72,7 +72,8 @@ public static class CommandDispatcher
         .GetAwaiter()
         .GetResult();
       progress?.SetStage(OperationStage.SerializingResult);
-      return ResultSerializer.Serialize(rawResult);
+      // A lazy result runs caller code while it is serialized; keep it stoppable.
+      return RoslynExecutor.RunWithScriptCancellation(() => ResultSerializer.Serialize(rawResult), cancellationToken);
     }, write: !readOnly, expectedDrawing, benchmarkMeasurement, saveDrawing, progress, cancellationToken);
   }
 

@@ -192,6 +192,38 @@ public static class RoslynExecutor
     }
   }
 
+  /// <summary>
+  /// Runs work that can execute caller code after the script returned, such
+  /// as serializing a lazy LINQ result, under the same loop checkpoints: a
+  /// fresh script timeout linked with the caller's token.
+  /// </summary>
+  internal static T RunWithScriptCancellation<T>(Func<T> action, CancellationToken cancellationToken)
+  {
+    using var timeout = new CancellationTokenSource(Timeout);
+    using var cts = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
+    var previousToken = ScriptCancellation.Token;
+    ScriptCancellation.Token = cts.Token;
+    try
+    {
+      return action();
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+      throw;
+    }
+    catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+    {
+      throw new JsonRpcDispatchException(
+        "CIVIL3D.TIMEOUT",
+        $"Reading the script result timed out after {Timeout.TotalSeconds}s."
+      );
+    }
+    finally
+    {
+      ScriptCancellation.Token = previousToken;
+    }
+  }
+
   private static bool HasErrors(IEnumerable<Diagnostic> diagnostics)
     => diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
 

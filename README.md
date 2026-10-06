@@ -98,6 +98,12 @@ Code executed via `civil3d_execute` or `civil3d_query` has access to:
 | `Transaction` | `Transaction` | Active transaction |
 | `Editor` | `Editor` | Document editor |
 
+### Return values
+
+Return a value to get it back as JSON. Supported: primitives, strings, `Guid`, dates and times (ISO 8601 text), anonymous objects and classes or records declared in the script (public properties and fields, camelCase names), arrays, lists and any other sequence including LINQ queries without `.ToList()`, tuples (as arrays; element names do not exist at run time), `Dictionary<string, …>`, `ObjectId`, `Handle`, `Point2d/3d` and `Vector2d/3d`. Enums return as numbers. `DBObject` instances and NaN/Infinity are refused.
+
+A collection with more than 1000 items keeps its first 1000, and the reply is then wrapped as `{"result": …, "truncated": [{"path": "$.items", "returned": 1000, "total": 5234}]}`; `total` is `null` for a lazy sequence whose length is unknown. A lazy sequence runs the script's own code while the result is read, still inside the transaction and under the same loop checkpoints and timeout; an exception there is reported with its type and path. Results are also limited to depth 8 and 10000 nodes.
+
 All Civil 3D namespaces are auto-imported.
 
 Committing the `civil3d_execute` transaction changes the open drawing but does not by itself write the DWG file to disk. First identify the active drawing with `civil3d_query`, then pass its full `Database.Filename` and `FingerprintGuid` as `expectedDrawing`; the plugin checks that identity immediately before Civil API access. Set `saveDrawing: true` when the completed change should also be saved. The plugin saves only after the script transaction and document lock are closed; scripts must not call `Database.SaveAs` or queue `QSAVE` themselves. The save request uses a separate 10-minute default timeout and is never retried automatically.

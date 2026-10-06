@@ -17,7 +17,7 @@ internal static class ResultSerializerTests
       ("all supported Autodesk geometry value types have explicit DTOs", AutodeskGeometryValues),
       ("ObjectId null and valid values have stable explicit shapes", ObjectIdValues),
       ("maximum depth is accepted and excess depth is rejected", DepthLimit),
-      ("maximum collection size is accepted and excess items are rejected", CollectionLimit),
+      ("collections over the item limit keep their first items and report the cut", CollectionLimit),
       ("unknown values fail without ToString fallback", UnknownType),
       ("reference cycles fail deterministically", ReferenceCycle),
       ("DBObject values are rejected without reading database paths", DbObjectIsNotReflected),
@@ -132,7 +132,10 @@ internal static class ResultSerializerTests
       "collection at item limit must serialize");
 
     atLimit.Add(ResultSerializer.MaxCollectionItems);
-    AssertSerializationError(() => ResultSerializer.Serialize(atLimit));
+    var wrapped = ResultSerializer.Serialize(new { items = atLimit })!.AsObject();
+    Assert(wrapped["result"]!["items"]!.AsArray().Count == ResultSerializer.MaxCollectionItems,
+      "a long collection must keep exactly the item limit");
+    AssertJson(wrapped["truncated"], "[{\"path\":\"$.items\",\"returned\":1000,\"total\":1001}]");
   }
 
   private static void UnknownType()
