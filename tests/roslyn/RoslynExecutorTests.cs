@@ -27,6 +27,15 @@ var tests = new (string Name, Func<Task> Run)[]
   ("a declaration as loop body stays a compile error", DeclarationLoopBodyAsync),
   ("await is refused with its position before compiling", AwaitIsRefusedAsync),
   ("an identifier named await in a synchronous method is allowed", AwaitIdentifierAllowedAsync),
+  ("LINQ results serialize without ToList", LinqResultsAsync),
+  ("dates and times serialize as ISO 8601 text", DateResultsAsync),
+  ("tuples serialize as arrays", TupleResultsAsync),
+  ("classes and records declared by the script serialize by member", ScriptTypeResultsAsync),
+  ("long lists keep their first items and report the cut", TruncationAsync),
+  ("an endless lazy sequence stops at the limit", EndlessSequenceAsync),
+  ("a failing lazy query reports its exception and path", FailingSequenceAsync),
+  ("a runaway loop inside a lazy result stops at the timeout", RunawayLazyResultAsync),
+  ("unsupported values are still refused", UnsupportedResultsAsync),
 };
 
 foreach (var (name, run) in tests)
@@ -296,6 +305,119 @@ static async Task AwaitIdentifierAllowedAsync()
 {
   var result = await RoslynExecutor.ExecuteAsync("int F() { var @await = 3; return @await; }\nreturn F();", Context());
   Assert(Equals(result, 3), $"unexpected result: {result}");
+}
+
+static async Task<string> ResultJsonAsync(string code)
+{
+  var raw = await RoslynExecutor.ExecuteAsync(code, Context());
+  return RoslynExecutor.RunWithScriptCancellation(() => ResultSerializer.Serialize(raw), default)?.ToJsonString() ?? "null";
+}
+
+static async Task<JsonRpcDispatchException> ResultFailureAsync(string code)
+{
+  try
+  {
+    await ResultJsonAsync(code);
+  }
+  catch (JsonRpcDispatchException ex)
+  {
+    return ex;
+  }
+  throw new InvalidOperationException($"result was expected to fail: {code}");
+}
+
+static void AssertJson(string actual, string expected)
+  => Assert(System.Text.Json.Nodes.JsonNode.DeepEquals(
+      System.Text.Json.Nodes.JsonNode.Parse(actual), System.Text.Json.Nodes.JsonNode.Parse(expected)),
+    $"expected {expected} but got {actual}");
+
+static async Task LinqResultsAsync()
+{
+  AssertJson(await ResultJsonAsync("return new[] { 1, 2, 3 }.Select(x => x * 2);"), "[2,4,6]");
+  AssertJson(await ResultJsonAsync("return new { items = Enumerable.Range(0, 4).Where(i => i % 2 == 1) };"), "{\"items\":[1,3]}");
+  AssertJson(await ResultJsonAsync("return new HashSet<string> { \"a\" };"), "[\"a\"]");
+}
+
+static async Task DateResultsAsync()
+{
+  AssertJson(await ResultJsonAsync(
+    "return new { d = new DateTime(2026, 10, 6, 12, 30, 0, DateTimeKind.Utc), " +
+    "o = new DateTimeOffset(2026, 10, 6, 12, 30, 0, TimeSpan.FromHours(2)), " +
+    "t = TimeSpan.FromMinutes(90), day = new DateOnly(2026, 10, 6), at = new TimeOnly(8, 5) };"),
+    "{\"d\":\"2026-10-06T12:30:00.0000000Z\",\"o\":\"2026-10-06T12:30:00.0000000+02:00\"," +
+    "\"t\":\"01:30:00\",\"day\":\"2026-10-06\",\"at\":\"08:05:00.0000000\"}");
+}
+
+static async Task TupleResultsAsync()
+{
+  AssertJson(await ResultJsonAsync("return (1, \"a\", 2.5);"), "[1,\"a\",2.5]");
+  AssertJson(await ResultJsonAsync("return new[] { (x: 1, y: 2) }.Select(p => p).ToList();"), "[[1,2]]");
+  AssertJson(await ResultJsonAsync("return Tuple.Create(true, 3);"), "[true,3]");
+}
+
+static async Task ScriptTypeResultsAsync()
+{
+  AssertJson(await ResultJsonAsync(
+    "class Row { public string Name { get; set; } = \"a\"; public int Count = 2; private int Hidden = 9; }\n" +
+    "record Pt(double X, double Y);\n" +
+    "return new { row = new Row(), pt = new Pt(1.5, 2), rows = new List<Row> { new Row { Name = \"b\" } } };"),
+    "{\"row\":{\"name\":\"a\",\"count\":2},\"pt\":{\"x\":1.5,\"y\":2},\"rows\":[{\"name\":\"b\",\"count\":2}]}");
+}
+
+static async Task TruncationAsync()
+{
+  var json = System.Text.Json.Nodes.JsonNode.Parse(await ResultJsonAsync(
+    "return new { items = Enumerable.Range(0, 1500).ToList(), small = new[] { 1, 2 } };"))!.AsObject();
+  var items = json["result"]!["items"]!.AsArray();
+  Assert(items.Count == ResultSerializer.MaxCollectionItems && (int)items[999]! == 999, "the first items must be kept in order");
+  Assert(json["result"]!["small"]!.AsArray().Count == 2, "short lists are untouched");
+  AssertJson(json["truncated"]!.ToJsonString(), "[{\"path\":\"$.items\",\"returned\":1000,\"total\":1500}]");
+  AssertJson(await ResultJsonAsync("return Enumerable.Range(0, 1000).Count();"), "1000");
+}
+
+static async Task EndlessSequenceAsync()
+{
+  var json = System.Text.Json.Nodes.JsonNode.Parse(await ResultJsonAsync(
+    "IEnumerable<int> Forever() { var i = 0; while (true) yield return i++; }\nreturn Forever();"))!.AsObject();
+  Assert(json["result"]!.AsArray().Count == ResultSerializer.MaxCollectionItems, "an endless sequence must stop at the limit");
+  AssertJson(json["truncated"]!.ToJsonString(), "[{\"path\":\"$\",\"returned\":1000,\"total\":null}]");
+}
+
+static async Task FailingSequenceAsync()
+{
+  var error = await ResultFailureAsync("return new { values = new[] { 1, 0 }.Select(x => 10 / x) };");
+  Assert(error.Code == "CIVIL3D.RESULT_SERIALIZATION_FAILED", $"unexpected code: {error.Code}");
+  Assert(error.Message.StartsWith("Enumerating the result at $.values failed: System.DivideByZeroException:", StringComparison.Ordinal),
+    $"unexpected message: {error.Message}");
+}
+
+static async Task RunawayLazyResultAsync()
+{
+  var previous = RoslynExecutor.Timeout;
+  RoslynExecutor.Timeout = TimeSpan.FromMilliseconds(200);
+  try
+  {
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    var error = await ResultFailureAsync("return Enumerable.Range(0, 1).Select(i => { while (true) { } return i; });")
+      .WaitAsync(TimeSpan.FromSeconds(10));
+    Assert(error.Code == "CIVIL3D.TIMEOUT", $"unexpected code: {error.Code}");
+    Assert(watch.Elapsed < TimeSpan.FromSeconds(5), "the lazy loop must stop promptly");
+    Assert(ScriptCancellation.Token == default, "the checkpoint token must be reset after serialization");
+  }
+  finally
+  {
+    RoslynExecutor.Timeout = previous;
+  }
+}
+
+static async Task UnsupportedResultsAsync()
+{
+  Assert((await ResultFailureAsync("return new Autodesk.AutoCAD.DatabaseServices.DBObject();")).Code == "CIVIL3D.RESULT_SERIALIZATION_FAILED",
+    "DBObject must stay refused");
+  Assert((await ResultFailureAsync("return double.NaN;")).Code == "CIVIL3D.RESULT_SERIALIZATION_FAILED",
+    "NaN must stay refused");
+  Assert((await ResultFailureAsync("return new { list = new[] { new Autodesk.AutoCAD.DatabaseServices.DBObject() }.Select(x => x) };")).Message
+    .Contains("DBObject", StringComparison.Ordinal), "a DBObject inside a lazy result must stay refused");
 }
 
 static void Assert(bool condition, string message)

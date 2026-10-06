@@ -14,6 +14,9 @@ namespace Civil3DMcpPlugin;
 /// <summary>
 /// Converts the raw Roslyn return value to a small, bounded JSON-safe DTO.
 /// Only explicitly supported Autodesk value types and ordinary JSON shapes are allowed.
+/// A list longer than <see cref="MaxCollectionItems"/> keeps its first items, and the
+/// whole result is then wrapped as <c>{"result": ..., "truncated": [...]}</c> so the
+/// cut is never silent.
 /// </summary>
 internal static class ResultSerializer
 {
@@ -25,10 +28,18 @@ internal static class ResultSerializer
   {
     try
     {
-      return new SerializationState().Convert(value, depth: 0);
+      var state = new SerializationState();
+      var result = state.Convert(value, depth: 0, path: "$");
+      if (state.Truncations.Count == 0) return result;
+      return new JsonObject
+      {
+        ["result"] = result,
+        ["truncated"] = new JsonArray(state.Truncations.ToArray()),
+      };
     }
-    catch (JsonRpcDispatchException)
+    catch (Exception ex) when (ex is JsonRpcDispatchException or OperationCanceledException)
     {
+      // Cancellation comes from a loop checkpoint in caller code; the executor reports it.
       throw;
     }
     catch
@@ -50,7 +61,10 @@ internal static class ResultSerializer
     private readonly HashSet<object> _activeReferences = new(ReferenceEqualityComparer.Instance);
     private int _totalNodes;
 
-    public JsonNode? Convert(object? value, int depth)
+    /// <summary>One entry per list that was cut to <see cref="MaxCollectionItems"/>.</summary>
+    public List<JsonNode> Truncations { get; } = new();
+
+    public JsonNode? Convert(object? value, int depth, string path)
     {
       EnsureDepth(depth);
       ConsumeNode();
@@ -58,9 +72,9 @@ internal static class ResultSerializer
       return value switch
       {
         null => null,
-        JsonNode node => ConvertJsonNode(node, depth),
-        JsonDocument document => ConvertJsonElement(document.RootElement, depth),
-        JsonElement element => ConvertJsonElement(element, depth),
+        JsonNode node => ConvertJsonNode(node, depth, path),
+        JsonDocument document => ConvertJsonElement(document.RootElement, depth, path),
+        JsonElement element => ConvertJsonElement(element, depth, path),
         bool boolean => JsonValue.Create(boolean),
         string text => JsonValue.Create(text),
         char character => JsonValue.Create(character.ToString()),
@@ -76,6 +90,11 @@ internal static class ResultSerializer
         double number => CreateFiniteNumber(number),
         decimal number => JsonValue.Create(number),
         Guid guid => JsonValue.Create(guid.ToString("D", CultureInfo.InvariantCulture)),
+        DateTime dateTime => JsonValue.Create(dateTime.ToString("o", CultureInfo.InvariantCulture)),
+        DateTimeOffset dateTimeOffset => JsonValue.Create(dateTimeOffset.ToString("o", CultureInfo.InvariantCulture)),
+        DateOnly date => JsonValue.Create(date.ToString("o", CultureInfo.InvariantCulture)),
+        TimeOnly time => JsonValue.Create(time.ToString("o", CultureInfo.InvariantCulture)),
+        TimeSpan timeSpan => JsonValue.Create(timeSpan.ToString("c", CultureInfo.InvariantCulture)),
         Enum enumValue => ConvertEnum(enumValue),
         ObjectId objectId => ConvertObjectId(objectId),
         Handle handle => ConvertHandle(handle),
@@ -86,57 +105,52 @@ internal static class ResultSerializer
         DBObject => throw SerializationError(
           "Returning AutoCAD DBObject instances is not supported; return explicit scalar values or ObjectId instead."
         ),
-        IDictionary dictionary => ConvertDictionary(dictionary, depth),
-        IList list => ConvertList(list, depth),
-        _ when IsAnonymousType(value.GetType()) => ConvertAnonymousObject(value, depth),
+        IDictionary dictionary => ConvertDictionary(dictionary, depth, path),
+        IList list => ConvertList(list, depth, path),
+        ITuple tuple => ConvertTuple(tuple, depth, path),
+        IEnumerable sequence => ConvertSequence(sequence, depth, path),
+        _ when IsAnonymousType(value.GetType()) || IsScriptDefinedType(value.GetType())
+          => ConvertObjectMembers(value, depth, path),
         _ => throw SerializationError(
           $"Result type '{GetTypeName(value)}' is not supported."
         ),
       };
     }
 
-    private JsonNode ConvertJsonNode(JsonNode node, int depth)
+    private JsonNode ConvertJsonNode(JsonNode node, int depth, string path)
     {
       return node switch
       {
         JsonObject jsonObject => TrackReference(jsonObject, () =>
-          ConvertJsonObject(jsonObject, depth)),
+          ConvertJsonObject(jsonObject, depth, path)),
         JsonArray jsonArray => TrackReference(jsonArray, () =>
-          ConvertJsonArray(jsonArray, depth)),
-        JsonValue jsonValue => ConvertJsonValue(jsonValue, depth),
+          ConvertJsonArray(jsonArray, depth, path)),
+        JsonValue jsonValue => ConvertJsonValue(jsonValue, depth, path),
         _ => throw SerializationError(
           $"JSON node type '{node.GetType().FullName}' is not supported."
         ),
       };
     }
 
-    private JsonNode ConvertJsonObject(JsonObject source, int depth)
+    private JsonNode ConvertJsonObject(JsonObject source, int depth, string path)
     {
       EnsureCollectionSize(source.Count);
       var result = new JsonObject();
       foreach (var property in source)
       {
-        AddProperty(result, property.Key, Convert(property.Value, depth + 1));
+        AddProperty(result, property.Key, Convert(property.Value, depth + 1, PropertyPath(path, property.Key)));
       }
       return result;
     }
 
-    private JsonNode ConvertJsonArray(JsonArray source, int depth)
-    {
-      EnsureCollectionSize(source.Count);
-      var result = new JsonArray();
-      foreach (var item in source)
-      {
-        result.Add(Convert(item, depth + 1));
-      }
-      return result;
-    }
+    private JsonNode ConvertJsonArray(JsonArray source, int depth, string path)
+      => ConvertItems(source, source.Count, depth, path);
 
-    private JsonNode ConvertJsonValue(JsonValue value, int depth)
+    private JsonNode ConvertJsonValue(JsonValue value, int depth, string path)
     {
       if (value.TryGetValue<JsonElement>(out var element))
       {
-        return ConvertJsonElement(element, depth);
+        return ConvertJsonElement(element, depth, path);
       }
       if (value.TryGetValue<bool>(out var boolean)) return JsonValue.Create(boolean)!;
       if (value.TryGetValue<string>(out var text)) return JsonValue.Create(text)!;
@@ -160,7 +174,7 @@ internal static class ResultSerializer
       throw SerializationError("JSON values must contain only supported JSON primitives.");
     }
 
-    private JsonNode ConvertJsonElement(JsonElement element, int depth)
+    private JsonNode ConvertJsonElement(JsonElement element, int depth, string path)
     {
       switch (element.ValueKind)
       {
@@ -181,20 +195,12 @@ internal static class ResultSerializer
           foreach (var property in element.EnumerateObject())
           {
             EnsureCollectionSize(++count);
-            AddProperty(result, property.Name, Convert(property.Value, depth + 1));
+            AddProperty(result, property.Name, Convert(property.Value, depth + 1, PropertyPath(path, property.Name)));
           }
           return result;
         }
         case JsonValueKind.Array:
-        {
-          EnsureCollectionSize(element.GetArrayLength());
-          var result = new JsonArray();
-          foreach (var item in element.EnumerateArray())
-          {
-            result.Add(Convert(item, depth + 1));
-          }
-          return result;
-        }
+          return ConvertItems(element.EnumerateArray().Select(item => (object)item), element.GetArrayLength(), depth, path);
         default:
           throw SerializationError(
             $"JSON value kind '{element.ValueKind}' is not supported."
@@ -202,7 +208,7 @@ internal static class ResultSerializer
       }
     }
 
-    private JsonNode ConvertDictionary(IDictionary source, int depth)
+    private JsonNode ConvertDictionary(IDictionary source, int depth, string path)
     {
       EnsureCollectionSize(source.Count);
       return TrackReference(source, () =>
@@ -214,58 +220,115 @@ internal static class ResultSerializer
           {
             throw SerializationError("Dictionary result keys must be strings.");
           }
-          AddProperty(result, key, Convert(entry.Value, depth + 1));
+          AddProperty(result, key, Convert(entry.Value, depth + 1, PropertyPath(path, key)));
         }
         return result;
       });
     }
 
-    private JsonNode ConvertList(IList source, int depth)
-    {
-      EnsureCollectionSize(source.Count);
-      return TrackReference(source, () =>
-      {
-        var result = new JsonArray();
-        for (var index = 0; index < source.Count; index++)
-        {
-          result.Add(Convert(source[index], depth + 1));
-        }
-        return result;
-      });
-    }
+    private JsonNode ConvertList(IList source, int depth, string path)
+      => TrackReference(source, () => ConvertItems(source, source.Count, depth, path));
 
-    private JsonNode ConvertAnonymousObject(object source, int depth)
-    {
-      return TrackReference(source, () =>
-      {
-        var properties = source.GetType()
-          .GetProperties(BindingFlags.Instance | BindingFlags.Public)
-          .Where(property => property.GetIndexParameters().Length == 0)
-          .OrderBy(property => property.MetadataToken)
-          .ToArray();
-        EnsureCollectionSize(properties.Length);
+    /// <summary>
+    /// Any other sequence, such as a LINQ query without ToList(). Enumeration
+    /// runs the caller's query here, inside the open transaction, and stops
+    /// after one item past the limit, so an endless sequence still ends.
+    /// </summary>
+    private JsonNode ConvertSequence(IEnumerable source, int depth, string path)
+      => TrackReference(source, () => ConvertItems(source, total: null, depth, path));
 
-        var result = new JsonObject();
-        foreach (var property in properties)
+    /// <summary>Tuples keep their element order; their names do not exist at run time.</summary>
+    private JsonNode ConvertTuple(ITuple source, int depth, string path)
+      => TrackReference(source, () =>
+        ConvertItems(Enumerable.Range(0, source.Length).Select(index => source[index]), source.Length, depth, path));
+
+    private JsonNode ConvertItems(IEnumerable source, int? total, int depth, string path)
+    {
+      var result = new JsonArray();
+      var enumerator = source.GetEnumerator();
+      try
+      {
+        while (true)
         {
-          object? propertyValue;
+          bool hasItem;
+          object? item;
           try
           {
-            propertyValue = property.GetValue(source);
+            hasItem = enumerator.MoveNext();
+            item = hasItem ? enumerator.Current : null;
           }
-          catch
+          catch (Exception ex) when (ex is not (JsonRpcDispatchException or OperationCanceledException))
           {
             throw SerializationError(
-              $"Anonymous result property '{property.Name}' could not be read safely."
+              $"Enumerating the result at {path} failed: {ex.GetType().FullName}: {ex.Message}"
+            );
+          }
+          if (!hasItem) break;
+
+          if (result.Count == MaxCollectionItems)
+          {
+            Truncations.Add(new JsonObject
+            {
+              ["path"] = path,
+              ["returned"] = MaxCollectionItems,
+              ["total"] = total,
+            });
+            break;
+          }
+          result.Add(Convert(item, depth + 1, $"{path}[{result.Count}]"));
+        }
+      }
+      finally
+      {
+        (enumerator as IDisposable)?.Dispose();
+      }
+      return result;
+    }
+
+    /// <summary>
+    /// Anonymous objects, and classes or records the script itself declares:
+    /// their public instance properties and fields, in declaration order.
+    /// </summary>
+    private JsonNode ConvertObjectMembers(object source, int depth, string path)
+    {
+      return TrackReference(source, () =>
+      {
+        var type = source.GetType();
+        var properties = type
+          .GetProperties(BindingFlags.Instance | BindingFlags.Public)
+          .Where(property => property.GetIndexParameters().Length == 0 && property.GetMethod != null)
+          .OrderBy(property => property.MetadataToken)
+          .Select(property => (property.Name, Read: (Func<object?>)(() => property.GetValue(source))));
+        var fields = type
+          .GetFields(BindingFlags.Instance | BindingFlags.Public)
+          .OrderBy(field => field.MetadataToken)
+          .Select(field => (field.Name, Read: (Func<object?>)(() => field.GetValue(source))));
+        var members = properties.Concat(fields).ToArray();
+        EnsureCollectionSize(members.Length);
+
+        var result = new JsonObject();
+        foreach (var (name, read) in members)
+        {
+          object? memberValue;
+          try
+          {
+            memberValue = read();
+          }
+          catch (Exception ex) when (ex is not OperationCanceledException)
+          {
+            throw SerializationError(
+              $"Result property '{name}' could not be read safely."
             );
           }
 
-          var jsonName = JsonNamingPolicy.CamelCase.ConvertName(property.Name);
-          AddProperty(result, jsonName, Convert(propertyValue, depth + 1));
+          var jsonName = JsonNamingPolicy.CamelCase.ConvertName(name);
+          AddProperty(result, jsonName, Convert(memberValue, depth + 1, PropertyPath(path, jsonName)));
         }
         return result;
       });
     }
+
+    private static string PropertyPath(string path, string name) => $"{path}.{name}";
 
     private static JsonNode ConvertEnum(Enum value)
     {
@@ -356,6 +419,11 @@ internal static class ResultSerializer
         _activeReferences.Remove(value);
       }
     }
+
+    // Roslyn loads each compiled script as an in-memory assembly named
+    // "ℛ*<guid>#<submission>-<n>"; only types declared by the caller live there.
+    private static bool IsScriptDefinedType(Type type)
+      => type.Assembly.GetName().Name?.StartsWith("ℛ*", StringComparison.Ordinal) == true;
 
     private static bool IsAnonymousType(Type type)
       => type.IsSealed

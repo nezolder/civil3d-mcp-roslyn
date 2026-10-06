@@ -15,6 +15,7 @@
   <ItemGroup>
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\InternalBenchmarkMeasurement.cs" Link="InternalBenchmarkMeasurement.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\OperationProgress.cs" Link="OperationProgress.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ResultSerializer.cs" Link="ResultSerializer.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\RoslynExecutor.cs" Link="RoslynExecutor.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptCache.cs" Link="ScriptCache.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptCancellation.cs" Link="ScriptCancellation.cs" />
