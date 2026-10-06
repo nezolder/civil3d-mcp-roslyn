@@ -1,8 +1,23 @@
 # Published development status
 
-Updated: 2026-10-05
+Updated: 2026-10-06
 
 This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
+
+## Runtime and named-recipe updates (2026-10-05–06)
+
+The accepted runtime now includes a bounded compiled-script cache keyed by exact source text, compilation/member/namespace diagnostics and runtime source-line reporting, cooperative loop cancellation, explicit rejection of asynchronous `await`, and broader bounded result serialization. Reviewed recipes can also run by name with validated parameters through the existing query/execute tools. The public surface remains exactly three tools; dynamic Roslyn execution, drawing guards, host-managed saving and the no-automatic-retry contract remain.
+
+- **Proven in scoped offline and Civil 3D 2025 checks:** exact-code cache hits, compilation-error repeats followed by successful queries, and bounded eviction/collision tests. The [cache report](docs/validation/script-cache-2026-10-05.md) records the tested implementation and comparison baseline. General speedups and long-session memory behavior remain **Unverified**.
+- **Proven in scoped checks:** a valid typed missing-member probe, namespace hints and runtime line reporting. The [initial diagnostics report](docs/validation/script-error-diagnostics-2026-10-05.md) and [retest](docs/validation/script-error-diagnostics-retest-2026-10-05.md) preserve the constructor limitation and residual unknown-name latency. A source-equivalent hint is not proof that every malformed expression can be corrected.
+- **Proven in disposable live fixtures:** loop timeout/disconnect cancellation, write rollback and abandonment of a queued request. The [cancellation report](docs/validation/script-cancellation-2026-10-05.md) records the independent readbacks. Long individual Civil API calls are not interruptible, and these cases do not prove recovery of arbitrary native operations.
+- **Proven in scoped live checks:** `await` is rejected with `MCP0001`, and subsequent ordinary and named queries succeed. See the [await-rejection report](docs/validation/await-rejection-91c55ad-2026-10-05.md).
+- **Proven in scoped offline and live checks:** named execution of reviewed recipes, bound-parameter validation and the corrected Windows CRLF regression. The [named-recipe retest](docs/validation/run-by-name-9324388-2026-10-05.md) and [saved named-write/readback report](docs/validation/run-by-name-live-write-2026-10-05.md) establish one polyline-to-alignment write, save and independent reopen, plus specific populated reads. Broader production-model coverage and other named writes remain **Unverified**.
+- **Proven in scoped checks at `b75e765`:** LINQ/lazy sequences, dates, tuples, script-defined return types and explicit collection-truncation metadata. The [serialization report](docs/validation/result-serialization-b75e765-2026-10-06.md) records 104 .NET cases and the targeted live query results. The live run did not repeat the offline runaway-lazy-loop cases; arbitrary custom getters and general performance remain **Unverified**.
+
+The later accepted dependency-only update installs `proxy-addr 2.0.8`; the retained local receipt records a successful Node build, 101 Node tests, a fresh three-tool MCP smoke check and zero known npm advisories at that check. The Civil plugin source was unchanged by that dependency update. These are recorded results, not a fresh live certification of every capability. Existing desktop clients still need reconnect/restart after Node module or tool-description updates.
+
+The older sections below retain their original dates and evidence scopes. The linked reports provide the newer runtime details; historical test totals must not be treated as the current suite size.
 
 ## Recipe discovery metadata (2026-10-05)
 
