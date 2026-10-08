@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["térfogatfelület létrehozása két felület között", "create TIN volume surface between existing ground and design", "földmunka mennyiség térfogatfelülettel", "bevágás feltöltés térfogatfelület"]
 workflow_tags: ["modeling", "quantity_read"]
 tested_civil_version: "2025"
-validation_summary: "Offline: 2025 API compilation. Live creation, factor handling and dynamic update after source changes are not yet recorded."
+validation_summary: "Live 2025: created by name with factors 1.2/0.9 and saved; surface, sources, factors and volumes persisted after document reopen. After a source edit it reported out of date and returned new volumes after rebuild."
 parameters:
   - name: baseSurfaceHandle
     type: string
@@ -153,7 +153,7 @@ return new {
 ## Usage Notes
 
 - This is a write-capable template: confirm the full drawing identity first and run it with `civil3d_execute`; use `saveDrawing: true` only for an approved save.
-- The volume surface stays in the drawing. It references its base and comparison surfaces, so after the road model or ground changes it can be rebuilt and read again with `bounded_volumes` or `surface_volume` instead of being recreated.
+- The volume surface stays in the drawing. It references its base and comparison surfaces, so after the road model or ground changes it can be rebuilt and read again with `bounded_volumes` or `surface_volume` instead of being recreated. Until it is rebuilt, `isOutOfDate` is true and the old volumes are returned; with automatic rebuild off, rebuild it in Civil 3D first.
 - Base is subtracted from comparison: where the comparison surface is lower than the base, the volume is cut; where it is higher, fill. Choose the order deliberately (for example existing ground as base, corridor datum as comparison).
 - Volumes are in drawing units cubed (m³ in a metric drawing). Adjusted values apply the cut and fill factors; unadjusted values do not.
 - Source surfaces may be data-shortcut references; they are not modified.

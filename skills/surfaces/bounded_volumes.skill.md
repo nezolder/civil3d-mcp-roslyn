@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["határolt térfogat építményenként", "bounded volumes inside closed polylines on a volume surface", "földmunka mennyiség zárt határvonalon belül", "térfogat kiosztása építményekre"]
 workflow_tags: ["quantity_read"]
 tested_civil_version: "2025"
-validation_summary: "Offline: 2025 API compilation. Live bounded results, arc sampling and factor handling against the Civil 3D Bounded Volumes command are not yet recorded."
+validation_summary: "Live 2025: raw cut/fill matched the native Bounded Volumes dashboard and whole-surface unadjusted totals; adjusted = raw x factor. Arc boundary converged with 64 chords. Stale flag and rebuild readback checked. Polyline3d boundaries untested."
 parameters:
   - name: volumeSurfaceHandle
     type: string
@@ -19,7 +19,7 @@ parameters:
   - name: arcSegments
     type: int
     required: false
-    description: Chords used per arc segment of a Polyline boundary, 4 to 64 (default 16)
+    description: Chords used per arc segment of a Polyline boundary, 4 to 256 (default 64)
 ---
 
 ## Code Template
@@ -27,7 +27,7 @@ parameters:
 ```csharp
 var volumeSurfaceHandle = "VOLUME_SURFACE_HANDLE";
 var boundaries = new (string handle, string label)[] { };
-var arcSegments = 16;
+var arcSegments = 64;
 
 var isHandle = new Func<string, bool>(value =>
     !string.IsNullOrWhiteSpace(value)
@@ -42,9 +42,9 @@ if (boundaries == null || boundaries.Length < 1 || boundaries.Length > 200
 {
     return new { success = false, error = "Supply 1..200 boundaries with distinct hexadecimal handles and labels of at most 255 characters." };
 }
-if (arcSegments < 4 || arcSegments > 64)
+if (arcSegments < 4 || arcSegments > 256)
 {
-    return new { success = false, error = "arcSegments must be 4..64." };
+    return new { success = false, error = "arcSegments must be 4..256." };
 }
 
 ObjectId? ResolveId(string handle)
@@ -106,15 +106,25 @@ if (volumeSurface == null || volumeSurface.IsErased)
     return (points, null);
 }
 
-double PlanArea(List<Point3d> closed)
+// Shoelace area relative to the first vertex, so large drawing coordinates
+// do not cancel out.
+double BoundaryArea(List<Point3d> closed)
 {
+    var origin = closed[0];
     var twice = 0.0;
-    for (var i = 0; i < closed.Count - 1; i++) twice += closed[i].X * closed[i + 1].Y - closed[i + 1].X * closed[i].Y;
+    for (var i = 1; i < closed.Count - 2; i++)
+    {
+        twice += (closed[i].X - origin.X) * (closed[i + 1].Y - origin.Y)
+            - (closed[i + 1].X - origin.X) * (closed[i].Y - origin.Y);
+    }
     return Math.Abs(twice) / 2;
 }
 
+var cutFactor = volumeSurface.CutFactor;
+var fillFactor = volumeSurface.FillFactor;
+
 var rows = new List<object>();
-double totalCut = 0, totalFill = 0, totalNet = 0;
+double totalCut = 0, totalFill = 0;
 var measured = 0;
 foreach (var boundary in boundaries)
 {
@@ -138,15 +148,17 @@ foreach (var boundary in boundaries)
         rows.Add(new {
             boundary.label,
             boundary.handle,
-            planArea = PlanArea(polygon),
+            boundaryArea = BoundaryArea(polygon),
             vertexCount = polygon.Count - 1,
             cut = info.Cut,
             fill = info.Fill,
-            net = info.Net
+            net = info.Net,
+            adjustedCut = info.Cut * cutFactor,
+            adjustedFill = info.Fill * fillFactor,
+            adjustedNet = info.Fill * fillFactor - info.Cut * cutFactor
         });
         totalCut += info.Cut;
         totalFill += info.Fill;
-        totalNet += info.Net;
         measured++;
     }
     catch (System.Exception ex)
@@ -161,12 +173,19 @@ return new {
         name = volumeSurface.Name,
         handle = volumeSurface.Handle.ToString(),
         isOutOfDate = volumeSurface.IsOutOfDate,
-        cutFactor = volumeSurface.CutFactor,
-        fillFactor = volumeSurface.FillFactor
+        cutFactor,
+        fillFactor
     },
     measured,
     failed = boundaries.Length - measured,
-    totals = new { cut = totalCut, fill = totalFill, net = totalNet },
+    totals = new {
+        cut = totalCut,
+        fill = totalFill,
+        net = totalFill - totalCut,
+        adjustedCut = totalCut * cutFactor,
+        adjustedFill = totalFill * fillFactor,
+        adjustedNet = totalFill * fillFactor - totalCut * cutFactor
+    },
     boundaries = rows
 };
 ```
@@ -175,7 +194,9 @@ return new {
 
 - Run this template through `civil3d_query`; it only reads the volume surface and the boundaries.
 - Draw one closed polyline per structure or area, then pass each handle with a label, for example `[{"handle": "2F3", "label": "1. híd"}]`. A failing boundary is reported in its own row and does not stop the others.
-- Results come from Civil 3D's bounded-volume calculation (`GetBoundedVolumes`) in drawing units cubed. `cut`, `fill` and `net` are returned exactly as Civil 3D reports them; whether the surface's cut and fill factors are already applied must be confirmed against the Civil 3D Bounded Volumes command before using them as adjusted quantities.
+- Results come from Civil 3D's bounded-volume calculation (`GetBoundedVolumes`) in drawing units cubed. `cut`, `fill` and `net` are raw quantities: in Civil 3D 2025 they matched the surface's unadjusted volumes and the native Bounded Volumes rows with factors 1.0. `adjustedCut`, `adjustedFill` and `adjustedNet` apply the volume surface's cut and fill factors. `net` is signed, fill minus cut.
+- Native Bounded Volumes rows in the Volumes Dashboard have their own factors (1.0 by default) and do not inherit the volume surface's factors; set them to match before comparing adjusted values.
 - Totals simply add the measured rows. Overlapping boundaries are counted twice; parts of a boundary outside the volume surface contribute nothing.
+- `boundaryArea` is the plan area of the boundary polygon. Where the boundary extends beyond the volume surface it is larger than the area actually measured.
 - If `isOutOfDate` is true the volume surface has not been rebuilt since its source surfaces changed. Rebuild it in Civil 3D, then read again.
-- Arc segments of a lightweight `Polyline` are approximated with `arcSegments` chords; `Polyline3d` vertices are used as they are, in plan only.
+- Arc segments of a lightweight `Polyline` are approximated with `arcSegments` chords; `Polyline3d` vertices are used as they are, in plan only. The native dashboard uses a mid-ordinate distance instead, so curved boundaries agree only approximately: with 64 chords the cut differed by less than 0.001% from the native result at mid-ordinate 0.001. Raise `arcSegments` for long, large-radius arcs.
