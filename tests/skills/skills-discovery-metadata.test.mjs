@@ -127,7 +127,7 @@ test("real catalogue aliases cover engineering work words without claiming new o
 test("pages expose scoped evidence and write flags, with aliases only in get", async () => {
   await withClient(async (call) => {
     const inventory = await call({ action: "list", limit: 50 });
-    assert.equal(inventory.total, 31);
+    assert.equal(inventory.total, 33);
     for (const item of inventory.skills) {
       assert.ok(item.workflow_tags.length > 0, item.name);
       assert.equal(item.tested_civil_version, "2025", item.name);
