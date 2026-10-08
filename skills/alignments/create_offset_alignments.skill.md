@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["eltolt nyomvonal létrehozása", "create offset alignments left and right of a centerline", "burkolatszél tengely eltolással", "párhuzamos nyomvonal adott távolságra"]
 workflow_tags: ["modeling"]
 tested_civil_version: "2025"
-validation_summary: "Live 2025: -3.5/+3.5 offsets full length and over a station range followed a native parent PI edit within 1e-8 and survived save and reopen. Default Geometry lock moved a partial range with the geometry; the lockToStations option is not yet live-tested."
+validation_summary: "Live 2025: -3.5/+3.5 offsets full length and over a station range followed a native parent PI edit within 1e-8 and survived save and reopen. Default Geometry lock moved a partial range with the geometry; lockToStations kept 1200..2600 after the edit and reopen."
 parameters:
   - name: parentAlignmentHandle
     type: string
