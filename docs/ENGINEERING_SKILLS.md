@@ -7,7 +7,7 @@ The [catalogue contract](SKILL_CATALOG.md) explains task aliases, workflow tags,
 | Work problem | Recipe | Inputs and scope |
 | --- | --- | --- |
 | Create a design profile from approved breakpoints | `create_design_profile_from_pvis` | One local alignment, explicit PVI stations/elevations/symmetric curve lengths, named existing styles. Creates a new profile. |
-| Place individual cross-section views | `create_section_views` | One existing sampled group, station window, named view/band styles, origin and grid gaps. Creates at most 50 views; existing views refuse the selected batch. |
+| Place individual cross-section views (for group editing and sheets prefer `create_section_view_group`) | `create_section_views` | One existing sampled group, station window, named view/band styles, origin and grid gaps. Creates at most 50 views; existing views refuse the selected batch. |
 | Read Civil's material quantities | `material_quantity_report` | Exact sample-line group, existing material-list GUID and station window. Reads native cumulative/incremental results; does not calculate or replace material lists. |
 | Compare elevations at specified XY locations | `compare_surface_elevations` | Two TIN handles, at most 2000 explicit points and a tolerance. Reports signed B−A statistics, coverage and missing/error counts. |
 | Inspect data-reference state | `data_reference_audit` | One category or all seven declared categories. Reports reference problems and unknown/unscanned counts separately from capped detail rows. |
