@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["eltolt nyomvonal létrehozása", "create offset alignments left and right of a centerline", "burkolatszél tengely eltolással", "párhuzamos nyomvonal adott távolságra"]
 workflow_tags: ["modeling"]
 tested_civil_version: "2025"
-validation_summary: "Live 2025: -3.5/+3.5 offsets full length and over a station range followed a native parent PI edit within 1e-8 and survived save and reopen. A partial range stays attached to geometry, not to fixed stations."
+validation_summary: "Live 2025: -3.5/+3.5 offsets full length and over a station range followed a native parent PI edit within 1e-8 and survived save and reopen. Default Geometry lock moved a partial range with the geometry; the lockToStations option is not yet live-tested."
 parameters:
   - name: parentAlignmentHandle
     type: string
@@ -32,6 +32,10 @@ parameters:
     type: double
     required: false
     description: Parent station where the offsets end when fullLength is false (default 0)
+  - name: lockToStations
+    type: bool
+    required: false
+    description: false keeps Civil 3D's Geometry lock mode, where the start and end follow the parent geometry; true uses Station lock mode, which keeps them at the given parent stations after parent edits (default false)
 ---
 
 ## Code Template
@@ -43,6 +47,7 @@ var alignmentStyleName = "";
 var fullLength = true;
 var startStation = 0.0;
 var endStation = 0.0;
+var lockToStations = false;
 
 var isName = new Func<string, bool>(value =>
     !string.IsNullOrWhiteSpace(value) && value == value.Trim() && value.Length <= 255
@@ -132,10 +137,19 @@ foreach (var row in offsets)
     {
         throw new InvalidOperationException($"Offset alignment '{row.name}' creation returned an invalid object ID.");
     }
-    var alignment = (Alignment)Transaction.GetObject(id, OpenMode.ForRead);
+    var alignment = (Alignment)Transaction.GetObject(id, OpenMode.ForWrite);
     if (alignment.AlignmentType.ToString() != "Offset")
     {
         throw new InvalidOperationException($"'{row.name}' was not created as an offset alignment.");
+    }
+    var info = alignment.OffsetAlignmentInfo;
+    if (lockToStations)
+    {
+        info.LockMode = AlignmentLockModeType.Station;
+        if (info.LockMode != AlignmentLockModeType.Station)
+        {
+            throw new InvalidOperationException($"'{row.name}' did not accept the Station lock mode.");
+        }
     }
     created.Add(new {
         name = alignment.Name,
@@ -144,6 +158,10 @@ foreach (var row in offsets)
         side = row.offset < 0 ? "left" : "right",
         style = alignment.StyleName,
         layer = alignment.Layer,
+        updateMode = info.UpdateMode.ToString(),
+        lockMode = info.LockMode.ToString(),
+        lockToStartStation = info.LockToStartStation,
+        lockToEndStation = info.LockToEndStation,
         startStation = alignment.StartingStation,
         endStation = alignment.EndingStation,
         length = alignment.Length
@@ -169,6 +187,6 @@ return new {
 - This is a write-capable template: confirm the full drawing identity first and run it with `civil3d_execute`; use `saveDrawing: true` only for an approved save.
 - Pass `offsets` as rows `["Bal burkolatszél", -3.5]` or objects `{"name": ..., "offset": ...}`. Negative offsets are left of the parent in its stationing direction, positive offsets right.
 - Offset alignments stay linked to the parent: when the parent's geometry changes, Civil 3D updates them, so they need not be recreated after a centerline edit.
-- With `fullLength: false` the offsets cover only `startStation..endStation` of the parent. Civil 3D locks that range to the parent geometry by default, so after a parent edit that changes its length the range follows the geometry and its parent stations can shift (in the live test the end moved from 2600 to about 2636). Change the offset parameters in Civil 3D if the range must stay at fixed stations.
+- With `fullLength: false` the offsets cover only `startStation..endStation` of the parent. By default Civil 3D uses Geometry lock mode: the start and end stay attached to the nearest parent geometry points, so after a parent edit that changes its length their parent stations can shift (in the live test the end moved from 2600 to about 2636). Set `lockToStations: true` to use Station lock mode, which keeps them at the given parent stations. The result reports each alignment's `lockMode`.
 - Widenings, transitions and curb returns are outside scope; add them in Civil 3D afterwards.
 - Every row is created in one transaction; if one fails nothing is kept and the error names it.
