@@ -42,6 +42,6 @@ The recipes were independently written using Civil 3D 2025 API members. They ado
 | [Joshua8-AI/Civil3D-mcp, 8d1d1924](https://github.com/Joshua8-AI/Civil3D-mcp/tree/8d1d19249b4245957330acd8af1af90d27b9c0a9) | MIT | Read-only data-reference and corridor investigation |
 | [7pka111223-jpg/C3D, 6b821fe6](https://github.com/7pka111223-jpg/C3D/tree/6b821fe627728c45547f37fc9eb2503c6b5bb255) | Apache-2.0 | Existing native QTO reporting |
 | [xuantinhnbs-rgb/civil3d-mcp, ca2f6a33](https://github.com/xuantinhnbs-rgb/civil3d-mcp/tree/ca2f6a336e80e2745a217c77eed8f768378e751b) | MIT | Sampled surface comparison with coverage/error reporting |
-| [JhulVF/Civil3d-mcp-tcce, 84ded7f](https://github.com/JhulVF/civil3d-mcp-tcce/tree/84ded7f) | MIT | Volume surfaces with cut/fill factors and per-boundary volumes (`create_tin_volume_surface`, `bounded_volumes`) |
+| [JhulVF/Civil3d-mcp-tcce, 84ded7f](https://github.com/JhulVF/civil3d-mcp-tcce/tree/84ded7f) | MIT | Volume surfaces with cut/fill factors and per-boundary volumes (`create_tin_volume_surface`, `bounded_volumes`); alignment layout from PIs and offset alignments (`create_alignment_from_pis`, `create_offset_alignments`) |
 
 Future copying of source code needs a separate license/notice review. No source from repositories without a clear license is included. PKT manipulation and automatic target/DREF repair remain outside this phase.
