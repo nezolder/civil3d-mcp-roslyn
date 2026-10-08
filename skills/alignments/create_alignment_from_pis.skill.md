@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["nyomvonal létrehozása töréspontokból ívsugárral és átmeneti ívvel", "create alignment from PI coordinates with radii and spirals", "tengely felvétele PI pontokból klotoiddal", "alignment by PIs tangent intersection layout"]
 workflow_tags: ["modeling"]
 tested_civil_version: "2025"
-validation_summary: "Offline: run-by-name binding and syntax check. Live creation, curve fitting and stationing in Civil 3D 2025 are not yet recorded."
+validation_summary: "Live 2025: five PIs with an arc, an asymmetric SCS and a corner at start station 1000; radii, spirals and station kept after a native PI grip edit, save and reopen. An oversized radius was rejected before writing."
 parameters:
   - name: alignmentName
     type: string

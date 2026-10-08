@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["eltolt nyomvonal létrehozása", "create offset alignments left and right of a centerline", "burkolatszél tengely eltolással", "párhuzamos nyomvonal adott távolságra"]
 workflow_tags: ["modeling"]
 tested_civil_version: "2025"
-validation_summary: "Offline: run-by-name binding and syntax check. Live creation, station range and dynamic update after parent edits in Civil 3D 2025 are not yet recorded."
+validation_summary: "Live 2025: -3.5/+3.5 offsets full length and over a station range followed a native parent PI edit within 1e-8 and survived save and reopen. A partial range stays attached to geometry, not to fixed stations."
 parameters:
   - name: parentAlignmentHandle
     type: string
@@ -169,5 +169,6 @@ return new {
 - This is a write-capable template: confirm the full drawing identity first and run it with `civil3d_execute`; use `saveDrawing: true` only for an approved save.
 - Pass `offsets` as rows `["Bal burkolatszél", -3.5]` or objects `{"name": ..., "offset": ...}`. Negative offsets are left of the parent in its stationing direction, positive offsets right.
 - Offset alignments stay linked to the parent: when the parent's geometry changes, Civil 3D updates them, so they need not be recreated after a centerline edit.
-- With `fullLength: false` the offsets cover only `startStation..endStation` of the parent. Widenings, transitions and curb returns are outside scope; add them in Civil 3D afterwards.
+- With `fullLength: false` the offsets cover only `startStation..endStation` of the parent. Civil 3D locks that range to the parent geometry by default, so after a parent edit that changes its length the range follows the geometry and its parent stations can shift (in the live test the end moved from 2600 to about 2636). Change the offset parameters in Civil 3D if the range must stay at fixed stations.
+- Widenings, transitions and curb returns are outside scope; add them in Civil 3D afterwards.
 - Every row is created in one transaction; if one fails nothing is kept and the error names it.
