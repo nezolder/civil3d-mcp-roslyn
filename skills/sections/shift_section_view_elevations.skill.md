@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["keresztszelvény nézetek alapszintjének eltolása", "shift section view elevation range keeping view height", "keresztszelvény magassági ablak lejjebb tolása", "section view datum below lowest ground", "keresztszelvény nézetmagasság laphoz igazítása", "fit section view height to sheet below lowest ground"]
 workflow_tags: ["drawing_view"]
 tested_civil_version: "2025"
-validation_summary: "Offline: run-by-name binding and syntax check. Live shift, below-lowest mode and height preservation in Civil 3D 2025 are not yet recorded."
+validation_summary: "Offline + live (Civil 3D 2025, disposable copy): shift, belowLowest and belowLowest with a sheet height on 17 views, saved and read back; notFitting flagged ground above the top. Manual-range views and print fit unverified."
 parameters:
   - name: sampleLineGroupHandle
     type: string

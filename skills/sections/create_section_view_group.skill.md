@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["keresztszelvény nézetcsoport létrehozása mintavonalakból", "create native section view group with production sheet template", "keresztszelvények lapra rendezése sablonból", "section view group with band sources"]
 workflow_tags: ["drawing_view"]
 tested_civil_version: "2025"
-validation_summary: "Offline: run-by-name binding and syntax check. Live group creation, production placement, band sources and names in Civil 3D 2025 are not yet recorded."
+validation_summary: "Offline + live (Civil 3D 2025, disposable copy): one native group of 17 draft-placed views with view style, band set, ground band sources and station names, saved and read back. Template placement, group plot style and print fit unverified."
 parameters:
   - name: sampleLineGroupHandle
     type: string

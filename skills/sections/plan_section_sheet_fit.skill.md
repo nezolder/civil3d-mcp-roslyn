@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["keresztszelvény nézetek laphoz illesztése", "melyik lapra férnek el a keresztszelvények", "section view sheet fit for A4 or A3 layouts", "keresztszelvény nézetmagasság és szélesség a lapmérethez"]
 workflow_tags: ["drawing_view", "source_state"]
 tested_civil_version: "2025"
-validation_summary: "Offline: run-by-name binding and syntax check. Live reading of template viewports, band heights and the fit plan in Civil 3D 2025 is not yet recorded."
+validation_summary: "Offline + live (Civil 3D 2025): six layouts of a real view template read; A4 landscape 1:100 with four 10 mm bands gave 15 m, as on a production sheet. Multi-viewport layouts, imperial drawings and print fit unverified."
 parameters:
   - name: sampleLineGroupHandle
     type: string
@@ -260,4 +260,9 @@ return new {
 - A sample line fits a sheet when its width (along its vertices) fits the view width and its reference section's relief plus `clearance` below and `topClearance` above fits the elevation height. `tooWideCount` and `tooTallCount` count the misses, and `notFitting` lists the first 10 with the reason.
 - `recommended` is the smallest viewport where every planned sample line fits. Choosing between, say, A4 portrait, A4 landscape and A3 landscape is still an engineering decision: a wider sheet allows wider sample lines, a taller one more relief or utilities.
 - `shiftParams` are the values for `shift_section_view_elevations` (`mode: "belowLowest"` with `clearance` and `height`) after the views exist; use the same template layout with `create_section_view_group`, and at most `viewWidth` as the views' total width.
-- Band heights are plotted sizes; in a metre drawing they are read as paper metres. The view title, axis labels and grid annotation outside the graph are not counted, so keep some `topClearance` and check the result in a plot preview.
+- Sheets come from the template's viewport geometry and scale, not from layout or file names, so a renamed template or added sheet sizes need no change here; only `templatePath` and `layoutNames` follow them.
+- Limits:
+  - Each layout is planned with one model viewport, its largest; layouts that show several sections in several viewports are not planned separately.
+  - The drawing is assumed to be in metres with millimetre paper: `CustomScale` is read as paper millimetres per metre and band heights as paper metres. Imperial drawings are untested.
+  - The view title, axis labels and grid annotation outside the graph are not counted, so keep some `topClearance` and check the result in a plot preview.
+- Office conventions such as the usual template, clearance and preferred styles belong to the caller's own instructions; this recipe only takes them as parameters.

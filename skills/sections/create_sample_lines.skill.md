@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["mintavonalak létrehozása szelvényenként", "create sample lines at stations with left and right swath widths", "mintavonal csoport keresztszelvényekhez", "sample lines from a station list or interval"]
 workflow_tags: ["modeling", "drawing_view"]
 tested_civil_version: "2025"
-validation_summary: "Offline: run-by-name binding and syntax check. Live creation, vertex verification, sampled sources and names in Civil 3D 2025 are not yet recorded."
+validation_summary: "Offline + live (Civil 3D 2025, disposable copy): 37 lines from interval, geometry points and explicit stations, saved, reopened; vertices, widths and ground sections read back. Station equations and skew lines unverified."
 parameters:
   - name: alignmentHandle
     type: string
