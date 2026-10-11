@@ -160,6 +160,9 @@ if ((sectionViewStyleName != "" && viewStyleId.IsNull) || (bandSetStyleName != "
     || (groupPlotStyleName != "" && plotStyleId.IsNull))
     return new { success = false, error = "A named section view, band set or group plot style does not exist.", sectionViewStyleName, bandSetStyleName, groupPlotStyleName };
 
+// GetSectionSources needs the group open for write; on a read-open group
+// Civil 3D 2025 ends with a fatal eNotOpenForWrite. Nothing is changed yet.
+group.UpgradeOpen();
 // Band sources must be sampled sources of this group.
 var sampledSourceIds = new HashSet<ObjectId>();
 foreach (SectionSource source in group.GetSectionSources())
@@ -220,7 +223,6 @@ if (viewNamePrefix != "")
 
 // One native group: group-level editing and sheet placement need it.
 // Any failure below throws, so nothing is kept.
-group.UpgradeOpen();
 SectionViewGroup viewGroup;
 using (var range = new SectionViewGroupCreationRangeOptions(group.ObjectId))
 {

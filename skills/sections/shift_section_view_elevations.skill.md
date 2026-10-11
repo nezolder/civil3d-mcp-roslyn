@@ -95,6 +95,9 @@ ObjectId referenceSourceId = ObjectId.Null;
 if (mode == "belowLowest")
 {
     var id = ResolveId(referenceSourceHandle);
+    // GetSectionSources needs the group open for write; on a read-open group
+    // Civil 3D 2025 ends with a fatal eNotOpenForWrite. Nothing is changed.
+    group.UpgradeOpen();
     foreach (SectionSource source in group.GetSectionSources())
         if (id.HasValue && source.SourceId == id.Value && source.IsSampled) referenceSourceId = id.Value;
     if (referenceSourceId.IsNull)
