@@ -193,6 +193,7 @@ return new {
 
 ## Usage Notes
 
+- This creates individual views. For views that are edited together in Civil 3D (group properties, bands) or placed on sheets, prefer `create_section_view_group`, which creates one native section view group; batch-editing individual views has crashed Civil 3D 2025 in practice.
 - Select one exact group with `section_inventory`, then verify its parent alignment, sampled sources, intended station range, current section data and the two named styles. This creates only individual views; it does not create/resample lines, rebuild corridors, modify sources or create layouts/sheets.
 - The entire selected set is preflighted before the first creation. Existing views on any selected line refuse the whole operation. Names include the unique sample-line handle. A native duplicate-name failure also aborts the host transaction.
 - Grid positions use the actual styled `GeometricExtents` of the newly created views, plus explicit drawing-unit gaps. Movement uses the native `Graph.Location` setter: a Civil 3D 2025 live probe found stale extents immediately after `TransformBy`. There is no fixed cell size or assumed plot scale. Unavailable extents refuse the transaction; existing unrelated drawing content is not an obstacle map, so the caller must select a clear insertion area.
