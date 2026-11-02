@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["mintavonalak átnevezése szelvény szerint", "rename sample lines by actual station", "mintavonal nevek frissítése a tényleges szelvényre", "sample line names follow station after moving lines"]
 workflow_tags: ["modeling", "drawing_view"]
 tested_civil_version: "2025"
-validation_summary: "Offline: Civil 3D 2025 metadata compile passed; name format cases (SL_014.01, KSZ_1+000.00 at 999.999) checked. Live rename, save and reopen on a disposable copy unverified."
+validation_summary: "Offline compile + live (Civil 3D 2025, disposable copy): 22 lines, 4 moved incl. a name swap; preview kept DBMOD=0, apply renamed 3, saved, reopened, read back. km+m format live, refusal paths and station equations unverified."
 parameters:
   - name: sampleLineGroupHandle
     type: string
