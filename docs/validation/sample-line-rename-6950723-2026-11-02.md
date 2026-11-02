@@ -15,7 +15,7 @@ Each write checked the full filename and fingerprint, ran with `saveDrawing: tru
 ## Rename
 
 - **Preview** (`apply: false`, `onlyNamePrefix: "SL_"`, run through `civil3d_execute` without save): 3 renames (`SL_040.00` → `SL_043.30`, `SL_080.00` → `SL_060.00`, `SL_060.00` → `SL_080.00`), 18 unchanged, `KSZ_A` kept by prefix. All 21 selected stations were confirmed on the lines' own vertices. `DBMOD` stayed 0 afterwards.
-- **Apply** (`apply: true`, `saveDrawing: true`): the same 3 lines renamed, including the swap through temporary names. Independent readback: 22 lines, every `SL_` name matches its station, no `TMP_RENAME_` name left, `DBMOD=0`, same fingerprint. The test process was then closed normally; the saved file's SHA-256 was unchanged by the reopen and read.
+- **Apply** (`apply: true`, `saveDrawing: true`): the same 3 lines renamed, including the swap through temporary names. Independent readback: 22 lines, every `SL_` name matches its station, no `TMP_RENAME_` name left, `DBMOD=0`, same fingerprint.
 - **Reopen:** the test process was closed normally and the saved DWG reopened in a new Civil 3D 2025 Hungary process. A new client read the same 22 names and stations, `DBMOD=0`, same fingerprint. The test process was then closed normally; the saved file's SHA-256 was unchanged by the reopen and read.
 
 ## Civil API observations
