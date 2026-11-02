@@ -113,6 +113,53 @@ internal static class EngineeringSkillInputTests
         Add(dref,"zero reference scan limit refused",false,new(){["scanLimit"]="0"});
         Add(dref,"over-limit reference scan refused",false,new(){["scanLimit"]="10001"});
 
+        var rowsFile="sections/survey_row_station_candidates.skill.md";
+        var rowValues=new Dictionary<string,string>{["alignmentHandle"]="\"AB12\""};
+        Add(rowsFile,"placeholder alignment refused",false,new());
+        Add(rowsFile,"configured row search accepted",true,rowValues);
+        Add(rowsFile,"zero max offset refused",false,Change(rowValues,"maxOffset","0.0"));
+        Add(rowsFile,"tiny row gap refused",false,Change(rowValues,"rowGap","0.01"));
+        Add(rowsFile,"rounding above row gap refused",false,Change(rowValues,"roundTo","2.0"));
+        Add(rowsFile,"zero minimum points refused",false,Change(rowValues,"minPoints","0"));
+        Add(rowsFile,"reversed row range refused",false,Change(Change(rowValues,"rangeStart","100.0"),"rangeEnd","50.0"));
+        Add(rowsFile,"over-limit row details refused",false,Change(rowValues,"detailLimit","1001"));
+        Add(rowsFile,"over-limit point scan refused",false,Change(rowValues,"scanLimit","1000001"));
+        Add(rowsFile,"too many point groups refused",false,Change(rowValues,"pointGroupNames",
+            "string.Join(\"|\",Enumerable.Range(0,51).Select(i=>\"G\"+i))"));
+        // Straight row at 10, a row skewed by slope 0.2 crossing at 30, and one stray point at 20.
+        const string rowPoints="var pts=new (double station,double offset,int index)[] {(10.0,-5,0),(10.1,0,1),(9.9,5,2),"
+            +"(28.8,-6,3),(29.4,-3,4),(30.0,0,5),(30.6,3,6),(31.2,6,7),(20.0,2,8)};";
+        probes.Add(new("rows split at station gaps with skew fit",rowsFile,true,rowValues,
+            rowPoints+"var rows=GroupRows(pts); var a=EvaluateRow(rows[0]); var b=EvaluateRow(rows[2]); var c=EvaluateRow(rows[1]);"
+            +"return new { success=rows.Count==3 && a.rejection==null && b.rejection==null && c.rejection==\"too few points\" && rows[1].Count==1,"
+            +"aStation=a.station, aRms=a.rms, bStation=b.station, bCrossing=b.crossing.Value, bSkew=b.skewDeg, bRms=b.rms, bLeft=b.left, bRight=b.right };",
+            result=> {
+                Near(result,"aStation",10.0,1e-9); Near(result,"bStation",30.0,1e-9); Near(result,"bCrossing",30.0,1e-9);
+                Near(result,"bSkew",Math.Atan(0.2)*180/Math.PI,1e-9); Near(result,"bRms",0,1e-9);
+                Equal(result,"bLeft",2); Equal(result,"bRight",2);
+            }));
+        probes.Add(new("one-sided rows and narrow rows rejected by option",rowsFile,true,Change(rowValues,"requireCrossing","true"),
+            "var one=new List<(double station,double offset,int index)>{(50,1,0),(50.2,4,1),(50.1,8,2)};"
+            +"var narrow=new List<(double station,double offset,int index)>{(60,-0.5,0),(60,0,1),(60,0.5,2)};"
+            +"return new { success=EvaluateRow(one).rejection==\"points on one side only\" && EvaluateRow(narrow).rejection==\"offset span below minOffsetSpan\" };"));
+        probes.Add(new("line measured along the road rejected for spread",rowsFile,true,rowValues,
+            "var kerb=Enumerable.Range(0,41).Select(i=>(station:i*0.5,offset:5.0+i%2,index:i)).ToList();"
+            +"var rows=GroupRows(kerb);"
+            +"return new { success=rows.Count==1 && EvaluateRow(rows[0]).rejection==\"station spread above maxRowSpread\" };"));
+        probes.Add(new("one-offset row falls back to the median station",rowsFile,true,Change(rowValues,"minOffsetSpan","0.0"),
+            "var row=new List<(double station,double offset,int index)>{(70.0,3,0),(70.4,3,1),(70.2,3,2),(70.3,3,3)};"
+            +"var r=EvaluateRow(row); return new { success=r.rejection==null && !r.crossing.HasValue, station=r.station };",
+            result=>Near(result,"station",70.25,1e-9)));
+        probes.Add(new("description wildcards include and exclude",rowsFile,true,
+            Change(Change(rowValues,"descriptionFilter","\" SZ* | fo? \""),"excludeDescriptions","\"SZFA*\""),
+            "return new { success=descriptionMatches(\"sz12\") && descriptionMatches(\" FOL \") && !descriptionMatches(\"FO\")"
+            +" && !descriptionMatches(\"SZFA3\") && !descriptionMatches(\"TE1\") && !descriptionMatches(null) };"));
+        probes.Add(new("empty filters keep every description",rowsFile,true,rowValues,
+            "return new { success=descriptionMatches(\"anything\") && descriptionMatches(null) && descriptionMatches(\"\") };"));
+        probes.Add(new("station rounding",rowsFile,true,Change(rowValues,"roundTo","0.1"),
+            "return new { success=true, rounded=RoundStation(30.04), up=RoundStation(30.06) };",
+            result=> { Near(result,"rounded",30.0,1e-9); Near(result,"up",30.1,1e-9); }));
+
         var trees=new List<SyntaxTree>();
         for(var index=0;index<probes.Count;index++)
         {
