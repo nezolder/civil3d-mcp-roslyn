@@ -1,29 +1,53 @@
 ---
 name: survey_row_station_candidates
 category: sections
-description: Read-only list of candidate stations along an alignment from rows of surveyed COGO points measured across the road, optionally filtered by point group and description, ready for create_sample_lines
+description: Read-only list of candidate stations along an alignment from survey point rows measured across the road, read from AutoCAD points, survey blocks (also inside xrefs) or COGO points, ready for create_sample_lines
 requires_write: false
-aliases: ["szelvényjelölt-lista geodéziai pontsorokból", "mintavonal szelvények a bemért keresztirányú pontsorokból", "candidate sample line stations from survey point rows", "survey cross section rows to stations"]
+aliases: ["szelvényjelölt-lista geodéziai pontsorokból", "mintavonal szelvények a bemért keresztirányú pontsorokból", "candidate sample line stations from survey point rows", "geodéziai felmérés pontjai és blokkjai keresztszelvényekhez"]
 workflow_tags: ["source_state", "coordinate_conversion"]
 tested_civil_version: "2025"
-validation_summary: "Offline: 2025 API compilation and host-free row grouping, skew fit, filters and limits. Live run on a real survey, point group handling and DBMOD staying 0 unverified."
+validation_summary: "Offline: 2025 API compilation and host-free row grouping, skew fit, name filters and limits. Live run on a real survey DWG, xref and dynamic block reading and DBMOD staying 0 unverified."
 parameters:
   - name: alignmentHandle
     type: string
     required: true
     description: Hex handle of the alignment the points are projected to (without station equations)
+  - name: includePoints
+    type: bool
+    required: false
+    description: Read AutoCAD point objects (POINT) from model space (default true)
+  - name: includeBlocks
+    type: bool
+    required: false
+    description: Read block references from model space at their insertion points, as surveyors often place a block on each measured point (default true)
+  - name: includeXrefs
+    type: bool
+    required: false
+    description: Also read points and blocks inside attached, loaded xrefs, such as the surveyor's DWG attached to the design drawing (default true)
+  - name: includeCogoPoints
+    type: bool
+    required: false
+    description: Also read COGO points of this drawing (default true)
+  - name: layerFilter
+    type: string
+    required: false
+    description: Layer patterns separated by "|", with * and ? wildcards, case-insensitive; xref layers also match without their "xref|" prefix; empty keeps every layer (default "")
+  - name: excludeLayers
+    type: string
+    required: false
+    description: Layer patterns separated by "|" to leave out, for example layers of trees or utilities (default "")
+  - name: blockNames
+    type: string
+    required: false
+    description: Block name patterns separated by "|" (dynamic blocks by their own name); empty keeps every block (default "")
+  - name: excludeBlockNames
+    type: string
+    required: false
+    description: Block name patterns separated by "|" to leave out, such as tree, manhole or north arrow symbols (default "")
   - name: pointGroupNames
     type: string
     required: false
-    description: Point group names separated by "|"; only their points are used, empty uses every COGO point of the drawing (default "")
-  - name: descriptionFilter
-    type: string
-    required: false
-    description: Raw description patterns separated by "|", with * and ? wildcards, case-insensitive; empty keeps every description (default "")
-  - name: excludeDescriptions
-    type: string
-    required: false
-    description: Raw description patterns separated by "|" to leave out, such as trees or manholes measured between rows (default "")
+    description: COGO point groups separated by "|"; only their COGO points are used, empty uses every COGO point (default "")
   - name: maxOffset
     type: double
     required: false
@@ -63,7 +87,7 @@ parameters:
   - name: scanLimit
     type: int
     required: false
-    description: Most COGO points read, 1 to 1000000 (default 200000)
+    description: Most objects read (model space and xref entities plus COGO points), 1 to 1000000 (default 200000)
   - name: detailLimit
     type: int
     required: false
@@ -74,9 +98,15 @@ parameters:
 
 ```csharp
 var alignmentHandle = "ALIGNMENT_HANDLE";
+var includePoints = true;
+var includeBlocks = true;
+var includeXrefs = true;
+var includeCogoPoints = true;
+var layerFilter = "";
+var excludeLayers = "";
+var blockNames = "";
+var excludeBlockNames = "";
 var pointGroupNames = "";
-var descriptionFilter = "";
-var excludeDescriptions = "";
 var maxOffset = 50.0;
 var rangeStart = double.NaN;
 var rangeEnd = double.NaN;
@@ -93,10 +123,11 @@ var projectionTolerance = 0.01;
 if (string.IsNullOrWhiteSpace(alignmentHandle) || alignmentHandle == "ALIGNMENT_HANDLE"
     || !System.Text.RegularExpressions.Regex.IsMatch(alignmentHandle, "^[0-9A-Fa-f]{1,16}$"))
     return new { success = false, error = "alignmentHandle must be a hexadecimal handle." };
-if (pointGroupNames == null || descriptionFilter == null || excludeDescriptions == null
-    || pointGroupNames.Length > 4000 || descriptionFilter.Length > 4000 || excludeDescriptions.Length > 4000
-    || pointGroupNames.Any(char.IsControl) || descriptionFilter.Any(char.IsControl) || excludeDescriptions.Any(char.IsControl))
-    return new { success = false, error = "pointGroupNames, descriptionFilter and excludeDescriptions must be texts of at most 4000 characters." };
+var filterTexts = new[] { layerFilter, excludeLayers, blockNames, excludeBlockNames, pointGroupNames };
+if (filterTexts.Any(text => text == null || text.Length > 4000 || text.Any(char.IsControl)))
+    return new { success = false, error = "layerFilter, excludeLayers, blockNames, excludeBlockNames and pointGroupNames must be texts of at most 4000 characters." };
+if (!includePoints && !includeBlocks && !includeCogoPoints)
+    return new { success = false, error = "Choose at least one source: includePoints, includeBlocks or includeCogoPoints." };
 if (!double.IsFinite(maxOffset) || maxOffset <= 0 || maxOffset > 1000)
     return new { success = false, error = "maxOffset must be greater than 0 and at most 1000." };
 if (double.IsInfinity(rangeStart) || double.IsInfinity(rangeEnd)
@@ -123,16 +154,23 @@ var toPattern = new Func<string, System.Text.RegularExpressions.Regex>(pattern =
         "^" + System.Text.RegularExpressions.Regex.Escape(pattern).Replace("\\*", ".*").Replace("\\?", ".") + "$",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant));
 var groupNames = splitList(pointGroupNames);
-var includePatterns = splitList(descriptionFilter).Select(toPattern).ToList();
-var excludePatterns = splitList(excludeDescriptions).Select(toPattern).ToList();
-if (groupNames.Count > 50 || includePatterns.Count > 100 || excludePatterns.Count > 100)
-    return new { success = false, error = "At most 50 point groups and 100 include or exclude patterns." };
-var descriptionMatches = new Func<string, bool>(description =>
+var layerIncludes = splitList(layerFilter).Select(toPattern).ToList();
+var layerExcludes = splitList(excludeLayers).Select(toPattern).ToList();
+var blockIncludes = splitList(blockNames).Select(toPattern).ToList();
+var blockExcludes = splitList(excludeBlockNames).Select(toPattern).ToList();
+if (groupNames.Count > 50 || new[] { layerIncludes, layerExcludes, blockIncludes, blockExcludes }.Any(list => list.Count > 100))
+    return new { success = false, error = "At most 50 point groups and 100 patterns per filter." };
+// Names from an xref read "xref|name"; a pattern matches the full name or the part after the last "|".
+var matchesAny = new Func<List<System.Text.RegularExpressions.Regex>, string, bool>((patterns, name) =>
 {
-    var text = (description ?? "").Trim();
-    return (includePatterns.Count == 0 || includePatterns.Any(p => p.IsMatch(text)))
-        && !excludePatterns.Any(p => p.IsMatch(text));
+    var text = (name ?? "").Trim();
+    var shortName = text.Contains('|') ? text.Substring(text.LastIndexOf('|') + 1) : text;
+    return patterns.Any(p => p.IsMatch(text) || p.IsMatch(shortName));
 });
+var layerMatches = new Func<string, bool>(layer =>
+    (layerIncludes.Count == 0 || matchesAny(layerIncludes, layer)) && !matchesAny(layerExcludes, layer));
+var blockMatches = new Func<string, bool>(block =>
+    (blockIncludes.Count == 0 || matchesAny(blockIncludes, block)) && !matchesAny(blockExcludes, block));
 
 // Points sorted by station; a row ends where the gap to the next point exceeds rowGap.
 List<List<(double station, double offset, int index)>> GroupRows(IEnumerable<(double station, double offset, int index)> points)
@@ -208,7 +246,7 @@ if (firstStation < alignment.StartingStation - 1e-6 || lastStation > alignment.E
 var warnings = new List<string>();
 HashSet<uint> allowedNumbers = null;
 var groups = new List<object>();
-if (groupNames.Count > 0)
+if (includeCogoPoints && groupNames.Count > 0)
 {
     allowedNumbers = new HashSet<uint>();
     var available = new List<string>();
@@ -235,25 +273,101 @@ if (groupNames.Count > 0)
     }
 }
 
-var projected = new List<(double station, double offset, int index)>();
-var pointInfo = new List<(uint number, string description)>();
-int scanned = 0, filteredOut = 0, outsideAlignment = 0, beyondMaxOffset = 0, projectionMismatch = 0;
+// Survey points: AutoCAD points, block insertion points (also inside xrefs) and COGO points.
+var collected = new List<(double x, double y, string kind, string name, string layer, string id, bool fromXref)>();
+var seenXy = new HashSet<(long, long)>();
+var blockCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+var layerCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+var xrefsRead = new List<string>();
+var unresolvedXrefs = new List<string>();
+int scanned = 0, filteredOut = 0, duplicates = 0;
 var scanTruncated = false;
-foreach (ObjectId id in CivilDoc.CogoPoints)
+
+void Collect(double x, double y, string kind, string name, string layer, string id, bool fromXref)
 {
-    if (scanned >= scanLimit) { scanTruncated = true; break; }
-    scanned++;
-    var point = Transaction.GetObject(id, OpenMode.ForRead) as CogoPoint;
-    if (point == null || point.IsErased) continue;
-    if ((allowedNumbers != null && !allowedNumbers.Contains(point.PointNumber)) || !descriptionMatches(point.RawDescription))
+    // A block and a point on the same spot are one measured point.
+    if (!seenXy.Add(((long)Math.Round(x / 1e-3), (long)Math.Round(y / 1e-3)))) { duplicates++; return; }
+    collected.Add((x, y, kind, name, layer, id, fromXref));
+}
+
+void Tally(Dictionary<string, int> counts, string key) => counts[key] = counts.TryGetValue(key, out var count) ? count + 1 : 1;
+
+void Walk(ObjectId ownerId, Matrix3d transform, int depth, string xrefName)
+{
+    var owner = (BlockTableRecord)Transaction.GetObject(ownerId, OpenMode.ForRead);
+    foreach (ObjectId id in owner)
     {
-        filteredOut++;
-        continue;
+        if (scanTruncated) return;
+        if (scanned >= scanLimit) { scanTruncated = true; return; }
+        scanned++;
+        var entity = Transaction.GetObject(id, OpenMode.ForRead) as Autodesk.AutoCAD.DatabaseServices.Entity;
+        if (entity == null || entity.IsErased) continue;
+        var reference = xrefName == null ? entity.Handle.ToString() : xrefName + ":" + entity.Handle.ToString();
+        if (entity is DBPoint point)
+        {
+            if (!includePoints) continue;
+            Tally(layerCounts, entity.Layer);
+            if (!layerMatches(entity.Layer)) { filteredOut++; continue; }
+            var position = point.Position.TransformBy(transform);
+            Collect(position.X, position.Y, "point", entity.Layer, entity.Layer, reference, xrefName != null);
+        }
+        else if (entity is BlockReference block)
+        {
+            var record = (BlockTableRecord)Transaction.GetObject(block.BlockTableRecord, OpenMode.ForRead);
+            if (record.IsFromExternalReference || record.IsFromOverlayReference)
+            {
+                if (!includeXrefs) continue;
+                if (!record.IsResolved) { if (!unresolvedXrefs.Contains(record.Name)) unresolvedXrefs.Add(record.Name); continue; }
+                if (depth >= 4) continue;
+                if (!xrefsRead.Contains(record.Name)) xrefsRead.Add(record.Name);
+                Walk(record.ObjectId, transform * block.BlockTransform, depth + 1, record.Name);
+                continue;
+            }
+            if (!includeBlocks || record.IsLayout) continue;
+            var blockName = record.Name;
+            if (block.IsDynamicBlock && !block.DynamicBlockTableRecord.IsNull)
+                blockName = ((BlockTableRecord)Transaction.GetObject(block.DynamicBlockTableRecord, OpenMode.ForRead)).Name;
+            Tally(blockCounts, blockName);
+            Tally(layerCounts, entity.Layer);
+            if (!blockMatches(blockName) || !layerMatches(entity.Layer)) { filteredOut++; continue; }
+            var position = block.Position.TransformBy(transform);
+            Collect(position.X, position.Y, "block", blockName, entity.Layer, reference, xrefName != null);
+        }
     }
+}
+
+if (includePoints || includeBlocks)
+    Walk(SymbolUtilityServices.GetBlockModelSpaceId(Database), Matrix3d.Identity, 0, null);
+if (includeCogoPoints && !scanTruncated)
+{
+    foreach (ObjectId id in CivilDoc.CogoPoints)
+    {
+        if (scanned >= scanLimit) { scanTruncated = true; break; }
+        scanned++;
+        var cogo = Transaction.GetObject(id, OpenMode.ForRead) as CogoPoint;
+        if (cogo == null || cogo.IsErased) continue;
+        if ((allowedNumbers != null && !allowedNumbers.Contains(cogo.PointNumber)) || !layerMatches(cogo.Layer))
+        {
+            filteredOut++;
+            continue;
+        }
+        Collect(cogo.Easting, cogo.Northing, "cogo", (cogo.RawDescription ?? "").Trim(), cogo.Layer, "#" + cogo.PointNumber, false);
+    }
+}
+if (scanTruncated)
+    warnings.Add($"Only the first {scanLimit} objects were read; raise scanLimit or narrow the sources.");
+if (unresolvedXrefs.Count > 0)
+    warnings.Add("Some xrefs are not loaded and were skipped: " + string.Join(", ", unresolvedXrefs.Take(10)));
+
+var projected = new List<(double station, double offset, int index)>();
+int outsideAlignment = 0, beyondMaxOffset = 0, projectionMismatch = 0;
+for (var i = 0; i < collected.Count; i++)
+{
+    var item = collected[i];
     double station = 0, offset = 0, backX = 0, backY = 0;
     try
     {
-        alignment.StationOffset(point.Easting, point.Northing, ref station, ref offset);
+        alignment.StationOffset(item.x, item.y, ref station, ref offset);
         alignment.PointLocation(station, offset, ref backX, ref backY);
     }
     catch
@@ -264,16 +378,13 @@ foreach (ObjectId id in CivilDoc.CogoPoints)
     if (!double.IsFinite(station) || !double.IsFinite(offset)) { outsideAlignment++; continue; }
     if (Math.Abs(offset) > maxOffset) { beyondMaxOffset++; continue; }
     // The station and offset must lead back to the point; otherwise the projection is unreliable.
-    if (Math.Sqrt(Math.Pow(backX - point.Easting, 2) + Math.Pow(backY - point.Northing, 2)) > projectionTolerance)
+    if (Math.Sqrt(Math.Pow(backX - item.x, 2) + Math.Pow(backY - item.y, 2)) > projectionTolerance)
     {
         projectionMismatch++;
         continue;
     }
-    projected.Add((station, offset, pointInfo.Count));
-    pointInfo.Add((point.PointNumber, (point.RawDescription ?? "").Trim()));
+    projected.Add((station, offset, i));
 }
-if (scanTruncated)
-    warnings.Add($"Only the first {scanLimit} COGO points were read; raise scanLimit or narrow the point groups.");
 
 var rows = GroupRows(projected);
 var candidates = new List<(double station, List<(double station, double offset, int index)> row,
@@ -334,10 +445,11 @@ foreach (var candidate in candidates)
         info.maxOffset,
         skewDeg = info.skewDeg,
         straightnessRms = info.rms,
-        descriptions = candidate.row.GroupBy(p => pointInfo[p.index].description)
+        names = candidate.row.GroupBy(p => collected[p.index].kind + ": " + collected[p.index].name)
             .OrderByDescending(g => g.Count()).Take(10)
-            .Select(g => new { description = g.Key, count = g.Count() }).ToList(),
-        pointNumbers = candidate.row.Select(p => pointInfo[p.index].number).Take(30).ToList()
+            .Select(g => new { name = g.Key, count = g.Count() }).ToList(),
+        points = candidate.row.OrderBy(p => p.offset)
+            .Select(p => new { id = collected[p.index].id, offset = p.offset, station = p.station }).Take(30).ToList()
     });
 }
 
@@ -345,17 +457,22 @@ return new {
     success = true,
     alignment = new { name = alignment.Name, handle = alignment.Handle.ToString(), start = alignment.StartingStation, end = alignment.EndingStation },
     range = new { start = firstStation, end = lastStation },
-    pointGroups = groups,
-    points = new {
-        totalInDrawing = CivilDoc.CogoPoints.Count,
+    sources = new {
         scanned,
         scanTruncated,
         filteredOut,
-        outsideAlignment,
-        beyondMaxOffset,
-        projectionMismatch,
-        used = projected.Count
+        duplicates,
+        autocadPoints = collected.Count(c => c.kind == "point"),
+        blocks = collected.Count(c => c.kind == "block"),
+        cogoPoints = collected.Count(c => c.kind == "cogo"),
+        fromXrefs = collected.Count(c => c.fromXref),
+        xrefsRead,
+        unresolvedXrefs,
+        pointGroups = groups,
+        blockNamesSeen = blockCounts.OrderByDescending(p => p.Value).Take(30).Select(p => new { name = p.Key, count = p.Value }).ToList(),
+        layersSeen = layerCounts.OrderByDescending(p => p.Value).Take(30).Select(p => new { name = p.Key, count = p.Value }).ToList()
     },
+    projection = new { outsideAlignment, beyondMaxOffset, projectionMismatch, used = projected.Count },
     rows = new {
         found = rows.Count,
         candidates = candidates.Count,
@@ -380,12 +497,14 @@ return new {
 
 ## Usage Notes
 
-- This is a read-only template: run it with `civil3d_query` after confirming the drawing identity. It only reads COGO points, point groups and the alignment; it never updates a point group, creates sample lines or changes the drawing.
-- The input is the survey as COGO points, for example points imported from the surveyor's file or from a survey database. Each point is projected to the alignment. Points beyond `maxOffset`, outside the alignment's station range, or whose station and offset do not lead back to the point within 1 cm (an unreliable projection, for example far from a tight curve) are counted and left out.
-- A surveyed row is a group of points measured across the road at about the same station: kerb, gutter, crown and so on. Points are sorted by station and a new row starts where the gap to the next point is more than `rowGap`. A row is a candidate when it has at least `minPoints` points, its stations differ by at most `maxRowSpread`, its outermost points are at least `minOffsetSpan` apart across the road and, with `requireCrossing`, it has points on both sides.
-- Filters are optional: `pointGroupNames` limits the points to point groups (out-of-date groups are used as stored and reported), `descriptionFilter` keeps raw descriptions matching a pattern such as `SZ*|FO*|TE*`, and `excludeDescriptions` drops points measured between rows, such as trees or manholes, that would otherwise join two rows.
-- Each candidate's `station` is where a straight line fitted through the row crosses the alignment, kept inside the row's own station range; with all points at one offset it is the median station. `skewDeg` is the row's angle from perpendicular (positive when the row runs to higher stations towards the right) and `straightnessRms` how far the points are from that straight line, both in station units. On curves station is measured along the alignment, so the angle is approximate far from it.
-- `rejectedRows` lists up to 50 groups that are not rows and why. A long group rejected for its station spread usually means a dense survey or a line measured along the road (such as a kerb line); lower `rowGap`, use `excludeDescriptions` or narrow the filters.
+- This is a read-only template: run it with `civil3d_query` after confirming the drawing identity. It only reads entities, xrefs, COGO points, point groups and the alignment; it never changes the drawing, an xref or a point group.
+- Purpose: for pavement rehabilitation designs (strengthening, wearing course replacement) surveyed by hand, the surveyor measures rows of points across the road, usually at the centreline, lane lines, pavement edges, kerb tops and shoulder edges. Cross sections taken exactly at these rows follow measured heights; between rows the surface is interpolated. This recipe finds those rows and proposes their stations.
+- Sources: surveys usually arrive as plain AutoCAD DWGs. By default the recipe reads AutoCAD points (POINT) and block insertion points in model space, the same inside attached and loaded xrefs (nested xrefs up to 4 levels, with their insertion, rotation and scale), and COGO points. A block and a point on the same spot (within 1 mm) count once. Ordinary blocks are not opened: a block counts as one point at its insertion point, so the surveyor's point block must be inserted at the measured point.
+- Filters: `layerFilter`/`excludeLayers` and `blockNames`/`excludeBlockNames` take `*`/`?` patterns separated by `|`; an xref's `xref|name` layers and blocks also match the pattern without the prefix. `sources.blockNamesSeen` and `sources.layersSeen` list what was found before filtering, so a first unfiltered run shows which names to keep or exclude (for example tree, manhole or text-only symbols that sit between rows). `pointGroupNames` limits COGO points only.
+- Each point is projected to the alignment. Points beyond `maxOffset`, outside the alignment's station range, or whose station and offset do not lead back to the point within 1 cm (an unreliable projection, for example far from a tight curve) are counted and left out. Points of side streets close to the alignment can form a row at a junction; check those candidates.
+- A row is a group of points at about the same station. Points are sorted by station and a new row starts where the gap to the next point is more than `rowGap`. A row is a candidate when it has at least `minPoints` points, its stations differ by at most `maxRowSpread`, its outermost points are at least `minOffsetSpan` apart across the road and, with `requireCrossing`, it has points on both sides. A dense or scanned survey forms one long group that is rejected for its station spread; this recipe is meant for hand-measured rows.
+- Each candidate's `station` is where a straight line fitted through the row crosses the alignment, kept inside the row's own station range; with all points at one offset it is the median station. `skewDeg` is the row's angle from perpendicular (positive when the row runs to higher stations towards the right) and `straightnessRms` how far the points are from that straight line, both in station units. On curves station is measured along the alignment, so the angle is approximate far from it. `points` lists the row's points (entity handle, `xref:handle` or `#number` for COGO points) by offset.
+- `rejectedRows` lists up to 50 groups that are not rows and why. A long group rejected for its station spread usually means a line measured along the road (such as a kerb line) or symbols between rows; lower `rowGap`, exclude those layers or blocks, or narrow the filters.
 - `sampleLineStations` is ready for the `stations` parameter of `create_sample_lines`, as `[station, ""]` rows so the sample lines get station-based names. `surveyExtent` is the largest surveyed distance left and right of the alignment, a starting point for that recipe's `leftWidth` and `rightWidth`. Check the list first: this recipe only proposes stations.
 - `roundTo` rounds the stations, for example to 0.01 or 0.1; rows that round to the same station are merged and counted.
-- Office conventions such as the surveyor's description codes and usual tolerances belong to the caller's own instructions; this recipe only takes them as parameters.
+- Office conventions such as the surveyor's layers, block names and usual tolerances belong to the caller's own instructions; this recipe only takes them as parameters.

@@ -150,12 +150,14 @@ internal static class EngineeringSkillInputTests
             "var row=new List<(double station,double offset,int index)>{(70.0,3,0),(70.4,3,1),(70.2,3,2),(70.3,3,3)};"
             +"var r=EvaluateRow(row); return new { success=r.rejection==null && !r.crossing.HasValue, station=r.station };",
             result=>Near(result,"station",70.25,1e-9)));
-        probes.Add(new("description wildcards include and exclude",rowsFile,true,
-            Change(Change(rowValues,"descriptionFilter","\" SZ* | fo? \""),"excludeDescriptions","\"SZFA*\""),
-            "return new { success=descriptionMatches(\"sz12\") && descriptionMatches(\" FOL \") && !descriptionMatches(\"FO\")"
-            +" && !descriptionMatches(\"SZFA3\") && !descriptionMatches(\"TE1\") && !descriptionMatches(null) };"));
-        probes.Add(new("empty filters keep every description",rowsFile,true,rowValues,
-            "return new { success=descriptionMatches(\"anything\") && descriptionMatches(null) && descriptionMatches(\"\") };"));
+        probes.Add(new("layer and block wildcards include and exclude",rowsFile,true,
+            Change(Change(Change(rowValues,"layerFilter","\" GEO_* | pont? \""),"excludeLayers","\"GEO_FA*\""),"excludeBlockNames","\"FA*|ESZAK\""),
+            "return new { success=layerMatches(\"geo_szegely\") && layerMatches(\" PONT1 \") && layerMatches(\"FELMERES|GEO_TENGELY\")"
+            +" && !layerMatches(\"PONT\") && !layerMatches(\"GEO_FA2\") && !layerMatches(\"FELMERES|GEO_FA\") && !layerMatches(\"0\") && !layerMatches(null)"
+            +" && blockMatches(\"PONTJEL\") && !blockMatches(\"FA_LOMB\") && !blockMatches(\"xref|eszak\") && blockMatches(null) };"));
+        probes.Add(new("empty filters keep every name",rowsFile,true,rowValues,
+            "return new { success=layerMatches(\"anything\") && layerMatches(null) && blockMatches(\"\") && blockMatches(\"X|Y\") };"));
+        Add(rowsFile,"no point source refused",false,Change(Change(Change(rowValues,"includePoints","false"),"includeBlocks","false"),"includeCogoPoints","false"));
         probes.Add(new("station rounding",rowsFile,true,Change(rowValues,"roundTo","0.1"),
             "return new { success=true, rounded=RoundStation(30.04), up=RoundStation(30.06) };",
             result=> { Near(result,"rounded",30.0,1e-9); Near(result,"up",30.1,1e-9); }));
