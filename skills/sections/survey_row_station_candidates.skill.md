@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["szelvényjelölt-lista geodéziai pontsorokból", "mintavonal szelvények a bemért keresztirányú pontsorokból", "candidate sample line stations from survey point rows", "geodéziai felmérés pontjai és blokkjai keresztszelvényekhez"]
 workflow_tags: ["source_state", "coordinate_conversion"]
 tested_civil_version: "2025"
-validation_summary: "Offline: 2025 API compilation and host-free row grouping, skew fit, name filters and limits. Live run on a real survey DWG, xref and dynamic block reading and DBMOD staying 0 unverified."
+validation_summary: "Offline + live (Civil 3D 2025, disposable copy of a real project): 13,843 survey points and blocks read from an xref; rows about every 25 m found with minPoints 6 and requireCrossing; DBMOD stayed 0. Name filters, COGO input, nested or rotated xrefs unverified."
 parameters:
   - name: alignmentHandle
     type: string
