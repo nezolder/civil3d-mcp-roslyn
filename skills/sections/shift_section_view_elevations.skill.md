@@ -208,3 +208,4 @@ return new {
 - All views are planned before any change; if one cannot be changed, nothing is written. Limit the change with `startStation`/`endStation`.
 - In belowLowest mode `notFitting` lists views whose reference section rises above the new top, with the missing height; they are still changed, so review them and choose a taller sheet height or another sheet.
 - The window move does not move the views. If the taller content no longer fits the sheet, check the view style and group plot style.
+- For template-placed sheets give the views their sheet height already at creation (`create_section_view_group` `elevationHeight`) and use the same `height` here. In a live Civil 3D 2025 test, raising the height here (and calling `UpdateLayout`) left five views per sheet overlapping instead of moving them to new sheets.
