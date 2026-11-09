@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["keresztszelvény nézetcsoport létrehozása mintavonalakból", "create native section view group with production sheet template", "keresztszelvények lapra rendezése sablonból", "section view group with band sources"]
 workflow_tags: ["drawing_view"]
 tested_civil_version: "2025"
-validation_summary: "Offline + live (Civil 3D 2025, disposable copy): one native group of 17 draft-placed views with view style, band set, ground band sources and station names, saved and read back. Template placement, group plot style and print fit unverified."
+validation_summary: "Offline + live (Civil 3D 2025, disposable copies): draft grid of 17 views; template placement of 15 views on 15 A3 1:100 sheets with group plot style, sheet height and sheetFit check, saved and read back; cover sheet and scale mismatch rejected. Plot output unverified."
 parameters:
   - name: sampleLineGroupHandle
     type: string
@@ -36,6 +36,10 @@ parameters:
     type: double
     required: false
     description: View width right of the alignment, greater than 0; NaN keeps the automatic range (default NaN)
+  - name: elevationHeight
+    type: double
+    required: false
+    description: User-specified view height in elevation units, greater than 0, for example the planned height that fits the sheet; NaN keeps Civil 3D's automatic elevation range (default NaN)
   - name: sectionViewStyleName
     type: string
     required: false
@@ -84,6 +88,7 @@ var startStation = double.NaN;
 var endStation = double.NaN;
 var leftWidth = double.NaN;
 var rightWidth = double.NaN;
+var elevationHeight = double.NaN;
 var sectionViewStyleName = "";
 var bandSetStyleName = "";
 var bandSources = new (int bandIndex, string section1SourceHandle, string section2SourceHandle, bool showLabels)[] { };
@@ -109,6 +114,8 @@ if (double.IsNaN(leftWidth) != double.IsNaN(rightWidth)
     || (!double.IsNaN(leftWidth) && (!double.IsFinite(leftWidth) || !double.IsFinite(rightWidth)
         || leftWidth <= 0 || rightWidth <= 0 || leftWidth > 1000 || rightWidth > 1000)))
     return new { success = false, error = "Give both leftWidth and rightWidth (greater than 0, at most 1000) or neither." };
+if (!double.IsNaN(elevationHeight) && (!double.IsFinite(elevationHeight) || elevationHeight <= 0 || elevationHeight > 1000))
+    return new { success = false, error = "elevationHeight must be NaN or greater than 0, at most 1000." };
 if (!isOptionalName(sectionViewStyleName) || !isOptionalName(bandSetStyleName) || !isOptionalName(groupPlotStyleName)
     || !isOptionalName(layoutName) || templatePath == null || templatePath.Length > 1024 || templatePath.Any(char.IsControl))
     return new { success = false, error = "Style, layout and template names must be empty or trimmed names." };
@@ -185,6 +192,7 @@ foreach (var band in bandSources)
 }
 
 var placement = new SectionViewGroupCreationPlacementOptions();
+(double widthMm, double heightMm, double customScale)? sheetViewport = null;
 if (templatePath != "")
 {
     string[] layouts;
@@ -192,6 +200,43 @@ if (templatePath != "")
     catch (System.Exception ex) { return new { success = false, error = "The template could not be read.", templatePath, detail = ex.Message }; }
     if (layouts == null || !layouts.Contains(layoutName))
         return new { success = false, error = "The layout does not exist in the template.", layoutName, available = layouts };
+    // The views fill the layout's model viewport; a cover sheet without one cannot hold them.
+    try
+    {
+        using (var side = new Database(false, true))
+        {
+            side.ReadDwgFile(templatePath, Autodesk.AutoCAD.DatabaseServices.FileOpenMode.OpenForReadAndAllShare, true, null);
+            using (var tr = side.TransactionManager.StartTransaction())
+            {
+                var layoutDict = (DBDictionary)tr.GetObject(side.LayoutDictionaryId, OpenMode.ForRead);
+                foreach (DBDictionaryEntry entry in layoutDict)
+                {
+                    var layout = (Layout)tr.GetObject(entry.Value, OpenMode.ForRead);
+                    if (layout.ModelType || layout.LayoutName != layoutName) continue;
+                    var viewports = new List<Viewport>();
+                    foreach (ObjectId id in (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead))
+                        if (tr.GetObject(id, OpenMode.ForRead) is Viewport viewport) viewports.Add(viewport);
+                    var model = viewports.Skip(1).OrderByDescending(v => v.Width * v.Height).FirstOrDefault();
+                    if (model != null && model.CustomScale > 0)
+                        sheetViewport = (model.Width, model.Height, model.CustomScale);
+                }
+                tr.Commit();
+            }
+        }
+    }
+    catch (System.Exception ex) { return new { success = false, error = "The template could not be read.", templatePath, detail = ex.Message }; }
+    if (sheetViewport == null)
+        return new { success = false, error = "The layout has no scaled model viewport, for example a cover sheet; choose a section sheet layout.", layoutName };
+    // Civil 3D sizes the model-space sheets from the paper size and the current annotation scale,
+    // not from the viewport scale; a mismatch gives sheets that do not match the layout.
+    var annotationScale = Database.Cannoscale;
+    var annotationPaperPerUnit = annotationScale.DrawingUnits > 0 ? annotationScale.PaperUnits / annotationScale.DrawingUnits : double.NaN;
+    if (!(Math.Abs(annotationPaperPerUnit - sheetViewport.Value.customScale) <= 1e-6 * sheetViewport.Value.customScale))
+        return new { success = false, error = "The drawing's annotation scale differs from the layout's viewport scale; set the annotation scale to the layout scale first.",
+            annotationScale = annotationScale.Name, layoutScale = "1:" + Math.Round(1000.0 / sheetViewport.Value.customScale, 3).ToString(System.Globalization.CultureInfo.InvariantCulture) };
+    var sheetModelWidth = sheetViewport.Value.widthMm / sheetViewport.Value.customScale;
+    if (!double.IsNaN(leftWidth) && leftWidth + rightWidth > sheetModelWidth + 1e-6)
+        return new { success = false, error = "leftWidth plus rightWidth is wider than the layout's model viewport.", leftWidth, rightWidth, sheetModelWidth };
     placement.UseProductionPlacement(templatePath, layoutName);
 }
 else
@@ -221,6 +266,12 @@ if (viewNamePrefix != "")
         return new { success = false, error = "View names would collide; raise nameDecimals or change the prefix.", names = clashes };
 }
 
+// Model-space sheet frames that exist before; the new group's frames are the others.
+var modelSpace = (BlockTableRecord)Transaction.GetObject(SymbolUtilityServices.GetBlockModelSpaceId(Database), OpenMode.ForRead);
+var earlierSheets = new HashSet<ObjectId>();
+foreach (ObjectId id in modelSpace)
+    if (id.ObjectClass.IsDerivedFrom(RXObject.GetClass(typeof(Autodesk.Civil.DatabaseServices.Sheet)))) earlierSheets.Add(id);
+
 // One native group: group-level editing and sheet placement need it.
 // Any failure below throws, so nothing is kept.
 SectionViewGroup viewGroup;
@@ -230,6 +281,13 @@ using (var range = new SectionViewGroupCreationRangeOptions(group.ObjectId))
     {
         range.SetOffsetRange(-leftWidth, rightWidth);
         range.UseUserSpecifiedOffset = true;
+    }
+    // The sheet layout is made from the views' size at creation; a later height change does not re-lay it out.
+    if (!double.IsNaN(elevationHeight))
+    {
+        range.UseUserSpecifiedElevation = true;
+        range.Elevation = elevationHeight;
+        range.ElevationRangeType = SectionViewElevationRangeType.LowestElevation;
     }
     viewGroup = group.SectionViewGroups.Add(new Point3d(insertionX, insertionY, 0), firstStation, lastStation, range, placement);
 }
@@ -298,6 +356,60 @@ foreach (SectionViewBandItem item in ordered[0].view.Bands.GetBottomBandItems())
 }
 var steps = ordered.Zip(ordered.Skip(1), (a, b) => b.view.Location.X - a.view.Location.X).ToList();
 
+// Sheet fit: each view's graph plus its bottom bands must lie inside the model viewport of a new sheet frame.
+// The viewport is taken as centred on the frame, as in a template with equal margins.
+object sheetFit = null;
+if (sheetViewport != null)
+{
+    var frames = new List<Extents3d>();
+    foreach (ObjectId id in modelSpace)
+        if (!earlierSheets.Contains(id) && Transaction.GetObject(id, OpenMode.ForRead) is Autodesk.Civil.DatabaseServices.Sheet sheet && !sheet.IsErased)
+            frames.Add(sheet.GeometricExtents);
+    var bandsModel = 0.0;
+    if (!bandSetId.IsNull)
+    {
+        var bandSet = (Autodesk.Civil.DatabaseServices.Styles.SectionViewBandSetStyle)Transaction.GetObject(bandSetId, OpenMode.ForRead);
+        foreach (Autodesk.Civil.DatabaseServices.Styles.BandSetItem item in bandSet.GetBottomBandSetItems())
+            bandsModel += (((Autodesk.Civil.DatabaseServices.Styles.BandStyle)Transaction.GetObject(item.BandStyleId, OpenMode.ForRead)).BandHeight + item.Gap) * 1000.0 / sheetViewport.Value.customScale;
+    }
+    var vpWidth = sheetViewport.Value.widthMm / sheetViewport.Value.customScale;
+    var vpHeight = sheetViewport.Value.heightMm / sheetViewport.Value.customScale;
+    var misses = new List<object>();
+    var perFrame = new int[frames.Count];
+    foreach (var (view, line) in ordered)
+    {
+        // The graph box from the view's own origin, offsets and elevations; extents are not current inside the transaction.
+        var exaggeration = ((Autodesk.Civil.DatabaseServices.Styles.SectionViewStyle)Transaction.GetObject(view.StyleId, OpenMode.ForRead)).GraphStyle.VerticalExaggeration;
+        var box = new Extents3d(
+            new Point3d(view.Location.X + view.OffsetLeft, view.Location.Y, 0),
+            new Point3d(view.Location.X + view.OffsetRight, view.Location.Y + (view.ElevationMax - view.ElevationMin) * exaggeration, 0));
+        var bottom = box.MinPoint.Y - bandsModel;
+        var index = frames.FindIndex(fr => box.MinPoint.X >= fr.MinPoint.X - 1e-6 && box.MaxPoint.X <= fr.MaxPoint.X + 1e-6
+            && bottom >= fr.MinPoint.Y - 1e-6 && box.MaxPoint.Y <= fr.MaxPoint.Y + 1e-6);
+        if (index < 0) { misses.Add(new { name = view.Name, reason = "not inside one sheet frame" }); continue; }
+        perFrame[index]++;
+        var f = frames[index];
+        var marginX = (f.MaxPoint.X - f.MinPoint.X - vpWidth) / 2;
+        var marginY = (f.MaxPoint.Y - f.MinPoint.Y - vpHeight) / 2;
+        var overflow = new {
+            left = Math.Max(0, f.MinPoint.X + marginX - box.MinPoint.X),
+            right = Math.Max(0, box.MaxPoint.X - (f.MaxPoint.X - marginX)),
+            bottom = Math.Max(0, f.MinPoint.Y + marginY - bottom),
+            top = Math.Max(0, box.MaxPoint.Y - (f.MaxPoint.Y - marginY))
+        };
+        if (overflow.left > 1e-3 || overflow.right > 1e-3 || overflow.bottom > 1e-3 || overflow.top > 1e-3)
+            misses.Add(new { name = view.Name, reason = "outside the sheet viewport", overflow });
+    }
+    sheetFit = new {
+        sheetCount = frames.Count,
+        viewsPerSheet = perFrame.Length == 0 ? null : new { min = perFrame.Min(), max = perFrame.Max() },
+        bandsModelHeight = bandsModel,
+        fitsAll = frames.Count > 0 && misses.Count == 0,
+        notFittingCount = misses.Count,
+        notFitting = misses.Take(10).ToList()
+    };
+}
+
 return new {
     success = true,
     sampleLineGroup = new { name = group.Name, handle = group.Handle.ToString() },
@@ -308,6 +420,14 @@ return new {
         layoutName = viewGroup.LayoutName,
         viewCount = views.Count
     },
+    sheetViewport = sheetViewport == null ? null : new {
+        widthMm = sheetViewport.Value.widthMm,
+        heightMm = sheetViewport.Value.heightMm,
+        scale = "1:" + Math.Round(1000.0 / sheetViewport.Value.customScale, 3).ToString(System.Globalization.CultureInfo.InvariantCulture),
+        modelWidth = sheetViewport.Value.widthMm / sheetViewport.Value.customScale,
+        modelHeight = sheetViewport.Value.heightMm / sheetViewport.Value.customScale
+    },
+    sheetFit,
     stationRange = new { first = firstStation, last = lastStation },
     leftToRightByStation = steps.All(step => step > 0),
     views = ordered.Select(v => new {
@@ -331,7 +451,10 @@ return new {
 
 - This is a write-capable template: confirm the full drawing identity first and run it with `civil3d_execute`; use `saveDrawing: true` only for an approved save.
 - It creates one native section view group, never individual views. Group-level property and band editing in Civil 3D expects such a group; batch-editing individually created views has crashed Civil 3D 2025 in practice.
-- With `templatePath` and `layoutName` the views use production placement from that template layout (for example an A4 landscape sheet layout); without them they go into a draft grid. The layout must exist in the template. No paper space layouts are created. Sheet fit depends on the layout's viewport, scale, view style and bands together, so check the result visually or in a plot preview.
+- With `templatePath` and `layoutName` the views use production placement from that template layout (for example an A4 landscape sheet layout); without them they go into a draft grid. The layout must exist in the template and have a scaled model viewport; a layout without one, such as a cover sheet, is rejected before anything is created, and so are `leftWidth` plus `rightWidth` wider than that viewport in model units. `sheetViewport` reports the viewport used. No paper space layouts are created. Sheet fit depends on the layout's viewport, scale, view style and bands together, so check the result visually or in a plot preview.
+- Template placement draws one model-space sheet frame per sheet. Civil 3D sizes these frames from the layout's paper size and the drawing's current annotation scale, not from the viewport scale: with a 1:500 annotation scale an A3 1:100 layout gave 210 x 148.5 m frames. The recipe therefore refuses a layout whose viewport scale differs from the annotation scale; set the annotation scale first.
+- Give `elevationHeight` (the planned height from `plan_section_sheet_fit`) for sheets. Civil 3D distributes the views over the sheets once, from their size at creation; changing the height afterwards (with `shift_section_view_elevations` or `UpdateLayout`) does not move views to other sheets, so tall views end up overlapping. After creation, `shift_section_view_elevations` in `belowLowest` mode with the same height sets each view's datum without changing its size.
+- `sheetFit` checks each view's graph and its bottom bands against the model viewport inside the new sheet frames, taking the viewport as centred on the frame (equal margins). It reports the sheet count, views per sheet and up to 10 views that leave the viewport with their overflow per side. The view title and annotation outside the graph are not in this box; in a live A3 1:100 test Civil 3D kept the graph top 12 mm below the viewport top, so plan with `reservedHeightMm` and still check a plot preview.
 - `groupPlotStyleName` applies an existing group plot style and re-lays out the new group, for example one with one view per sheet and plotting by columns so stations run left to right. `leftToRightByStation` reports whether view X positions increase with station.
 - `leftWidth`/`rightWidth` set the view offset range (left becomes offset `-leftWidth`); this is the view range only, not the sample line width.
 - `bandSources` rewires bottom bands after the band set import: give each band's section sources by section source handle (for example the existing ground surface) and whether its labels show. Hide design bands with `showLabels: false` until a design section exists, then point them to the design source and show them. `firstViewBottomBands` shows the result for the first view.
