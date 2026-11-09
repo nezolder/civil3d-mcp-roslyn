@@ -161,6 +161,57 @@ internal static class EngineeringSkillInputTests
         probes.Add(new("station rounding",rowsFile,true,Change(rowValues,"roundTo","0.1"),
             "return new { success=true, rounded=RoundStation(30.04), up=RoundStation(30.06) };",
             result=> { Near(result,"rounded",30.0,1e-9); Near(result,"up",30.1,1e-9); }));
+        // Row at 10, stray points every 0.8-0.9 m that chain it to a row at 15.5: one 5.7 m group.
+        const string chained="var pts=new (double station,double offset,int index)[] {(10.0,-5,0),(10.1,0,1),(10.2,5,2),"
+            +"(11.0,30,3),(11.9,30,4),(12.8,30,5),(13.7,30,6),(14.6,30,7),(15.5,-5,8),(15.6,0,9),(15.7,5,10)};";
+        probes.Add(new("long group cut at its largest gap instead of rejected",rowsFile,true,rowValues,
+            chained+"var built=BuildRows(pts); var whole=GroupRows(pts);"
+            +"return new { success=whole.Count==1 && EvaluateRow(whole[0]).rejection==\"station spread above maxRowSpread\""
+            +" && built.Count==2 && built.All(b=>b.origin==\"split\" && EvaluateRow(b.row).rejection==null)"
+            +" && built[0].row.Count==4 && built[1].row.Count==7 };"));
+        probes.Add(new("splitting can be turned off",rowsFile,true,Change(rowValues,"splitLongGroups","false"),
+            chained+"var built=BuildRows(pts);"
+            +"return new { success=built.Count==1 && built[0].origin==\"row\" && EvaluateRow(built[0].row).rejection==\"station spread above maxRowSpread\" };"));
+        // Left half measured at 50, right half at 53: neither is a row alone with minPoints 4 and requireCrossing.
+        const string halves="var pts=new (double station,double offset,int index)[] {(50.0,-3,0),(50.1,-5,1),(50.2,-7,2),(53.0,3,3),(53.1,5,4),(53.2,7,5)};";
+        var crossing4=Change(Change(rowValues,"minPoints","4"),"requireCrossing","true");
+        probes.Add(new("halves measured a few metres apart joined into one row",rowsFile,true,crossing4,
+            halves+"var built=BuildRows(pts); var r=EvaluateRow(built[0].row);"
+            +"return new { success=built.Count==1 && built[0].origin==\"joined\" && r.rejection==null && r.left==3 && r.right==3,"
+            +" left=MedianStation(built[0].row.Where(p=>p.offset<0).Select(p=>p.station)).Value, right=MedianStation(built[0].row.Where(p=>p.offset>0).Select(p=>p.station)).Value };",
+            result=> { Near(result,"left",50.1,1e-9); Near(result,"right",53.1,1e-9); }));
+        probes.Add(new("joining can be turned off",rowsFile,true,Change(crossing4,"joinHalfRows","false"),
+            halves+"var built=BuildRows(pts);"
+            +"return new { success=built.Count==2 && built.All(b=>b.origin==\"row\" && EvaluateRow(b.row).rejection==\"too few points\") };"));
+        probes.Add(new("a row that is a row on its own is not joined",rowsFile,true,Change(rowValues,"requireCrossing","true"),
+            "var pts=new (double station,double offset,int index)[] {(70.0,-4,0),(70.1,0,1),(70.2,4,2),(72.0,-6,3),(72.1,-8,4),(72.2,-9,5)};"
+            +"var built=BuildRows(pts);"
+            +"return new { success=built.Count==2 && built[0].origin==\"row\" && EvaluateRow(built[0].row).rejection==null && built[1].origin==\"row\" };"));
+        probes.Add(new("points near the alignment count on neither side",rowsFile,true,Change(rowValues,"requireCrossing","true"),
+            "var row=new List<(double station,double offset,int index)>{(60,-0.2,0),(60.1,3,1),(60.2,6,2)};"
+            +"var r=EvaluateRow(row); return new { success=r.rejection==\"points on one side only\" && r.left==0 && r.right==2 };"));
+        probes.Add(new("matching points count offsets repeated in neighbouring rows",rowsFile,true,rowValues,
+            "var rowsInOrder=new List<List<(double station,double offset,int index)>>();"
+            +"foreach(var s in new[]{0.0,25,50,60,75,100}) rowsInOrder.Add(s==60"
+            +" ? new List<(double station,double offset,int index)>{(s,-11,0),(s,17.1,1),(s,23,2)}"
+            +" : new List<(double station,double offset,int index)>{(s,-3.1,0),(s,3.0+s/1000,1),(s,5.2,2)});"
+            +"var m=MatchingPoints(rowsInOrder);"
+            +"return new { success=m.SequenceEqual(new[]{3,3,3,0,3,3}) };"));
+        probes.Add(new("attribute values filter by tag",rowsFile,true,
+            Change(Change(Change(rowValues,"attributeFilter","\" aROK* | uTSZeL \""),"excludeAttributes","\"Fa\""),"attributeTags","\"Megj*\""),
+            "return new { success=attributesMatch(new[]{(\"Pontszám\",\"60001\"),(\"Megjegyzés\",\" aROKaLJa \")})"
+            +" && attributesMatch(new[]{(\"MEGJEGYZÉS\",\"utszel\")})"
+            +" && !attributesMatch(new[]{(\"Megjegyzés\",\"Fa\")})"
+            +" && !attributesMatch(new[]{(\"Pontkód\",\"aROK\")})"
+            +" && !attributesMatch(new (string tag,string value)[0])"
+            +" && !tagChecked(\"Pontkód\") && tagChecked(\"megjegyzés\") };"));
+        probes.Add(new("empty attribute filters keep every point",rowsFile,true,rowValues,
+            "return new { success=attributesMatch(new (string tag,string value)[0]) && attributesMatch(new[]{(\"X\",\"Fa\")}) && tagChecked(\"anything\") };"));
+        probes.Add(new("excluded attribute values drop the point",rowsFile,true,Change(rowValues,"excludeAttributes","\"Fa|Kerites*\""),
+            "return new { success=!attributesMatch(new[]{(\"Megjegyzés\",\"Kerites kint\")}) && attributesMatch(new[]{(\"Megjegyzés\",\"PaDKa\")}) };"));
+        Add(rowsFile,"too many attribute patterns refused",false,Change(rowValues,"attributeFilter",
+            "string.Join(\"|\",Enumerable.Range(0,101).Select(i=>\"A\"+i))"));
+        Add(rowsFile,"control characters in attribute filter refused",false,Change(rowValues,"attributeTags","\"Megj\\n\""));
 
         var trees=new List<SyntaxTree>();
         for(var index=0;index<probes.Count;index++)
