@@ -185,6 +185,7 @@ foreach (var band in bandSources)
 }
 
 var placement = new SectionViewGroupCreationPlacementOptions();
+(double widthMm, double heightMm, double customScale)? sheetViewport = null;
 if (templatePath != "")
 {
     string[] layouts;
@@ -192,6 +193,36 @@ if (templatePath != "")
     catch (System.Exception ex) { return new { success = false, error = "The template could not be read.", templatePath, detail = ex.Message }; }
     if (layouts == null || !layouts.Contains(layoutName))
         return new { success = false, error = "The layout does not exist in the template.", layoutName, available = layouts };
+    // The views fill the layout's model viewport; a cover sheet without one cannot hold them.
+    try
+    {
+        using (var side = new Database(false, true))
+        {
+            side.ReadDwgFile(templatePath, Autodesk.AutoCAD.DatabaseServices.FileOpenMode.OpenForReadAndAllShare, true, null);
+            using (var tr = side.TransactionManager.StartTransaction())
+            {
+                var layoutDict = (DBDictionary)tr.GetObject(side.LayoutDictionaryId, OpenMode.ForRead);
+                foreach (DBDictionaryEntry entry in layoutDict)
+                {
+                    var layout = (Layout)tr.GetObject(entry.Value, OpenMode.ForRead);
+                    if (layout.ModelType || layout.LayoutName != layoutName) continue;
+                    var viewports = new List<Viewport>();
+                    foreach (ObjectId id in (BlockTableRecord)tr.GetObject(layout.BlockTableRecordId, OpenMode.ForRead))
+                        if (tr.GetObject(id, OpenMode.ForRead) is Viewport viewport) viewports.Add(viewport);
+                    var model = viewports.Skip(1).OrderByDescending(v => v.Width * v.Height).FirstOrDefault();
+                    if (model != null && model.CustomScale > 0)
+                        sheetViewport = (model.Width, model.Height, model.CustomScale);
+                }
+                tr.Commit();
+            }
+        }
+    }
+    catch (System.Exception ex) { return new { success = false, error = "The template could not be read.", templatePath, detail = ex.Message }; }
+    if (sheetViewport == null)
+        return new { success = false, error = "The layout has no scaled model viewport, for example a cover sheet; choose a section sheet layout.", layoutName };
+    var sheetModelWidth = sheetViewport.Value.widthMm / sheetViewport.Value.customScale;
+    if (!double.IsNaN(leftWidth) && leftWidth + rightWidth > sheetModelWidth + 1e-6)
+        return new { success = false, error = "leftWidth plus rightWidth is wider than the layout's model viewport.", leftWidth, rightWidth, sheetModelWidth };
     placement.UseProductionPlacement(templatePath, layoutName);
 }
 else
@@ -308,6 +339,13 @@ return new {
         layoutName = viewGroup.LayoutName,
         viewCount = views.Count
     },
+    sheetViewport = sheetViewport == null ? null : new {
+        widthMm = sheetViewport.Value.widthMm,
+        heightMm = sheetViewport.Value.heightMm,
+        scale = "1:" + Math.Round(1000.0 / sheetViewport.Value.customScale, 3).ToString(System.Globalization.CultureInfo.InvariantCulture),
+        modelWidth = sheetViewport.Value.widthMm / sheetViewport.Value.customScale,
+        modelHeight = sheetViewport.Value.heightMm / sheetViewport.Value.customScale
+    },
     stationRange = new { first = firstStation, last = lastStation },
     leftToRightByStation = steps.All(step => step > 0),
     views = ordered.Select(v => new {
@@ -331,7 +369,7 @@ return new {
 
 - This is a write-capable template: confirm the full drawing identity first and run it with `civil3d_execute`; use `saveDrawing: true` only for an approved save.
 - It creates one native section view group, never individual views. Group-level property and band editing in Civil 3D expects such a group; batch-editing individually created views has crashed Civil 3D 2025 in practice.
-- With `templatePath` and `layoutName` the views use production placement from that template layout (for example an A4 landscape sheet layout); without them they go into a draft grid. The layout must exist in the template. No paper space layouts are created. Sheet fit depends on the layout's viewport, scale, view style and bands together, so check the result visually or in a plot preview.
+- With `templatePath` and `layoutName` the views use production placement from that template layout (for example an A4 landscape sheet layout); without them they go into a draft grid. The layout must exist in the template and have a scaled model viewport; a layout without one, such as a cover sheet, is rejected before anything is created, and so are `leftWidth` plus `rightWidth` wider than that viewport in model units. `sheetViewport` reports the viewport used. No paper space layouts are created. Sheet fit depends on the layout's viewport, scale, view style and bands together, so check the result visually or in a plot preview.
 - `groupPlotStyleName` applies an existing group plot style and re-lays out the new group, for example one with one view per sheet and plotting by columns so stations run left to right. `leftToRightByStation` reports whether view X positions increase with station.
 - `leftWidth`/`rightWidth` set the view offset range (left becomes offset `-leftWidth`); this is the view range only, not the sample line width.
 - `bandSources` rewires bottom bands after the band set import: give each band's section sources by section source handle (for example the existing ground surface) and whether its labels show. Hide design bands with `showLabels: false` until a design section exists, then point them to the design source and show them. `firstViewBottomBands` shows the result for the first view.

@@ -44,6 +44,10 @@ parameters:
     type: double
     required: false
     description: The planned elevation height is rounded down to a multiple of this, greater than 0 (default 0.5)
+  - name: widthStep
+    type: double
+    required: false
+    description: The planned left and right view widths are rounded up to a multiple of this, greater than 0 (default 1)
   - name: startStation
     type: double
     required: false
@@ -66,6 +70,7 @@ var referenceSourceHandle = "";
 var clearance = 2.0;
 var topClearance = 0.5;
 var heightStep = 0.5;
+var widthStep = 1.0;
 var startStation = double.NaN;
 var endStation = double.NaN;
 
@@ -80,8 +85,9 @@ if (layoutNames == null || layoutNames.Length > 4000 || layoutNames.Any(char.IsC
     || string.IsNullOrWhiteSpace(sectionViewStyleName) || bandSetStyleName == null)
     return new { success = false, error = "layoutNames must be \"|\"-separated names, and sectionViewStyleName is required." };
 if (!double.IsFinite(clearance) || clearance < 0 || clearance > 1000 || !double.IsFinite(topClearance) || topClearance < 0 || topClearance > 1000
-    || !double.IsFinite(heightStep) || heightStep <= 0 || heightStep > 100)
-    return new { success = false, error = "clearance and topClearance must be 0..1000 and heightStep greater than 0, at most 100." };
+    || !double.IsFinite(heightStep) || heightStep <= 0 || heightStep > 100
+    || !double.IsFinite(widthStep) || widthStep <= 0 || widthStep > 100)
+    return new { success = false, error = "clearance and topClearance must be 0..1000, heightStep and widthStep greater than 0, at most 100." };
 if (double.IsInfinity(startStation) || double.IsInfinity(endStation))
     return new { success = false, error = "startStation and endStation must be finite or NaN." };
 if (!System.IO.File.Exists(templatePath))
@@ -132,7 +138,7 @@ if (!bandSetId.IsNull)
 }
 
 // Sample lines: total width along the line and the reference section's range.
-var lines = new List<(string name, double station, double width, double low, double high)>();
+var lines = new List<(string name, double station, double width, double low, double high, double left, double right)>();
 var missingSections = new List<object>();
 foreach (ObjectId id in group.GetSampleLineIds())
 {
@@ -150,7 +156,10 @@ foreach (ObjectId id in group.GetSampleLineIds())
         missingSections.Add(new { line.Name, line.Station });
         continue;
     }
-    lines.Add((line.Name, line.Station, width, section.MinmumElevation, section.MaximumElevation));
+    // Offsets of the sampled reference section: left is negative, right positive.
+    var left = double.IsFinite(section.LeftOffset) ? Math.Max(0, -section.LeftOffset) : 0;
+    var right = double.IsFinite(section.RightOffset) ? Math.Max(0, section.RightOffset) : 0;
+    lines.Add((line.Name, line.Station, width, section.MinmumElevation, section.MaximumElevation, left, right));
 }
 if (lines.Count == 0)
     return new { success = false, error = "No sample line in the range has a section of the reference source.", missingSections };
@@ -181,7 +190,7 @@ try
                 var modelViewport = viewports.Skip(1).OrderByDescending(v => v.Width * v.Height).FirstOrDefault();
                 if (modelViewport == null || !(modelViewport.CustomScale > 0))
                 {
-                    skipped.Add(new { layout = layout.LayoutName, reason = "No scaled model viewport." });
+                    skipped.Add(new { layout = layout.LayoutName, reason = "No scaled model viewport, for example a cover sheet." });
                     continue;
                 }
                 sheets.Add((layout.LayoutName, modelViewport.Width, modelViewport.Height, modelViewport.CustomScale));
@@ -200,6 +209,10 @@ if (sheets.Count == 0)
 
 var maxRelief = lines.Max(l => l.high - l.low);
 var maxWidth = lines.Max(l => l.width);
+// One offset range for the whole group: every view is as wide as the widest left plus the widest right side.
+var leftWidth = Math.Ceiling(lines.Max(l => l.left) / widthStep - 1e-9) * widthStep;
+var rightWidth = Math.Ceiling(lines.Max(l => l.right) / widthStep - 1e-9) * widthStep;
+var groupWidth = leftWidth + rightWidth;
 var plans = new List<(double area, object plan, bool fitsAll)>();
 foreach (var sheet in sheets)
 {
@@ -231,6 +244,8 @@ foreach (var sheet in sheets)
         tooWideCount = checks.Count(l => l.wide),
         tooTallCount = checks.Count(l => l.tall),
         notFitting = notFitting.Take(10).ToList(),
+        groupWidthFits = groupWidth > 0 && groupWidth <= modelWidth + 1e-6,
+        widthParams = groupWidth > 0 && groupWidth <= modelWidth + 1e-6 ? new { leftWidth, rightWidth } : null,
         shiftParams = height > 0 ? new { mode = "belowLowest", clearance, height, referenceSourceHandle } : null
     }, fitsAll));
 }
@@ -245,6 +260,7 @@ return new {
     clearance,
     topClearance,
     sampleLines = new { count = lines.Count, maxWidth, maxRelief, maxNeeded = maxRelief + clearance + topClearance },
+    groupOffsets = new { leftWidth, rightWidth, width = groupWidth, widthStep },
     missingSections,
     recommended,
     sheets = ordered.Select(p => p.plan).ToList(),
@@ -259,6 +275,8 @@ return new {
 - For each candidate layout it reads the viewport that shows the model (the largest one apart from the layout's own paper space viewport) and its scale, then works out the view width and the elevation height that fit: the viewport height in model units minus the band set's heights, divided by the view style's vertical exaggeration, rounded down to `heightStep`.
 - A sample line fits a sheet when its width (along its vertices) fits the view width and its reference section's relief plus `clearance` below and `topClearance` above fits the elevation height. `tooWideCount` and `tooTallCount` count the misses, and `notFitting` lists the first 10 with the reason.
 - `recommended` is the smallest viewport where every planned sample line fits. Choosing between, say, A4 portrait, A4 landscape and A3 landscape is still an engineering decision: a wider sheet allows wider sample lines, a taller one more relief or utilities.
+- `groupOffsets` is one offset range for the whole group: the widest left and the widest right side of the reference sections, each rounded up to `widthStep`. With these widths every view is equally wide, so a sheet takes the group only when `groupWidthFits`; then `widthParams` are the `leftWidth`/`rightWidth` for `create_section_view_group`. A sheet can fit every line by its own width and still miss `groupWidthFits` when the widest sides belong to different lines.
+- Layouts without a scaled model viewport, such as cover sheets, are listed in `skipped` and never planned.
 - `shiftParams` are the values for `shift_section_view_elevations` (`mode: "belowLowest"` with `clearance` and `height`) after the views exist; use the same template layout with `create_section_view_group`, and at most `viewWidth` as the views' total width.
 - Sheets come from the template's viewport geometry and scale, not from layout or file names, so a renamed template or added sheet sizes need no change here; only `templatePath` and `layoutNames` follow them.
 - Limits:
