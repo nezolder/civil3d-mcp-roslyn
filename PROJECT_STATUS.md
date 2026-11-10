@@ -20,7 +20,8 @@ A read-only review of the whole server found several defects in timeouts, cancel
 Evidence boundaries:
 
 - **Proven offline:** Node tests for the reply wait, `timeoutSeconds` validation and forwarding, cancellation before and after sending, stale-record skipping with fallback, partial search and annotations. Host-independent .NET tests run the real Roslyn executor for the per-call limit, the discarded late result, the default aliases and their overrides, and non-finite serialization; plugin core tests cover the read-only refusal, limit validation and stale-record cleanup. The six aliased names were confirmed ambiguous against Civil 3D 2025 metadata, the plugin builds against those assemblies, and all 42 recipe code blocks compile both with and without the aliases.
-- **Unverified live:** none of these changes has yet run inside Civil 3D. A raised limit on a real long operation, Stop during a running script, `Document.IsReadOnly` on a drawing opened read-only, and the aliases in the live host remain to be confirmed in a disposable drawing.
+- **Proven in a targeted Civil 3D 2025 check** ([report](docs/validation/reliability-fixes-9ac927e-2026-11-10.md)), one fresh instance on a disposable drawing under hu-HU: the default aliases, non-finite results, a 5-second and the default 120-second limit on looping scripts, a loop-free write discarded when it returned after its limit, a 130-second write under a 180-second limit, a client cancel that stopped a looping write without committing it, the read-only refusal before the script, a normal host-managed save, and removal of a stale endpoint record at plugin start.
+- **Unverified:** a raised limit on a real long Civil operation, Stop pressed in a desktop client (the test sent the same MCP cancel from an SDK client), and stale-record handling while several Civil 3D instances run.
 
 ## Runtime and named-recipe updates (2026-10-05–06)
 
