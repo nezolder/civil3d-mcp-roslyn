@@ -30,6 +30,15 @@ jobs:
         with:
           dotnet-version: 8.0.x
       - run: npm ci --ignore-scripts
+      # The plugin runs on Hungarian Windows, where numbers are written with a
+      # decimal comma. Test under that setting so culture-dependent text is caught.
+      - name: Switch to the Hungarian regional setting
+        run: Set-Culture hu-HU
+      - name: Confirm the regional setting
+        run: |
+          $name = (Get-Culture).Name
+          if ($name -ne 'hu-HU') { throw "Expected hu-HU, got $name" }
+          (1.5).ToString()
       - name: Error and settings tests
         run: npm run test:errors
       - name: Transport tests

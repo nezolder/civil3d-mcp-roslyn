@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
@@ -234,7 +235,7 @@ public static class RoslynExecutor
     {
       throw new JsonRpcDispatchException(
         "CIVIL3D.TIMEOUT",
-        $"Script execution timed out after {limit.TotalSeconds}s. {TimeoutAdvice}"
+        $"Script execution timed out after {FormatSeconds(limit)}. {TimeoutAdvice}"
       );
     }
     catch (CompilationErrorException ex)
@@ -290,7 +291,7 @@ public static class RoslynExecutor
     {
       throw new JsonRpcDispatchException(
         "CIVIL3D.TIMEOUT",
-        $"Reading the script result timed out after {limit.TotalSeconds}s. {TimeoutAdvice}"
+        $"Reading the script result timed out after {FormatSeconds(limit)}. {TimeoutAdvice}"
       );
     }
     finally
@@ -306,6 +307,13 @@ public static class RoslynExecutor
   private static readonly string TimeoutAdvice =
     "The script was stopped and its transaction was not committed. " +
     $"For a known long operation pass a larger timeoutSeconds (up to {MaxTimeoutSeconds}).";
+
+  /// <summary>
+  /// Error text is read by tools and tests, so the number must not follow the
+  /// Windows regional setting (a Hungarian system would write "0,2s").
+  /// </summary>
+  private static string FormatSeconds(TimeSpan limit) =>
+    limit.TotalSeconds.ToString(CultureInfo.InvariantCulture) + "s";
 
   /// <summary>
   /// Compiles the caller's script, preferring loop checkpoints and the default
