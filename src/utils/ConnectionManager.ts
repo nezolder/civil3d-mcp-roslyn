@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ApplicationClientConnection } from "./SocketClient.js";
+import { ApplicationClientConnection, cancelledBeforeSend } from "./SocketClient.js";
 import { createLogger } from "./logger.js";
 import { Civil3dMcpError } from "../errors/structuredError.js";
 
@@ -17,6 +17,11 @@ const ENDPOINT_SCHEMA_VERSION = 1;
 const MAX_ENDPOINT_RECORDS = 64;
 const MAX_ENDPOINT_RECORD_BYTES = 4_096;
 const INSTANCE_ID_PATTERN = /^[0-9a-f]{32}$/i;
+// A refused loopback connection means nothing listens on that port. Windows
+// takes about a second to report each refusal, so remember it for a while.
+const REFUSED_ENDPOINT_TTL_MS = 30_000;
+const MAX_REFUSED_ENDPOINTS = 256;
+const refusedEndpoints = new Map<string, number>();
 
 export interface ExpectedDrawingTarget {
   databaseFilename: string;
@@ -26,6 +31,8 @@ export interface ExpectedDrawingTarget {
 export interface ApplicationConnectionTarget {
   expectedDrawing?: ExpectedDrawingTarget;
   instanceId?: string;
+  /** Aborted when the MCP client cancels the tool call. */
+  signal?: AbortSignal;
 }
 
 interface ConnectionSettings {
@@ -74,7 +81,9 @@ export async function withApplicationConnection<T>(
   target: ApplicationConnectionTarget = {}
 ): Promise<T> {
   const settings = getConnectionSettings();
+  if (target.signal?.aborted) throw cancelledBeforeSend();
   const endpoint = await selectEndpoint(settings, target);
+  if (target.signal?.aborted) throw cancelledBeforeSend();
   return await withDirectConnection(endpoint, operation, settings.connectTimeoutMs);
 }
 
@@ -148,7 +157,7 @@ async function selectEndpoint(
     return directEndpoint;
   }
 
-  const endpoints = await discoverLiveEndpoints(settings);
+  const endpoints = await discoverLiveEndpoints(settings, target.instanceId);
   if (endpoints.length === 0) {
     if (target.instanceId) throw instanceNotFound(target.instanceId, []);
     // Backward-compatible final attempt for a pre-registry plugin.
@@ -181,10 +190,51 @@ async function selectEndpoint(
   throw instanceSelectionRequired(await readDrawingIdentities(endpoints, settings));
 }
 
-async function discoverLiveEndpoints(settings: ConnectionSettings): Promise<LiveEndpoint[]> {
+async function discoverLiveEndpoints(
+  settings: ConnectionSettings,
+  wantedInstanceId?: string
+): Promise<LiveEndpoint[]> {
   const records = await readEndpointRecords(settings.endpointDirectory);
   if (records.length === 0) return [];
-  const registered = (
+
+  // Records left behind by a crashed or killed Civil 3D are never removed by
+  // that process. Skip the ones that cannot be live instead of paying for a
+  // refused connection on every call. The instance the caller asked for is
+  // always probed.
+  const likely: EndpointRecord[] = [];
+  const skipped: EndpointRecord[] = [];
+  for (const record of records) {
+    const skip =
+      record.instanceId !== wantedInstanceId &&
+      (!isProcessAlive(record.processId) || wasRecentlyRefused(settings.host, record.port, record.instanceId));
+    (skip ? skipped : likely).push(record);
+  }
+
+  const registered = await probeRecords(likely, settings);
+
+  if (
+    !registered.some((endpoint) => endpoint.port === settings.port) &&
+    !wasRecentlyRefused(settings.host, settings.port, null)
+  ) {
+    const fixed = await probeEndpoint(fixedEndpoint(settings.host, settings.port), settings, null);
+    if (fixed && !registered.some((endpoint) => endpoint.instanceId === fixed.instanceId)) {
+      registered.push(fixed);
+    }
+  }
+
+  // The shortcut must never hide a session: with nothing live, probe the rest.
+  if (registered.length === 0 && skipped.length > 0) {
+    registered.push(...(await probeRecords(skipped, settings)));
+  }
+
+  return registered.sort((left, right) => left.instanceId.localeCompare(right.instanceId));
+}
+
+async function probeRecords(
+  records: EndpointRecord[],
+  settings: ConnectionSettings
+): Promise<LiveEndpoint[]> {
+  return (
     await Promise.all(
       records.map((record) =>
         probeEndpoint(
@@ -196,20 +246,40 @@ async function discoverLiveEndpoints(settings: ConnectionSettings): Promise<Live
             startedAtUtc: record.startedAtUtc,
             legacy: false,
           },
-          settings
+          settings,
+          record.instanceId
         )
       )
     )
   ).filter((endpoint): endpoint is LiveEndpoint => endpoint !== null);
+}
 
-  if (!registered.some((endpoint) => endpoint.port === settings.port)) {
-    const fixed = await probeEndpoint(fixedEndpoint(settings.host, settings.port), settings);
-    if (fixed && !registered.some((endpoint) => endpoint.instanceId === fixed.instanceId)) {
-      registered.push(fixed);
-    }
+/** Signal 0 only tests for existence; a process we may not signal still exists. */
+function isProcessAlive(processId: number): boolean {
+  try {
+    process.kill(processId, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
+}
 
-  return registered.sort((left, right) => left.instanceId.localeCompare(right.instanceId));
+function refusedKey(host: string, port: number, instanceId: string | null): string {
+  return `${host}|${port}|${instanceId ?? ""}`;
+}
+
+function wasRecentlyRefused(host: string, port: number, instanceId: string | null): boolean {
+  const key = refusedKey(host, port, instanceId);
+  const expiresAt = refusedEndpoints.get(key);
+  if (expiresAt === undefined) return false;
+  if (expiresAt > Date.now()) return true;
+  refusedEndpoints.delete(key);
+  return false;
+}
+
+function rememberRefused(host: string, port: number, instanceId: string | null): void {
+  if (refusedEndpoints.size >= MAX_REFUSED_ENDPOINTS) refusedEndpoints.clear();
+  refusedEndpoints.set(refusedKey(host, port, instanceId), Date.now() + REFUSED_ENDPOINT_TTL_MS);
 }
 
 async function readEndpointRecords(directory: string): Promise<EndpointRecord[]> {
@@ -256,9 +326,15 @@ function isEndpointRecord(value: unknown): value is EndpointRecord {
   );
 }
 
+/**
+ * Returns the endpoint when its health reply matches the record. A string or
+ * null refusalInstanceId (null for the fixed port) also remembers a refused
+ * connection so that the next calls skip this endpoint for a while.
+ */
 async function probeEndpoint(
   endpoint: LiveEndpoint,
-  settings: ConnectionSettings
+  settings: ConnectionSettings,
+  refusalInstanceId?: string | null
 ): Promise<LiveEndpoint | null> {
   try {
     const health = await withDirectConnection(
@@ -308,7 +384,14 @@ async function probeEndpoint(
         typeof payload.startedAtUtc === "string" ? payload.startedAtUtc : null,
       legacy: healthInstanceId === undefined,
     };
-  } catch {
+  } catch (error) {
+    if (
+      refusalInstanceId !== undefined &&
+      error instanceof Civil3dMcpError &&
+      error.code === "CIVIL3D.CONNECTION_FAILED"
+    ) {
+      rememberRefused(endpoint.host, endpoint.port, refusalInstanceId);
+    }
     return null;
   }
 }

@@ -13,6 +13,7 @@ import {
   type TemperatureState,
 } from "./schema.js";
 import { MCP_BENCHMARK_META_KEY } from "./liveTrace.js";
+import { commandWaitMs } from "../tools/scriptTimeout.js";
 
 export const READ_ONLY_LIVE_SCENARIO_ID = "query.bounded-summary.synthetic.v1";
 export const EXPECTED_DRAWING_ENV = "CIVIL3D_BENCHMARK_EXPECTED_DRAWING";
@@ -175,8 +176,12 @@ export function parseReadOnlyConnectionSettings(
     port,
     connectTimeoutMs,
     commandTimeoutMs,
+    // The query tool waits past the plugin's script limit, which can be
+    // longer than the configured command timeout; outlast that actual wait.
     sdkRequestTimeoutMs:
-      connectTimeoutMs + commandTimeoutMs + READ_ONLY_SDK_TIMEOUT_GRACE_MS,
+      connectTimeoutMs +
+      commandWaitMs(commandTimeoutMs, undefined) +
+      READ_ONLY_SDK_TIMEOUT_GRACE_MS,
   };
 }
 

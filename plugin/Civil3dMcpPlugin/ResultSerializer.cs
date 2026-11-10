@@ -16,13 +16,16 @@ namespace Civil3DMcpPlugin;
 /// Only explicitly supported Autodesk value types and ordinary JSON shapes are allowed.
 /// A list longer than <see cref="MaxCollectionItems"/> keeps its first items, and the
 /// whole result is then wrapped as <c>{"result": ..., "truncated": [...]}</c> so the
-/// cut is never silent.
+/// cut is never silent. NaN and Infinity have no JSON form: each becomes null and the
+/// wrapper lists where, as <c>"nonFinite": {"count": n, "paths": [...]}</c>, so one bad
+/// number does not discard an otherwise useful result.
 /// </summary>
 internal static class ResultSerializer
 {
   internal const int MaxDepth = 8;
   internal const int MaxCollectionItems = 1_000;
   internal const int MaxTotalNodes = 10_000;
+  internal const int MaxNonFinitePaths = 20;
 
   public static JsonNode? Serialize(object? value)
   {
@@ -30,12 +33,22 @@ internal static class ResultSerializer
     {
       var state = new SerializationState();
       var result = state.Convert(value, depth: 0, path: "$");
-      if (state.Truncations.Count == 0) return result;
-      return new JsonObject
+      if (state.Truncations.Count == 0 && state.NonFiniteCount == 0) return result;
+      var wrapped = new JsonObject { ["result"] = result };
+      if (state.Truncations.Count > 0)
       {
-        ["result"] = result,
-        ["truncated"] = new JsonArray(state.Truncations.ToArray()),
-      };
+        wrapped["truncated"] = new JsonArray(state.Truncations.ToArray());
+      }
+      if (state.NonFiniteCount > 0)
+      {
+        wrapped["nonFinite"] = new JsonObject
+        {
+          ["count"] = state.NonFiniteCount,
+          ["paths"] = new JsonArray(
+            state.NonFinitePaths.Select(path => (JsonNode?)JsonValue.Create(path)).ToArray()),
+        };
+      }
+      return wrapped;
     }
     catch (Exception ex) when (ex is JsonRpcDispatchException or OperationCanceledException)
     {
@@ -64,6 +77,10 @@ internal static class ResultSerializer
     /// <summary>One entry per list that was cut to <see cref="MaxCollectionItems"/>.</summary>
     public List<JsonNode> Truncations { get; } = new();
 
+    /// <summary>NaN/Infinity values replaced by null, and where the first ones were.</summary>
+    public int NonFiniteCount { get; private set; }
+    public List<string> NonFinitePaths { get; } = new();
+
     public JsonNode? Convert(object? value, int depth, string path)
     {
       EnsureDepth(depth);
@@ -86,8 +103,8 @@ internal static class ResultSerializer
         uint number => JsonValue.Create(number),
         long number => JsonValue.Create(number),
         ulong number => JsonValue.Create(number),
-        float number => CreateFiniteNumber(number),
-        double number => CreateFiniteNumber(number),
+        float number => CreateFiniteNumber(number, path),
+        double number => CreateFiniteNumber(number, path),
         decimal number => JsonValue.Create(number),
         Guid guid => JsonValue.Create(guid.ToString("D", CultureInfo.InvariantCulture)),
         DateTime dateTime => JsonValue.Create(dateTime.ToString("o", CultureInfo.InvariantCulture)),
@@ -98,10 +115,10 @@ internal static class ResultSerializer
         Enum enumValue => ConvertEnum(enumValue),
         ObjectId objectId => ConvertObjectId(objectId),
         Handle handle => ConvertHandle(handle),
-        Point2d point => ConvertPoint2d(point),
-        Point3d point => ConvertPoint3d(point),
-        Vector2d vector => ConvertVector2d(vector),
-        Vector3d vector => ConvertVector3d(vector),
+        Point2d point => ConvertXy(point.X, point.Y, path),
+        Point3d point => ConvertXyz(point.X, point.Y, point.Z, path),
+        Vector2d vector => ConvertXy(vector.X, vector.Y, path),
+        Vector3d vector => ConvertXyz(vector.X, vector.Y, vector.Z, path),
         DBObject => throw SerializationError(
           "Returning AutoCAD DBObject instances is not supported; return explicit scalar values or ObjectId instead."
         ),
@@ -117,7 +134,7 @@ internal static class ResultSerializer
       };
     }
 
-    private JsonNode ConvertJsonNode(JsonNode node, int depth, string path)
+    private JsonNode? ConvertJsonNode(JsonNode node, int depth, string path)
     {
       return node switch
       {
@@ -146,7 +163,7 @@ internal static class ResultSerializer
     private JsonNode ConvertJsonArray(JsonArray source, int depth, string path)
       => ConvertItems(source, source.Count, depth, path);
 
-    private JsonNode ConvertJsonValue(JsonValue value, int depth, string path)
+    private JsonNode? ConvertJsonValue(JsonValue value, int depth, string path)
     {
       if (value.TryGetValue<JsonElement>(out var element))
       {
@@ -163,8 +180,8 @@ internal static class ResultSerializer
       if (value.TryGetValue<uint>(out var uintValue)) return JsonValue.Create(uintValue)!;
       if (value.TryGetValue<long>(out var longValue)) return JsonValue.Create(longValue)!;
       if (value.TryGetValue<ulong>(out var ulongValue)) return JsonValue.Create(ulongValue)!;
-      if (value.TryGetValue<float>(out var floatValue)) return CreateFiniteNumber(floatValue);
-      if (value.TryGetValue<double>(out var doubleValue)) return CreateFiniteNumber(doubleValue);
+      if (value.TryGetValue<float>(out var floatValue)) return CreateFiniteNumber(floatValue, path);
+      if (value.TryGetValue<double>(out var doubleValue)) return CreateFiniteNumber(doubleValue, path);
       if (value.TryGetValue<decimal>(out var decimalValue)) return JsonValue.Create(decimalValue)!;
       if (value.TryGetValue<Guid>(out var guidValue))
       {
@@ -363,45 +380,33 @@ internal static class ResultSerializer
     private static JsonNode ConvertHandle(Handle value)
       => JsonValue.Create(value.ToString())!;
 
-    private static JsonNode ConvertPoint2d(Point2d value)
+    private JsonNode ConvertXy(double x, double y, string path)
       => new JsonObject
       {
-        ["x"] = CreateFiniteNumber(value.X),
-        ["y"] = CreateFiniteNumber(value.Y),
+        ["x"] = CreateFiniteNumber(x, PropertyPath(path, "x")),
+        ["y"] = CreateFiniteNumber(y, PropertyPath(path, "y")),
       };
 
-    private static JsonNode ConvertPoint3d(Point3d value)
+    private JsonNode ConvertXyz(double x, double y, double z, string path)
       => new JsonObject
       {
-        ["x"] = CreateFiniteNumber(value.X),
-        ["y"] = CreateFiniteNumber(value.Y),
-        ["z"] = CreateFiniteNumber(value.Z),
+        ["x"] = CreateFiniteNumber(x, PropertyPath(path, "x")),
+        ["y"] = CreateFiniteNumber(y, PropertyPath(path, "y")),
+        ["z"] = CreateFiniteNumber(z, PropertyPath(path, "z")),
       };
 
-    private static JsonNode ConvertVector2d(Vector2d value)
-      => new JsonObject
-      {
-        ["x"] = CreateFiniteNumber(value.X),
-        ["y"] = CreateFiniteNumber(value.Y),
-      };
+    private JsonNode? CreateFiniteNumber(float value, string path)
+      => float.IsFinite(value) ? JsonValue.Create(value) : RecordNonFinite(path);
 
-    private static JsonNode ConvertVector3d(Vector3d value)
-      => new JsonObject
-      {
-        ["x"] = CreateFiniteNumber(value.X),
-        ["y"] = CreateFiniteNumber(value.Y),
-        ["z"] = CreateFiniteNumber(value.Z),
-      };
+    private JsonNode? CreateFiniteNumber(double value, string path)
+      => double.IsFinite(value) ? JsonValue.Create(value) : RecordNonFinite(path);
 
-    private static JsonNode CreateFiniteNumber(float value)
-      => float.IsFinite(value)
-        ? JsonValue.Create(value)!
-        : throw SerializationError("Non-finite floating-point result values are not supported.");
-
-    private static JsonNode CreateFiniteNumber(double value)
-      => double.IsFinite(value)
-        ? JsonValue.Create(value)!
-        : throw SerializationError("Non-finite floating-point result values are not supported.");
+    private JsonNode? RecordNonFinite(string path)
+    {
+      NonFiniteCount++;
+      if (NonFinitePaths.Count < MaxNonFinitePaths) NonFinitePaths.Add(path);
+      return null;
+    }
 
     private JsonNode TrackReference(object value, Func<JsonNode> convert)
     {

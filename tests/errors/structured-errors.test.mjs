@@ -157,8 +157,18 @@ test("command-context start timeout is not confused with an uncertain running sc
     code: "CIVIL3D.TIMEOUT",
     message: "Script execution timed out.",
   });
-  assert.equal(startedTimeout.outcome, "unknown");
+  // The plugin's script limit fires inside the transaction, before any
+  // commit: the changes were rolled back, which is a definite outcome.
+  assert.equal(startedTimeout.category, "timeout");
+  assert.equal(startedTimeout.outcome, "reported_error");
   assert.equal(startedTimeout.toStructuredError().retryable, false);
+
+  const readOnlyDrawing = civil3dErrorFromPlugin({
+    code: "CIVIL3D.DRAWING_READ_ONLY",
+    message: "The active drawing is open read-only.",
+  });
+  assert.equal(readOnlyDrawing.category, "drawing");
+  assert.equal(readOnlyDrawing.outcome, "not_started");
 });
 
 test("a command can opt into a longer timeout for a synchronous drawing save", async () => {

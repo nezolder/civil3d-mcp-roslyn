@@ -38,9 +38,12 @@ internal static class PluginCoreTests
       ("private drawing identity is read without Roslyn or a commit", PrivateDrawingIdentityAsync),
       ("save runs after commit and releases transaction resources", SaveAfterCommitOrderingAsync),
       ("save rejects unsupported request states before Roslyn", SaveRequestValidationAsync),
+      ("save into a read-only drawing is refused before the script runs", ReadOnlyDrawingSaveAsync),
+      ("script time limit parameter is validated and forwarded", ScriptTimeLimitParameterAsync),
       ("save failure preserves committed idempotency state", SaveFailureCompletesIdempotencyAsync),
       ("failed listener start does not report running", FailedListenerStartDoesNotReportRunningAsync),
       ("listener fallback publishes and removes a per-instance endpoint", EndpointRegistrationLifecycleAsync),
+      ("a new session removes endpoint records of processes that are gone", StaleEndpointRecordsAsync),
       ("parallel dispatch is serialized with exact waiting and active status", SerializedDispatchStatusAsync),
       ("native ExecutionResult bridge closes the lost continuation race", NativeExecutionResultBridgeAsync),
       ("completion diagnostics distinguish callback task and synchronization context", CallbackReturnDiagnosticsAsync),
@@ -72,6 +75,7 @@ internal static class PluginCoreTests
     {
       DirectGuardContractAsync, DrawingIdentityOrderingAsync, PrivateDrawingIdentityAsync,
       SaveAfterCommitOrderingAsync, SaveRequestValidationAsync, SaveFailureCompletesIdempotencyAsync,
+      ReadOnlyDrawingSaveAsync, ScriptTimeLimitParameterAsync,
       SerializedDispatchStatusAsync, RunningScriptProgressAndCancellationAsync, ProgressCleanupAsync,
       HealthBypassesSerializedQueueAsync, ApiLookupBypassesSerializedQueueAsync,
       CancellationAndErrorCleanupAsync, GateWaitMeasurementAsync, ExecuteResultSerializationAsync,
@@ -1466,6 +1470,79 @@ internal static class PluginCoreTests
     AssertNoCivilResourcesOpened();
   }
 
+  private static async Task ReadOnlyDrawingSaveAsync()
+  {
+    // Without this check the write would commit in memory and only the save
+    // at the very end would fail.
+    ResetEnvironment();
+    CurrentDocument.IsReadOnly = true;
+    var refused = await SendAsync(CreateGuardedWriteRequest("save-into-read-only", "must-not-run", saveDrawing: true));
+    AssertError(refused, "CIVIL3D.DRAWING_READ_ONLY");
+    AssertNoCivilResourcesOpened();
+    Assert(CurrentDatabase.SaveAsCallCount == 0, "a read-only drawing must not be saved");
+    Assert(CurrentDatabase.TransactionManager.CommittedCount == 0, "nothing may be committed before the refusal");
+
+    // The same key can be used again after the drawing is reopened for writing.
+    ResetEnvironment();
+    CurrentDocument.IsReadOnly = true;
+    AssertError(
+      await SendAsync(CreateIdempotentWriteRequest("read-only-first", "write:read-only", "value", saveDrawing: true)),
+      "CIVIL3D.DRAWING_READ_ONLY"
+    );
+    CurrentDocument.IsReadOnly = false;
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(
+      await SendAsync(CreateIdempotentWriteRequest("read-only-second", "write:read-only", "value", saveDrawing: true)),
+      "value"
+    );
+    Assert(CurrentDatabase.SaveAsCallCount == 1, "the writable drawing must be saved once");
+
+    // In-memory edits of a read-only drawing stay possible when no save is asked for.
+    ResetEnvironment();
+    CurrentDocument.IsReadOnly = true;
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(await SendAsync(CreateGuardedWriteRequest("memory-only", "memory-only")), "memory-only");
+    Assert(CurrentDatabase.TransactionManager.CommittedCount == 1, "a write without save must still commit");
+    Assert(CurrentDatabase.SaveAsCallCount == 0, "no save was requested");
+  }
+
+  private static async Task ScriptTimeLimitParameterAsync()
+  {
+    static string WithTimeLimit(string request, JsonNode? value)
+    {
+      var parsed = JsonNode.Parse(request)!.AsObject();
+      parsed["params"]!["timeoutSeconds"] = value;
+      return parsed.ToJsonString();
+    }
+
+    ResetEnvironment();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(await SendAsync(CreateGuardedWriteRequest("limit-default", "default")), "default");
+    Assert(RoslynExecutor.LastTimeLimit == null, "no parameter must leave the executor default in place");
+
+    AssertResult(
+      await SendAsync(WithTimeLimit(CreateGuardedWriteRequest("limit-long", "long"), 900)),
+      "long"
+    );
+    Assert(RoslynExecutor.LastTimeLimit == TimeSpan.FromSeconds(900), "the limit must reach the executor");
+
+    AssertResult(
+      await SendAsync(WithTimeLimit(CreateRequest("limit-query", readOnly: true, code: "query"), 1)),
+      "query"
+    );
+    Assert(RoslynExecutor.LastTimeLimit == TimeSpan.FromSeconds(1), "queries accept the limit too");
+
+    foreach (var invalid in new JsonNode?[] { 0, -5, 1801, 1.5, "600", true })
+    {
+      ResetEnvironment();
+      AssertError(
+        await SendAsync(WithTimeLimit(CreateGuardedWriteRequest("limit-invalid", "must-not-run"), invalid)),
+        "CIVIL3D.INVALID_INPUT"
+      );
+      AssertNoCivilResourcesOpened();
+    }
+  }
+
   private static async Task SaveFailureCompletesIdempotencyAsync()
   {
     ResetEnvironment();
@@ -1758,6 +1835,77 @@ internal static class PluginCoreTests
     }
 
     return Task.CompletedTask;
+  }
+
+  private static async Task StaleEndpointRecordsAsync()
+  {
+    ResetEnvironment();
+    Directory.CreateDirectory(EndpointDirectory);
+    foreach (var leftover in Directory.GetFiles(EndpointDirectory)) File.Delete(leftover);
+
+    // A process id that existed a moment ago and is gone now.
+    int deadProcessId;
+    using (var child = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+    {
+      FileName = "dotnet",
+      Arguments = "--version",
+      RedirectStandardOutput = true,
+      RedirectStandardError = true,
+      UseShellExecute = false,
+    })!)
+    {
+      deadProcessId = child.Id;
+      await child.StandardOutput.ReadToEndAsync();
+      await child.WaitForExitAsync();
+    }
+
+    var now = DateTimeOffset.UtcNow;
+    Assert(!EndpointRegistration.IsRecordedProcessRunning(deadProcessId, now),
+      "a process that is gone must not count as running");
+    Assert(EndpointRegistration.IsRecordedProcessRunning(Environment.ProcessId, now),
+      "a record written by a running process must count as running");
+    Assert(!EndpointRegistration.IsRecordedProcessRunning(Environment.ProcessId, now.AddDays(-30)),
+      "a process that started after the record was written only reuses the id");
+
+    string Record(int processId, string instanceId) => new JsonObject
+    {
+      ["schemaVersion"] = EndpointRegistration.SchemaVersion,
+      ["instanceId"] = instanceId,
+      ["processId"] = processId,
+      ["port"] = 48999,
+      ["startedAtUtc"] = now.ToString("o"),
+    }.ToJsonString();
+
+    var dead = Path.Combine(EndpointDirectory, "1-dead.json");
+    var own = Path.Combine(EndpointDirectory, "2-own.json");
+    var foreign = Path.Combine(EndpointDirectory, "3-foreign.json");
+    var other = Path.Combine(EndpointDirectory, "4-notes.txt");
+    File.WriteAllText(dead, Record(deadProcessId, new string('a', 32)));
+    File.WriteAllText(own, Record(Environment.ProcessId, new string('b', 32)));
+    File.WriteAllText(foreign, "not json");
+    File.WriteAllText(other, "keep");
+
+    Assert(EndpointRegistration.RemoveStaleRecords(EndpointDirectory) == 1, "exactly the dead record is stale");
+    Assert(!File.Exists(dead), "the record of a process that is gone must be removed");
+    Assert(File.Exists(own), "a record of a running process must stay");
+    Assert(File.Exists(foreign) && File.Exists(other), "files that are not endpoint records must stay");
+
+    File.WriteAllText(dead, Record(deadProcessId, new string('a', 32)));
+    try
+    {
+      PluginRuntime.StartServer();
+      Assert(!File.Exists(dead), "starting a session must clean up dead records");
+      Assert(Directory.GetFiles(EndpointDirectory, "*.json").Length == 3,
+        "the new session's record must be published next to the surviving ones");
+    }
+    finally
+    {
+      PluginRuntime.StopServer();
+      foreach (var path in new[] { dead, own, foreign, other })
+      {
+        if (File.Exists(path)) File.Delete(path);
+      }
+    }
   }
 
   private static async Task HealthBypassesSerializedQueueAsync()

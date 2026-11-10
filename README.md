@@ -33,6 +33,8 @@ This independent project is not affiliated with or endorsed by Autodesk. Autodes
 | `civil3d_query` | Run intended read-only C# without committing the host transaction | Trusted code only; not a side-effect sandbox |
 | `civil3d_skills` | Browse/search/read code skill templates; `api_lookup` searches already-loaded public Civil 3D API metadata | ✅ Metadata only |
 
+The tools carry MCP annotations so a client can tell them apart: `civil3d_skills` is read-only, `civil3d_execute` is a non-idempotent write, and none reaches outside the local Civil 3D session. `civil3d_query` is deliberately not advertised as read-only: its transaction is rolled back, but it still runs arbitrary code.
+
 ### How It Works
 
 1. **AI reads a skill** → Gets a documented C# code template
@@ -67,7 +69,7 @@ The catalog contains **39 skills**. Six focused engineering recipes cover design
 
 Search also recognizes specific Hungarian/English task aliases and workflow tags, with accent/hyphen normalization: for example `hossz-szelvény`, `keresztszelvény`, `cross section`, `közmű` and `mennyiség`. List/search show write scope, the tested Civil version and a short validation summary. Offline compilation, live execution, saved readback and reopen remain separate evidence; missing evidence stays unknown. Aliases are included in `get` rather than every page. See [the catalogue contract](docs/SKILL_CATALOG.md) for response fields, legacy defaults, compact discovery and metadata authoring.
 
-Skill search matches every supplied word across names, categories, descriptions and parameter metadata, in any order. Underscores and whitespace are equivalent: `surface volume` and `volume surface` both find `surface_volume`. A query with no normalized word returns no matches. Successful tool results use compact JSON with the same fields and values.
+Skill search matches every supplied word across names, categories, descriptions and parameter metadata, in any order. Underscores and whitespace are equivalent: `surface volume` and `volume surface` both find `surface_volume`. When no skill contains every word, the skills closest to the query are returned instead and the reply carries `partial: true` with `matchedWords` and `queryWords`, so one extra or unknown word does not hide the catalog; closeness is the total length of the matched words, and words shorter than three letters do not count toward it. A query with no normalized word, or with no matching word at all, returns no matches. Successful tool results use compact JSON with the same fields and values.
 
 **Proven:** offline compilation for all six and scoped Civil 3D 2025 synthetic-fixture checks for profiles, section views, surface comparison and native quantities. Reference reporting was checked only on local/empty objects, and target auditing on an empty corridor. Populated DREF/target cases, populated section-view bands, section-view saved-file reopen/print quality and general model/standards correctness remain **Unverified**. The separate `create_surface_profile_view` recipe is proven offline; live authoring and saving remain **Unverified**. Full evidence boundaries are in the guide and [PROJECT_STATUS.md](PROJECT_STATUS.md).
 
@@ -100,13 +102,32 @@ Code executed via `civil3d_execute` or `civil3d_query` has access to:
 
 ### Return values
 
-Return a value to get it back as JSON. Supported: primitives, strings, `Guid`, dates and times (ISO 8601 text), anonymous objects and classes or records declared in the script (public properties and fields, camelCase names), arrays, lists and any other sequence including LINQ queries without `.ToList()`, tuples (as arrays; element names do not exist at run time), `Dictionary<string, …>`, `ObjectId`, `Handle`, `Point2d/3d` and `Vector2d/3d`. Enums return as numbers. `DBObject` instances and NaN/Infinity are refused.
+Return a value to get it back as JSON. Supported: primitives, strings, `Guid`, dates and times (ISO 8601 text), anonymous objects and classes or records declared in the script (public properties and fields, camelCase names), arrays, lists and any other sequence including LINQ queries without `.ToList()`, tuples (as arrays; element names do not exist at run time), `Dictionary<string, …>`, `ObjectId`, `Handle`, `Point2d/3d` and `Vector2d/3d`. Enums return as numbers. `DBObject` instances are refused.
 
 A collection with more than 1000 items keeps its first 1000, and the reply is then wrapped as `{"result": …, "truncated": [{"path": "$.items", "returned": 1000, "total": 5234}]}`; `total` is `null` for a lazy sequence whose length is unknown. A lazy sequence runs the script's own code while the result is read, still inside the transaction and under the same loop checkpoints and timeout; an exception there is reported with its type and path. Results are also limited to depth 8 and 10000 nodes.
 
-All Civil 3D namespaces are auto-imported.
+NaN and Infinity have no JSON form. Each one becomes `null`, and the reply is wrapped as `{"result": …, "nonFinite": {"count": 3, "paths": ["$.rows[4].elevation", …]}}` with the first 20 paths, so one undefined number no longer discards the whole result. `truncated` and `nonFinite` appear side by side when both apply; a result with neither keeps its plain shape.
 
-Committing the `civil3d_execute` transaction changes the open drawing but does not by itself write the DWG file to disk. First identify the active drawing with `civil3d_query`, then pass its full `Database.Filename` and `FingerprintGuid` as `expectedDrawing`; the plugin checks that identity immediately before Civil API access. Set `saveDrawing: true` when the completed change should also be saved. The plugin saves only after the script transaction and document lock are closed; scripts must not call `Database.SaveAs` or queue `QSAVE` themselves. The save request uses a separate 10-minute default timeout and is never retried automatically.
+All Civil 3D namespaces are auto-imported. A few type names exist in two of them and would otherwise be rejected as ambiguous (CS0104); they have a default meaning:
+
+| Bare name | Means | Other type, by full name |
+|-----------|-------|--------------------------|
+| `DBObject`, `Entity` | `Autodesk.AutoCAD.DatabaseServices.*` | `Autodesk.Civil.DatabaseServices.*` |
+| `ErrorStatus` | `Autodesk.AutoCAD.Runtime.ErrorStatus` | `Autodesk.Civil.ErrorStatus` |
+| `Exception` | `System.Exception` | `Autodesk.AutoCAD.Runtime.Exception` |
+| `Surface`, `Section` | `Autodesk.Civil.DatabaseServices.*` | `Autodesk.AutoCAD.DatabaseServices.*` |
+
+A full name, the script's own `using X = …;` alias or a type the script declares still wins. Other duplicated names (for example `Table`) stay ambiguous and need the full name.
+
+Committing the `civil3d_execute` transaction changes the open drawing but does not by itself write the DWG file to disk. First identify the active drawing with `civil3d_query`, then pass its full `Database.Filename` and `FingerprintGuid` as `expectedDrawing`; the plugin checks that identity immediately before Civil API access. Set `saveDrawing: true` when the completed change should also be saved. The plugin saves only after the script transaction and document lock are closed; scripts must not call `Database.SaveAs` or queue `QSAVE` themselves. The save request uses a separate 10-minute default timeout and is never retried automatically. A drawing that is open read-only is refused with `CIVIL3D.DRAWING_READ_ONLY` (`outcome: "not_started"`) before the script runs, instead of committing the change in memory and failing only at the save.
+
+### Time limit and cancelling
+
+A script may run for 120 seconds. `timeoutSeconds` (1–1800) on `civil3d_query` and `civil3d_execute` changes the limit for that one call; use it for a known long operation such as a large rebuild. At the limit the script is stopped at its next loop iteration and the transaction is rolled back. A script that reaches no loop cannot be stopped midway, but when it returns after the limit its result is discarded and nothing is committed either. In both cases the reply is `CIVIL3D.TIMEOUT` with `outcome: "reported_error"`: the drawing is unchanged, and the same write can be sent again with a larger `timeoutSeconds`.
+
+The MCP server waits longer than the plugin's limit, so that this definite answer arrives instead of an uncertain one: at least 30 seconds beyond the script limit, and `CIVIL3D_COMMAND_TIMEOUT` (or `CIVIL3D_SAVE_TIMEOUT` when the drawing is saved) extended by whatever `timeoutSeconds` adds to the default 120 seconds. The MCP client's own tool-call timeout is separate and must also allow the time.
+
+When the client cancels a tool call (for example the user presses Stop), the server closes its connection to the plugin. A request that has not started is dropped; a running script stops at its next loop iteration, or has its result discarded when it returns, and is rolled back. The call reports `CIVIL3D.CANCELLED`: `not_started` if it was never sent, otherwise `unknown`, because a write that had already reached commit stays committed. Check the drawing before repeating a write.
 
 ## Setup
 
@@ -148,18 +169,20 @@ C3DMCPSTATUS → verify running
 | `CIVIL3D_PORT` | unset | Optional fixed-port override. When omitted, local instance discovery is active and the plugin prefers port 8080. |
 | `CIVIL3D_CONNECT_TIMEOUT` | `5000` | TCP connection timeout (ms) |
 | `CIVIL3D_DISCOVERY_TIMEOUT` | `5000` | Timeout for private health and drawing-identity probes (ms) |
-| `CIVIL3D_COMMAND_TIMEOUT` | `120000` | Execution timeout (ms) |
+| `CIVIL3D_COMMAND_TIMEOUT` | `120000` | Base wait for one plugin reply (ms). For scripts the wait is never shorter than the script limit plus 30 s; see [time limit](#time-limit-and-cancelling). |
 | `CIVIL3D_MCP_EXECUTION_BACKEND` | `modal` | Plugin process: `native` selects the legacy route for a controlled comparison in a fresh Civil session. |
-| `CIVIL3D_SAVE_TIMEOUT` | `600000` | Timeout for execute requests with `saveDrawing: true` (ms) |
+| `CIVIL3D_SAVE_TIMEOUT` | `600000` | Base wait for execute requests with `saveDrawing: true` (ms); extended the same way by `timeoutSeconds`. |
 | `LOG_LEVEL` | `info` | Log level |
 
 Command/save timeouts must resolve to a positive integer of at most `2147483647` milliseconds; invalid or empty settings use the listed defaults. Log levels are `debug`, `info`, `warn` and `error`, ignoring case and surrounding whitespace; unrecognized values use `info`. Invalid timeout warnings omit the supplied value.
 
-Civil requests run as correlated modal commands. The existing serialization gate stays held until the script has disposed its resources and that command ends; completing the script body alone does not release it. A request that has not started within 15 seconds is abandoned, and its late token cannot execute another request. The legacy backend is never selected automatically after a timeout. Every loop in a script checks for cancellation at the start of each iteration, so a runaway loop stops at the 120-second script timeout and its transaction is rolled back. When the MCP server closes the connection, for example after its own command timeout, a request that has not started is dropped and a running script stops at its next loop iteration, also without committing. Long single Civil API calls cannot be interrupted. A script that uses `await` is rejected before compiling, because awaiting on the Civil 3D main thread can deadlock the application.
+Civil requests run as correlated modal commands. The existing serialization gate stays held until the script has disposed its resources and that command ends; completing the script body alone does not release it. A request that has not started within 15 seconds is abandoned, and its late token cannot execute another request. The legacy backend is never selected automatically after a timeout. Every loop in a script checks for cancellation at the start of each iteration, so a runaway loop stops at the script time limit (120 seconds unless the call sets `timeoutSeconds`) and its transaction is rolled back. When the MCP server closes the connection, for example after a client cancel or its own command timeout, a request that has not started is dropped and a running script stops at its next loop iteration, also without committing. Long single Civil API calls cannot be interrupted, but a script that returns after its limit, or after the client is gone, is not committed. A script that uses `await` is rejected before compiling, because awaiting on the Civil 3D main thread can deadlock the application.
 
 ## Multiple Civil 3D instances
 
 Each loaded plugin session publishes a small local endpoint record containing only an opaque instance ID, process ID, port, and start time. It contains no drawing name or project data. The first Civil 3D instance prefers port 8080; another instance automatically uses a free localhost port.
+
+A record normally disappears when its Civil 3D session ends. One left behind by a crash or a killed process is removed by the next plugin session that starts, and until then the MCP server skips records whose process no longer exists, so stale records do not slow down every call. A session that the caller names with `instanceId` is always probed.
 
 If exactly one instance is available, existing calls work as before. With multiple instances, `expectedDrawing` is used to find the matching active drawing before the requested C# reaches any plugin. An unguarded bootstrap query fails closed with `CIVIL3D.INSTANCE_SELECTION_REQUIRED` and reports the live candidates; retry it with the optional `instanceId` on the existing tool. The final plugin-side drawing guard still checks the path and fingerprint immediately before Civil API access. No fourth public MCP tool is added.
 
@@ -171,7 +194,7 @@ The phase 2A host-independent recorder, the phase 2A.1 opt-in internal live trac
 
 ## Structured errors (phase 2B.1)
 
-`civil3d_query` and `civil3d_execute` keep their existing text error content and `isError: true`, while also returning `structuredContent` with schema `civil3d-mcp-error/v1`. The stable error fields are `code`, `category`, `message`, `source`, `outcome`, and `retryable`. A command timeout or a connection loss after sending has `outcome: "unknown"` and `retryable: false`; the server never retries it automatically. Successful responses and the three-tool public surface are unchanged.
+`civil3d_query` and `civil3d_execute` keep their existing text error content and `isError: true`, while also returning `structuredContent` with schema `civil3d-mcp-error/v1`. The stable error fields are `code`, `category`, `message`, `source`, `outcome`, and `retryable`. A command timeout or a connection loss after sending has `outcome: "unknown"` and `retryable: false`; the server never retries it automatically. The plugin's own script time limit (`CIVIL3D.TIMEOUT`) is different: it is raised before any commit, so its outcome is `reported_error` and the drawing is unchanged. Successful responses and the three-tool public surface are unchanged.
 
 An operation whose Civil command has not started within 15 seconds returns `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` with `outcome: "not_started"` and `retryable: false`. A subsequently arriving abandoned token performs no drawing work. This deadline limits admission, not execution: started work retains the serialized gate until the selected backend's host completion, and an uncertain write must still be reconciled rather than repeated. The targeted completion checks do not establish that every possible hang is eliminated.
 

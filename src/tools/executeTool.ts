@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { performance } from "node:perf_hooks";
 import { z } from "zod";
 import { withApplicationConnection } from "../utils/ConnectionManager.js";
-import { readTimeoutEnvironment } from "../utils/SocketClient.js";
+import { COMMAND_TIMEOUT_MS, readTimeoutEnvironment } from "../utils/SocketClient.js";
 import { createLogger } from "../utils/logger.js";
 import {
   Civil3dMcpError,
@@ -20,6 +20,7 @@ import {
 } from "../benchmark/liveTrace.js";
 import { expectedDrawingSchema } from "./expectedDrawing.js";
 import { instanceIdSchema } from "./instanceSelection.js";
+import { commandWaitMs, timeoutSecondsSchema } from "./scriptTimeout.js";
 import {
   ScriptSourceOptions,
   resolveScriptCode,
@@ -91,6 +92,14 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
             "Use this instead of Database.SaveAs or Document.SendStringToExecute(\"QSAVE\") in code. " +
             "An unsaved drawing must first be named in Civil 3D."
         ),
+      timeoutSeconds: timeoutSecondsSchema,
+    },
+    {
+      title: "Civil 3D execute (writes the drawing)",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
     },
     async (args, extra) => {
       let benchmarkTrace: BenchmarkTraceRequest | undefined;
@@ -127,11 +136,20 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
                 expectedDrawing: args.expectedDrawing,
                 idempotencyKey: args.idempotencyKey,
                 saveDrawing: args.saveDrawing,
+                timeoutSeconds: args.timeoutSeconds,
               },
               benchmarkTrace,
-              args.saveDrawing ? SAVE_COMMAND_TIMEOUT_MS : undefined
+              commandWaitMs(
+                args.saveDrawing ? SAVE_COMMAND_TIMEOUT_MS : COMMAND_TIMEOUT_MS,
+                args.timeoutSeconds
+              ),
+              extra.signal
             ),
-          { expectedDrawing: args.expectedDrawing, instanceId: args.instanceId }
+          {
+            expectedDrawing: args.expectedDrawing,
+            instanceId: args.instanceId,
+            signal: extra.signal,
+          }
         );
         const result = benchmarkTrace
           ? (commandResult as MeasuredCommandResult).result

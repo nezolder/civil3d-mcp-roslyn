@@ -1,8 +1,26 @@
 # Published development status
 
-Updated: 2026-10-06
+Updated: 2026-11-10
 
 This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
+
+## Reliability fixes from the architecture review (2026-11-10)
+
+A read-only review of the whole server found several defects in timeouts, cancellation, discovery and result handling. This update corrects the first group. The three public tools and their existing inputs are unchanged; `timeoutSeconds` is a new optional input on the two code tools.
+
+- **Script time limit.** The limit was fixed at 120 seconds on both sides. The Node host started its timer first and gave up first, so a slow call was reported as `outcome: "unknown"`; a script without loops could then still finish and commit with nobody listening. Now a call can set `timeoutSeconds` (1–1800), the host always waits longer than the plugin's limit, and a script that returns after its limit, or after the client is gone, is not committed. `CIVIL3D.TIMEOUT` is therefore a definite `reported_error`.
+- **Client cancel.** A cancelled tool call (Stop) now closes the plugin connection, which stops the script at its next loop iteration and rolls it back. Previously the script ran on until the host timeout.
+- **Stale endpoint records.** Records left by a crashed or killed Civil 3D were probed on every call. The host now skips records whose process is gone, and each new plugin session deletes them.
+- **Skill search.** A query with one unknown word returned nothing. The closest skills are now returned and flagged `partial`.
+- **Read-only drawings.** `saveDrawing` on a drawing opened read-only is refused before the script runs (`CIVIL3D.DRAWING_READ_ONLY`), instead of committing in memory and failing at the save.
+- **NaN and Infinity.** One non-finite number failed the whole result without saying where. It now becomes `null`, with its path listed under `nonFinite`.
+- **Ambiguous type names.** Bare `DBObject`, `Entity`, `ErrorStatus`, `Exception`, `Surface` and `Section` exist in two auto-imported namespaces and failed with CS0104. Each now has a default meaning; full names and the script's own aliases still win.
+- **Tool annotations and dependencies.** The tools carry MCP read-only/destructive hints. `@modelcontextprotocol/sdk` is 1.32.2 and `zod` 4.6.7.
+
+Evidence boundaries:
+
+- **Proven offline:** Node tests for the reply wait, `timeoutSeconds` validation and forwarding, cancellation before and after sending, stale-record skipping with fallback, partial search and annotations. Host-independent .NET tests run the real Roslyn executor for the per-call limit, the discarded late result, the default aliases and their overrides, and non-finite serialization; plugin core tests cover the read-only refusal, limit validation and stale-record cleanup. The six aliased names were confirmed ambiguous against Civil 3D 2025 metadata, the plugin builds against those assemblies, and all 42 recipe code blocks compile both with and without the aliases.
+- **Unverified live:** none of these changes has yet run inside Civil 3D. A raised limit on a real long operation, Stop during a running script, `Document.IsReadOnly` on a drawing opened read-only, and the aliases in the live host remain to be confirmed in a disposable drawing.
 
 ## Runtime and named-recipe updates (2026-10-05–06)
 

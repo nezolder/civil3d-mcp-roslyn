@@ -35,6 +35,7 @@ return new {
         path = Database.Filename,
         fingerprintGuid = Database.FingerprintGuid.ToString(),
         isNamed,
+        isReadOnly = Document.IsReadOnly,
         dbmod,
         hasUnsavedChanges = dbmod != 0,
         isSavedAndClean = isNamed && dbmod == 0,
@@ -57,5 +58,6 @@ return new {
 - This is a good first query to understand the drawing contents
 - `path`, `fingerprintGuid`, and `dbmod` are the minimum identity check before a separately approved write
 - `isSavedAndClean` is true only for a named drawing with `DBMOD=0`
+- `isReadOnly` is true when the drawing was opened read-only; `saveDrawing` is refused for it before anything runs
 - Coordinate system code follows EPSG or Autodesk format
 - Units can be Meter, Foot, etc.

@@ -75,6 +75,7 @@ function classifyPluginCode(code: string): {
     case "CIVIL3D.DRAWING_MISMATCH":
       return { category: "drawing", outcome: "not_started" };
     case "CIVIL3D.SAVE_PATH_REQUIRED":
+    case "CIVIL3D.DRAWING_READ_ONLY":
       return { category: "drawing", outcome: "not_started" };
     case "CIVIL3D.DRAWING_GUARD_INVALID":
       return { category: "validation", outcome: "not_started" };
@@ -85,7 +86,9 @@ function classifyPluginCode(code: string): {
     case "CIVIL3D.COMMAND_CONTEXT_TIMEOUT":
       return { category: "timeout", outcome: "not_started" };
     case "CIVIL3D.TIMEOUT":
-      return { category: "timeout", outcome: "unknown" };
+      // The plugin raises this inside the transaction, before any commit, so
+      // the script's changes were rolled back: a definite, reported outcome.
+      return { category: "timeout", outcome: "reported_error" };
     case "CIVIL3D.REQUEST_TOO_LARGE":
       return { category: "transport", outcome: "not_started" };
     case "CIVIL3D.RESPONSE_TOO_LARGE":

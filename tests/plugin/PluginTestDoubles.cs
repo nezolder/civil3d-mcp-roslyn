@@ -36,8 +36,13 @@ public static class RoslynExecutor
   private static int _callCount;
   private static int _maxActiveCount;
 
+  public const int MaxTimeoutSeconds = 1_800;
+
   public static Func<string, ScriptContext, Task<object?>> Handler { get; set; } =
     (_, _) => Task.FromResult<object?>("ok");
+
+  /// <summary>Script limit the dispatcher passed on the most recent call.</summary>
+  public static TimeSpan? LastTimeLimit { get; private set; }
 
   public static int ActiveCount => Volatile.Read(ref _activeCount);
   public static int CallCount => Volatile.Read(ref _callCount);
@@ -48,8 +53,10 @@ public static class RoslynExecutor
     ScriptContext context,
     InternalBenchmarkMeasurement? benchmarkMeasurement,
     OperationProgress? progress = null,
-    CancellationToken cancellationToken = default)
+    CancellationToken cancellationToken = default,
+    TimeSpan? timeLimit = null)
   {
+    LastTimeLimit = timeLimit;
     progress?.SetStage(OperationStage.RunningScript);
     Interlocked.Increment(ref _callCount);
     var active = Interlocked.Increment(ref _activeCount);
@@ -64,7 +71,10 @@ public static class RoslynExecutor
     }
   }
 
-  internal static T RunWithScriptCancellation<T>(Func<T> action, CancellationToken cancellationToken)
+  internal static T RunWithScriptCancellation<T>(
+    Func<T> action,
+    CancellationToken cancellationToken,
+    TimeSpan? timeLimit = null)
     => action();
 
   public static void Reset()
@@ -73,6 +83,7 @@ public static class RoslynExecutor
     Volatile.Write(ref _callCount, 0);
     Volatile.Write(ref _maxActiveCount, 0);
     Handler = (_, _) => Task.FromResult<object?>("ok");
+    LastTimeLimit = null;
   }
 
   private static void SetMaximum(int candidate)

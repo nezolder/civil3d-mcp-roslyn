@@ -21,7 +21,12 @@ var tests = new (string Name, Func<Task> Run)[]
   ("instrumentation keeps every line break and leaves loop-free code alone", InstrumentationKeepsLinesAsync),
   ("loops still compute their normal results", LoopResultsAsync),
   ("runaway while, for, foreach and do loops stop at the timeout", RunawayLoopsStopAtTimeoutAsync),
+  ("a call can raise or lower its own time limit", PerCallTimeLimitAsync),
+  ("ambiguous type names get their documented default meaning", DefaultTypeAliasesAsync),
+  ("a full name or the caller's own alias still selects the other type", AliasOverridesAsync),
+  ("an ambiguous name without a default is still reported at the caller's position", UnaliasedAmbiguityAsync),
   ("caller cancellation stops a running loop", CallerCancellationStopsLoopAsync),
+  ("caller cancellation discards the result of a loop-free script", CallerCancellationAfterLoopFreeScriptAsync),
   ("runtime line numbers are unchanged around loops", LoopRuntimeLineAsync),
   ("compile errors inside loops report the caller's column", LoopCompileErrorColumnAsync),
   ("a declaration as loop body stays a compile error", DeclarationLoopBodyAsync),
@@ -234,6 +239,141 @@ static async Task RunawayLoopsStopAtTimeoutAsync()
   }
 }
 
+static async Task PerCallTimeLimitAsync()
+{
+  var previous = RoslynExecutor.Timeout;
+  RoslynExecutor.Timeout = TimeSpan.FromMilliseconds(200);
+  try
+  {
+    // A script without loops cannot be stopped midway, but once it outlives
+    // the limit its result is refused, so the caller's transaction is not
+    // committed after the caller was told about a timeout.
+    const string slow = "System.Threading.Thread.Sleep(700); return 7;";
+    var error = await FailAsync(slow).WaitAsync(TimeSpan.FromSeconds(10));
+    Assert(error.Code == "CIVIL3D.TIMEOUT", $"unexpected code: {error.Code}");
+    Assert(error.Message.Contains("timed out after 0.2s", StringComparison.Ordinal), error.Message);
+    Assert(error.Message.Contains("not committed", StringComparison.Ordinal), error.Message);
+    Assert(error.Message.Contains("timeoutSeconds", StringComparison.Ordinal), error.Message);
+
+    // The same script completes when the call asks for more time.
+    var result = await RoslynExecutor.ExecuteAsync(slow, Context(), null, null, default, TimeSpan.FromSeconds(30));
+    Assert(Equals(result, 7), $"a longer per-call limit must let the script finish: {result}");
+  }
+  finally
+  {
+    RoslynExecutor.Timeout = previous;
+  }
+
+  // A call can also ask for less than the default.
+  var watch = System.Diagnostics.Stopwatch.StartNew();
+  try
+  {
+    await RoslynExecutor.ExecuteAsync("while (true) { }", Context(), null, null, default, TimeSpan.FromMilliseconds(200))
+      .WaitAsync(TimeSpan.FromSeconds(10));
+    throw new InvalidOperationException("a short per-call limit must stop the loop");
+  }
+  catch (JsonRpcDispatchException ex)
+  {
+    Assert(ex.Code == "CIVIL3D.TIMEOUT", $"unexpected code: {ex.Code}");
+    Assert(watch.Elapsed < TimeSpan.FromSeconds(5), "the per-call limit must apply, not the default");
+  }
+
+  var serialization = RoslynExecutor.RunWithScriptCancellation(() => 5, default, TimeSpan.FromSeconds(1));
+  Assert(serialization == 5, "result reading must accept the per-call limit");
+}
+
+static async Task DefaultTypeAliasesAsync()
+{
+  RoslynExecutor.ClearCache();
+  var names = (string[])(await RoslynExecutor.ExecuteAsync(
+    "return new[] { typeof(DBObject).FullName, typeof(Entity).FullName, typeof(Surface).FullName, " +
+    "typeof(Section).FullName, typeof(Exception).FullName, typeof(ErrorStatus).FullName };", Context()))!;
+  var expected = new[]
+  {
+    "Autodesk.AutoCAD.DatabaseServices.DBObject",
+    "Autodesk.AutoCAD.DatabaseServices.Entity",
+    "Autodesk.Civil.DatabaseServices.Surface",
+    "Autodesk.Civil.DatabaseServices.Section",
+    "System.Exception",
+    "Autodesk.AutoCAD.Runtime.ErrorStatus",
+  };
+  Assert(names.SequenceEqual(expected), $"unexpected defaults: {string.Join(", ", names)}");
+
+  // The usual shapes: a catch clause, a cast, a generic argument and a local type.
+  var caught = await RoslynExecutor.ExecuteAsync(
+    "try { throw new InvalidOperationException(\"boom\"); }\ncatch (Exception ex) { return ex.Message; }", Context());
+  Assert(Equals(caught, "boom"), $"catch (Exception) must compile: {caught}");
+  var count = await RoslynExecutor.ExecuteAsync(
+    "object item = new Alignment();\nvar list = new List<Entity>();\nif (item is Entity entity) list.Add(entity);\nreturn list.Count;", Context());
+  Assert(Equals(count, 1), $"Entity must accept every drawing entity: {count}");
+
+  // Runtime and compile positions still refer to the caller's own lines.
+  var runtime = await FailAsync("Surface surface = null;\nreturn surface.ToString();");
+  Assert(runtime.Message.StartsWith("Script threw System.NullReferenceException at script line 2", StringComparison.Ordinal),
+    runtime.Message);
+  var compile = await FailAsync("Surface surface = null;\nreturn surface.NoSuchMember;");
+  Assert(compile.Message.Contains("(2,16): error CS1061", StringComparison.Ordinal), compile.Message);
+}
+
+static async Task AliasOverridesAsync()
+{
+  var full = await RoslynExecutor.ExecuteAsync(
+    "return typeof(Autodesk.AutoCAD.DatabaseServices.Surface).FullName;", Context());
+  Assert(Equals(full, "Autodesk.AutoCAD.DatabaseServices.Surface"), $"full name must win: {full}");
+
+  var own = await RoslynExecutor.ExecuteAsync(
+    "using Surface = Autodesk.AutoCAD.DatabaseServices.Surface;\nreturn typeof(Surface).FullName;", Context());
+  Assert(Equals(own, "Autodesk.AutoCAD.DatabaseServices.Surface"), $"the caller's alias must win: {own}");
+
+  var same = await RoslynExecutor.ExecuteAsync(
+    "using Exception = System.Exception;\nreturn typeof(Exception).FullName;", Context());
+  Assert(Equals(same, "System.Exception"), $"repeating a default alias must stay valid: {same}");
+
+  var declared = await RoslynExecutor.ExecuteAsync(
+    "class Section { public int Number = 4; }\nreturn new Section().Number;", Context());
+  Assert(Equals(declared, 4), $"a type the script declares must win: {declared}");
+
+  var local = await RoslynExecutor.ExecuteAsync("var Entity = 5;\nreturn Entity + 1;", Context());
+  Assert(Equals(local, 6), $"a local with an aliased name must stay valid: {local}");
+}
+
+static async Task UnaliasedAmbiguityAsync()
+{
+  var error = await FailAsync("var a = 1;\nTable table = null;\nreturn a;");
+  Assert(error.Code == "CIVIL3D.COMPILATION_ERROR", $"unexpected code: {error.Code}");
+  Assert(error.Message.Contains("(2,1): error CS0104", StringComparison.Ordinal), error.Message);
+  Assert(error.Message.Contains("Autodesk.AutoCAD.DatabaseServices.Table", StringComparison.Ordinal)
+    && error.Message.Contains("Autodesk.Civil.DatabaseServices.Table", StringComparison.Ordinal), error.Message);
+}
+
+static async Task CallerCancellationAfterLoopFreeScriptAsync()
+{
+  // The client gave up (Stop, or its own timeout) while a script without any
+  // loop checkpoint was running: the finished result must not be returned for
+  // commit, because nobody is left to learn that it was written.
+  using var caller = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+  try
+  {
+    await RoslynExecutor.ExecuteAsync("System.Threading.Thread.Sleep(700); return 1;", Context(), null, null, caller.Token)
+      .WaitAsync(TimeSpan.FromSeconds(10));
+  }
+  catch (OperationCanceledException) when (caller.IsCancellationRequested)
+  {
+    using var gone = new CancellationTokenSource();
+    gone.Cancel();
+    try
+    {
+      RoslynExecutor.RunWithScriptCancellation(() => 1, gone.Token);
+    }
+    catch (OperationCanceledException)
+    {
+      return;
+    }
+    throw new InvalidOperationException("reading a result for a client that is gone must be cancelled");
+  }
+  throw new InvalidOperationException("a loop-free script must not return a result after the caller cancelled");
+}
+
 static async Task CallerCancellationStopsLoopAsync()
 {
   using var caller = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
@@ -414,8 +554,8 @@ static async Task UnsupportedResultsAsync()
 {
   Assert((await ResultFailureAsync("return new Autodesk.AutoCAD.DatabaseServices.DBObject();")).Code == "CIVIL3D.RESULT_SERIALIZATION_FAILED",
     "DBObject must stay refused");
-  Assert((await ResultFailureAsync("return double.NaN;")).Code == "CIVIL3D.RESULT_SERIALIZATION_FAILED",
-    "NaN must stay refused");
+  AssertJson(await ResultJsonAsync("return new { ok = 1.5, bad = double.NaN, list = new[] { 1.0, double.PositiveInfinity } };"),
+    "{\"result\":{\"ok\":1.5,\"bad\":null,\"list\":[1,null]},\"nonFinite\":{\"count\":2,\"paths\":[\"$.bad\",\"$.list[1]\"]}}");
   Assert((await ResultFailureAsync("return new { list = new[] { new Autodesk.AutoCAD.DatabaseServices.DBObject() }.Select(x => x) };")).Message
     .Contains("DBObject", StringComparison.Ordinal), "a DBObject inside a lazy result must stay refused");
 }

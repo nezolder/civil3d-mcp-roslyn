@@ -6,6 +6,8 @@
 
 Search matches every whitespace-separated word across the name, category, description, parameters, aliases and workflow tags. Word order does not matter. Case, accents, underscores and hyphens are normalized: `hossz-szelvény`, `hossz szelveny` and `HOSSZ–SZELVÉNY` find the same recipes. Category filtering and existing pagination still apply.
 
+When no recipe contains every word, `search` returns the closest recipes instead of an empty page and adds `partial: true`, `matchedWords` and `queryWords` to the response. Closeness is the total length of the matched words, so a long domain word outweighs short filler words; words shorter than three letters do not count toward it. A complete match never carries these fields, and a query without any matching word still returns nothing. Treat a partial page as suggestions and read the descriptions before choosing.
+
 Examples include `hossz-szelvény`, `keresztszelvény`, `cross section`, `közmű` and `mennyiség`. A match identifies a possible operation, not a complete engineering method: the pipe-network recipe is gravity QC, the quantity recipes read existing results, and profile/view creation has specific input and validation limits.
 
 Use a narrow search or category first, then `get` the chosen stable recipe name. Check inputs, write scope, prerequisites and detailed evidence before adapting its C# body. Missing catalogue coverage can require a separately developed operation; do not imply that a matching keyword supplies a network-design, hydraulic-sizing or complete drawing-production method.

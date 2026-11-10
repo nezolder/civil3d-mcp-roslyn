@@ -19,30 +19,99 @@ public static class RoslynExecutor
   private static readonly ScriptCache<Script<object>> _scriptCache = new(ScriptCacheCapacity);
 
   private static readonly object _optionsSync = new();
-  private static ScriptOptions? _options;
+  private static ScriptEnvironment? _environment;
   private static int _optionsAssemblyCount = -1;
 
-  /// <summary>Max script execution time (default 120 seconds).</summary>
+  /// <summary>Longest script limit one call may ask for.</summary>
+  public const int MaxTimeoutSeconds = 1_800;
+
+  /// <summary>Script time limit when the call does not set one (default 120 seconds).</summary>
   public static TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(120);
 
   /// <summary>
-  /// Return ScriptOptions referencing every loaded assembly. The options are
+  /// What a bare type name means when two auto-imported namespaces both
+  /// declare it. Without a default the compiler rejects the name as ambiguous
+  /// (CS0104) and the caller needs another round. Each default is the meaning
+  /// a Civil 3D drawing script almost always wants; a full name or the
+  /// caller's own using alias still selects the other type.
+  /// </summary>
+  internal static readonly (string Name, string Target)[] DefaultTypeAliases =
+  {
+    ("DBObject", "Autodesk.AutoCAD.DatabaseServices.DBObject"),
+    ("Entity", "Autodesk.AutoCAD.DatabaseServices.Entity"),
+    ("ErrorStatus", "Autodesk.AutoCAD.Runtime.ErrorStatus"),
+    ("Exception", "System.Exception"),
+    ("Section", "Autodesk.Civil.DatabaseServices.Section"),
+    ("Surface", "Autodesk.Civil.DatabaseServices.Surface"),
+  };
+
+  /// <summary>
+  /// Compile settings plus an empty first submission that only declares the
+  /// default aliases. Caller scripts are compiled as its continuation: using
+  /// aliases carry over to later submissions, and the caller's text stays
+  /// untouched, so line and column numbers do not move.
+  /// </summary>
+  private sealed record ScriptEnvironment(ScriptOptions Options, Script? AliasPrelude);
+
+  /// <summary>
+  /// Return the script environment referencing every loaded assembly. It is
   /// reused until another assembly loads, so Roslyn can keep the metadata it
   /// already read for those references.
   /// </summary>
-  private static ScriptOptions GetOptions()
+  private static ScriptEnvironment GetEnvironment()
   {
     var loadedAssemblies = GetReferenceAssemblies();
 
     lock (_optionsSync)
     {
-      if (_options is null || _optionsAssemblyCount != loadedAssemblies.Length)
+      if (_environment is null || _optionsAssemblyCount != loadedAssemblies.Length)
       {
-        _options = BuildOptions(loadedAssemblies);
+        var options = BuildOptions(loadedAssemblies);
+        _environment = new ScriptEnvironment(options, BuildAliasPrelude(options, loadedAssemblies));
         _optionsAssemblyCount = loadedAssemblies.Length;
       }
-      return _options;
+      return _environment;
     }
+  }
+
+  /// <summary>
+  /// The alias submission for the types that exist in this host, or null when
+  /// there is nothing to alias or it does not compile. Aliases are a
+  /// convenience and must never stop scripts from running.
+  /// </summary>
+  private static Script? BuildAliasPrelude(ScriptOptions options, Assembly[] loadedAssemblies)
+  {
+    try
+    {
+      var lines = DefaultTypeAliases
+        .Where(alias => TypeExists(alias.Target, loadedAssemblies))
+        .Select(alias => $"using {alias.Name} = global::{alias.Target};")
+        .ToArray();
+      if (lines.Length == 0) return null;
+
+      var prelude = CSharpScript.Create(string.Join("\n", lines), options, typeof(ScriptContext));
+      return HasErrors(prelude.Compile()) ? null : prelude;
+    }
+    catch (Exception)
+    {
+      return null;
+    }
+  }
+
+  private static bool TypeExists(string fullName, Assembly[] assemblies)
+  {
+    foreach (var assembly in assemblies)
+    {
+      try
+      {
+        if (assembly.GetType(fullName, throwOnError: false) is not null) return true;
+      }
+      catch (Exception)
+      {
+        // An assembly that cannot answer simply does not provide the type.
+      }
+    }
+    return false;
   }
 
   /// <summary>
@@ -98,7 +167,8 @@ public static class RoslynExecutor
     ScriptContext context,
     InternalBenchmarkMeasurement? benchmarkMeasurement,
     OperationProgress? progress = null,
-    CancellationToken cancellationToken = default)
+    CancellationToken cancellationToken = default,
+    TimeSpan? timeLimit = null)
   {
     progress?.SetStage(OperationStage.PreparingScript);
     // Validate with sandbox
@@ -119,20 +189,11 @@ public static class RoslynExecutor
             "where awaiting can deadlock the application; call the synchronous API instead."
         );
       }
-      var options = GetOptions();
-      var instrumented = ScriptInstrumentation.AddCancellationCheckpoints(code);
-      script = CSharpScript.Create<object>(instrumented, options, typeof(ScriptContext));
       bool failed;
       try
       {
-        failed = HasErrors(script.Compile()); // Pre-compile for better error messages
-        if (failed && !string.Equals(instrumented, code, StringComparison.Ordinal))
-        {
-          // Report errors at positions in the caller's own text, and never let
-          // a checkpoint turn a valid script into a failing one.
-          script = CSharpScript.Create<object>(code, options, typeof(ScriptContext));
-          failed = HasErrors(script.Compile());
-        }
+        // Pre-compile for better error messages.
+        script = Compile(code, GetEnvironment(), out failed);
         benchmarkMeasurement?.RecordCompilationAttempt(failed);
       }
       catch
@@ -144,9 +205,10 @@ public static class RoslynExecutor
       if (!failed) _scriptCache.Add(code, script);
     }
 
-    // Execute with timeout. Loop checkpoints also observe the caller's token,
-    // which the TCP server cancels when the client disconnects.
-    using var timeout = new CancellationTokenSource(Timeout);
+    // Execute with a time limit. Loop checkpoints also observe the caller's
+    // token, which the TCP server cancels when the client disconnects.
+    var limit = timeLimit ?? Timeout;
+    using var timeout = new CancellationTokenSource(limit);
     using var cts = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
     var previousToken = ScriptCancellation.Token;
     ScriptCancellation.Token = cts.Token;
@@ -155,6 +217,11 @@ public static class RoslynExecutor
     {
       progress?.SetStage(OperationStage.RunningScript);
       var result = await script!.RunAsync(context, cts.Token);
+      // Roslyn does not look at the token once the script body runs, and a
+      // script that reaches no loop checkpoint runs to its end. Past the
+      // limit, or after the client gave up, its work must not be committed:
+      // the caller has been (or is about to be) told that it was not.
+      cts.Token.ThrowIfCancellationRequested();
       return result.ReturnValue;
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -167,7 +234,7 @@ public static class RoslynExecutor
     {
       throw new JsonRpcDispatchException(
         "CIVIL3D.TIMEOUT",
-        $"Script execution timed out after {Timeout.TotalSeconds}s."
+        $"Script execution timed out after {limit.TotalSeconds}s. {TimeoutAdvice}"
       );
     }
     catch (CompilationErrorException ex)
@@ -197,15 +264,23 @@ public static class RoslynExecutor
   /// as serializing a lazy LINQ result, under the same loop checkpoints: a
   /// fresh script timeout linked with the caller's token.
   /// </summary>
-  internal static T RunWithScriptCancellation<T>(Func<T> action, CancellationToken cancellationToken)
+  internal static T RunWithScriptCancellation<T>(
+    Func<T> action,
+    CancellationToken cancellationToken,
+    TimeSpan? timeLimit = null)
   {
-    using var timeout = new CancellationTokenSource(Timeout);
+    var limit = timeLimit ?? Timeout;
+    using var timeout = new CancellationTokenSource(limit);
     using var cts = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
     var previousToken = ScriptCancellation.Token;
     ScriptCancellation.Token = cts.Token;
     try
     {
-      return action();
+      var result = action();
+      // Same rule as for the script body: no commit past the limit or for a
+      // client that is gone.
+      cts.Token.ThrowIfCancellationRequested();
+      return result;
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
@@ -215,7 +290,7 @@ public static class RoslynExecutor
     {
       throw new JsonRpcDispatchException(
         "CIVIL3D.TIMEOUT",
-        $"Reading the script result timed out after {Timeout.TotalSeconds}s."
+        $"Reading the script result timed out after {limit.TotalSeconds}s. {TimeoutAdvice}"
       );
     }
     finally
@@ -223,6 +298,63 @@ public static class RoslynExecutor
       ScriptCancellation.Token = previousToken;
     }
   }
+
+  /// <summary>
+  /// The limit is reached inside the transaction, so nothing of the script is
+  /// committed; say so, and how to allow a known long operation.
+  /// </summary>
+  private static readonly string TimeoutAdvice =
+    "The script was stopped and its transaction was not committed. " +
+    $"For a known long operation pass a larger timeoutSeconds (up to {MaxTimeoutSeconds}).";
+
+  /// <summary>
+  /// Compiles the caller's script, preferring loop checkpoints and the default
+  /// type aliases. Neither may turn a valid script into a failing one: the
+  /// caller's exact text is tried without checkpoints, and when an error
+  /// involves an aliased name, without the aliases too. A failure is reported
+  /// from the caller's own text, so positions match what was sent.
+  /// </summary>
+  private static Script<object> Compile(string code, ScriptEnvironment environment, out bool failed)
+  {
+    var instrumented = ScriptInstrumentation.AddCancellationCheckpoints(code);
+    var texts = string.Equals(instrumented, code, StringComparison.Ordinal)
+      ? new[] { code }
+      : new[] { instrumented, code };
+
+    Script<object>? reported = null;
+    foreach (var prelude in environment.AliasPrelude is null
+      ? new Script?[] { null }
+      : new[] { environment.AliasPrelude, null })
+    {
+      Script<object>? last = null;
+      IEnumerable<Diagnostic> lastDiagnostics = Array.Empty<Diagnostic>();
+      foreach (var text in texts)
+      {
+        last = prelude is null
+          ? CSharpScript.Create<object>(text, environment.Options, typeof(ScriptContext))
+          : prelude.ContinueWith<object>(text, environment.Options);
+        lastDiagnostics = last.Compile();
+        if (!HasErrors(lastDiagnostics))
+        {
+          failed = false;
+          return last;
+        }
+      }
+
+      reported ??= last;
+      if (prelude is null || !MentionsDefaultAlias(lastDiagnostics)) break;
+    }
+
+    failed = true;
+    return reported!;
+  }
+
+  private static bool MentionsDefaultAlias(IEnumerable<Diagnostic> diagnostics)
+    => diagnostics
+      .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+      .Select(diagnostic => diagnostic.GetMessage())
+      .Any(message => DefaultTypeAliases.Any(alias =>
+        message.Contains($"'{alias.Name}'", StringComparison.Ordinal)));
 
   private static bool HasErrors(IEnumerable<Diagnostic> diagnostics)
     => diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
