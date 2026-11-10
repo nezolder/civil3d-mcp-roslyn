@@ -10,8 +10,18 @@ namespace Autodesk.AutoCAD.Geometry
   public readonly record struct Vector2d(double X, double Y);
   public readonly record struct Vector3d(double X, double Y, double Z);
 }
-namespace Autodesk.AutoCAD.Runtime { public class RuntimeStub { } }
-namespace Autodesk.Civil { public class CivilStub { } }
+namespace Autodesk.AutoCAD.Runtime
+{
+  public class RuntimeStub { }
+  // Same simple names as System.Exception and Autodesk.Civil.ErrorStatus, as in the real host.
+  public class Exception : System.Exception { }
+  public enum ErrorStatus { OK = 0, KeyNotFound = 1 }
+}
+namespace Autodesk.Civil
+{
+  public class CivilStub { }
+  public enum ErrorStatus { Unknown = 0 }
+}
 namespace Autodesk.Civil.ApplicationServices { public class CivilApplicationServicesStub { } }
 namespace Autodesk.Civil.Settings { public class SettingsStub { } }
 
@@ -41,6 +51,11 @@ namespace Autodesk.AutoCAD.DatabaseServices
     public string Name { get; set; } = "entity";
     public string Layer { get; set; } = "0";
   }
+
+  // The real AutoCAD and Civil assemblies both declare these simple names.
+  public class Surface { }
+  public class Section { }
+  public class Table { }
 }
 
 namespace Autodesk.Civil.DatabaseServices
@@ -50,6 +65,12 @@ namespace Autodesk.Civil.DatabaseServices
     public double Length => 12.5;
     public double StartingStation => 0;
   }
+
+  public class DBObject { }
+  public class Entity : Autodesk.AutoCAD.DatabaseServices.Entity { }
+  public class Surface : Entity { }
+  public class Section : Entity { }
+  public class Table : Entity { }
 }
 
 namespace Autodesk.Civil.DatabaseServices.Styles

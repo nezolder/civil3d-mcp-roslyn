@@ -231,3 +231,88 @@ test("plugin response-size errors retain unknown non-retryable transport semanti
   assert.equal(error.outcome, "unknown");
   assert.equal(error.toStructuredError().retryable, false);
 });
+
+test("a client cancel closes the connection and reports an uncertain outcome", async () => {
+  let writeCalls = 0;
+  let destroyCalls = 0;
+  const connection = createStubConnection(() => {
+    writeCalls += 1;
+    return true;
+  });
+  const originalDestroy = connection.socket.destroy.bind(connection.socket);
+  connection.socket.destroy = (...args) => {
+    destroyCalls += 1;
+    return originalDestroy(...args);
+  };
+  const controller = new AbortController();
+
+  try {
+    const pending = connection.sendCommand(
+      "executeCode",
+      { code: "while (true) { }" },
+      undefined,
+      60_000,
+      controller.signal
+    );
+    assert.equal(writeCalls, 1);
+    controller.abort();
+
+    const error = await errorFrom(pending);
+    assert.ok(error instanceof Civil3dMcpError);
+    assert.equal(error.code, "CIVIL3D.CANCELLED");
+    assert.equal(error.source, "node");
+    // The script may already have committed; only the plugin could know.
+    assert.equal(error.outcome, "unknown");
+    assert.equal(error.toStructuredError().retryable, false);
+    // Closing the socket is what tells the plugin to stop the script.
+    assert.equal(destroyCalls, 1);
+  } finally {
+    connection.socket.destroy();
+  }
+});
+
+test("a call cancelled before it is sent never reaches the plugin", async () => {
+  let writeCalls = 0;
+  const connection = createStubConnection(() => {
+    writeCalls += 1;
+    return true;
+  });
+  const controller = new AbortController();
+  controller.abort();
+
+  try {
+    const error = await errorFrom(
+      connection.sendCommand("executeCode", { code: "return 1;" }, undefined, 60_000, controller.signal)
+    );
+    assert.equal(error.code, "CIVIL3D.CANCELLED");
+    assert.equal(error.outcome, "not_started");
+    assert.equal(writeCalls, 0);
+  } finally {
+    connection.socket.destroy();
+  }
+});
+
+test("a cancel after the reply has arrived changes nothing", async () => {
+  const connection = createStubConnection(() => {
+    queueMicrotask(() => {
+      connection.socket.emit("data", Buffer.from(`${jsonRpcResult("done")}\n`, "utf8"));
+    });
+    return true;
+  });
+  const controller = new AbortController();
+
+  try {
+    const result = await connection.sendCommand(
+      "executeCode",
+      { code: "return 1;" },
+      undefined,
+      60_000,
+      controller.signal
+    );
+    assert.equal(result, "done");
+    controller.abort();
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    connection.socket.destroy();
+  }
+});

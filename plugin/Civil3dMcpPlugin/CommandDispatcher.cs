@@ -58,6 +58,7 @@ public static class CommandDispatcher
       );
     }
     var expectedDrawing = DrawingGuard.Parse(parameters, required: !readOnly);
+    var timeLimit = ReadScriptTimeLimit(parameters);
     // Keep the plugin debug output free of caller-provided description text.
     System.Diagnostics.Debug.WriteLine($"[C3D-MCP] {(readOnly ? "QUERY" : "EXECUTE")}");
 
@@ -68,13 +69,36 @@ public static class CommandDispatcher
 
       // Run the Roslyn script synchronously within the command context
       // (we're already on the main thread here)
-      var rawResult = RoslynExecutor.ExecuteAsync(code, context, benchmarkMeasurement, progress, cancellationToken)
+      var rawResult = RoslynExecutor
+        .ExecuteAsync(code, context, benchmarkMeasurement, progress, cancellationToken, timeLimit)
         .GetAwaiter()
         .GetResult();
       progress?.SetStage(OperationStage.SerializingResult);
       // A lazy result runs caller code while it is serialized; keep it stoppable.
-      return RoslynExecutor.RunWithScriptCancellation(() => ResultSerializer.Serialize(rawResult), cancellationToken);
+      return RoslynExecutor.RunWithScriptCancellation(
+        () => ResultSerializer.Serialize(rawResult), cancellationToken, timeLimit);
     }, write: !readOnly, expectedDrawing, benchmarkMeasurement, saveDrawing, progress, cancellationToken);
+  }
+
+  /// <summary>
+  /// Optional per-call script limit. Absent means the executor default; a
+  /// value outside the allowed range is refused before anything runs.
+  /// </summary>
+  internal static TimeSpan? ReadScriptTimeLimit(JsonObject? parameters)
+  {
+    var value = parameters?["timeoutSeconds"];
+    if (value == null) return null;
+    if (value is JsonValue jsonValue
+      && jsonValue.TryGetValue<int>(out var seconds)
+      && seconds >= 1
+      && seconds <= RoslynExecutor.MaxTimeoutSeconds)
+    {
+      return TimeSpan.FromSeconds(seconds);
+    }
+    throw new JsonRpcDispatchException(
+      "CIVIL3D.INVALID_INPUT",
+      $"Parameter 'timeoutSeconds' must be an integer between 1 and {RoslynExecutor.MaxTimeoutSeconds}."
+    );
   }
 
   /// <summary>

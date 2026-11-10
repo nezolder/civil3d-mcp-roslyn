@@ -119,7 +119,9 @@ test("real catalogue aliases cover engineering work words without claiming new o
     assert.ok((await names("mennyiség")).includes("material_quantity_report"));
     assert.ok((await names("mennyiség")).includes("surface_volume"));
     assert.deepEqual(await names("cross section", "profiles"), []);
-    assert.deepEqual(await names("hossz-szelvény no_such_word"), []);
+    // An unknown extra word falls back to the closest skills (flagged partial).
+    assert.deepEqual(await names("hossz-szelvény zzqx"), await names("hossz-szelvény"));
+    assert.deepEqual(await names("zzqx qqzx"), []);
     assert.deepEqual(await names("–– ___"), []);
   });
 });

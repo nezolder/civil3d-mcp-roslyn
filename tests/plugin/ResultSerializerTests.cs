@@ -18,6 +18,7 @@ internal static class ResultSerializerTests
       ("ObjectId null and valid values have stable explicit shapes", ObjectIdValues),
       ("maximum depth is accepted and excess depth is rejected", DepthLimit),
       ("collections over the item limit keep their first items and report the cut", CollectionLimit),
+      ("NaN and Infinity become null and are reported with their paths", NonFiniteValues),
       ("unknown values fail without ToString fallback", UnknownType),
       ("reference cycles fail deterministically", ReferenceCycle),
       ("DBObject values are rejected without reading database paths", DbObjectIsNotReflected),
@@ -136,6 +137,63 @@ internal static class ResultSerializerTests
     Assert(wrapped["result"]!["items"]!.AsArray().Count == ResultSerializer.MaxCollectionItems,
       "a long collection must keep exactly the item limit");
     AssertJson(wrapped["truncated"], "[{\"path\":\"$.items\",\"returned\":1000,\"total\":1001}]");
+  }
+
+  private static void NonFiniteValues()
+  {
+    // Finite results keep their plain shape: no wrapper, no extra key.
+    AssertJson(ResultSerializer.Serialize(new { area = 12.5, point = new Point3d(1, 2, 3) }),
+      "{\"area\":12.5,\"point\":{\"x\":1,\"y\":2,\"z\":3}}");
+
+    // One undefined elevation must not discard the rest of a report.
+    AssertJson(ResultSerializer.Serialize(new
+    {
+      name = "EG",
+      min = double.NaN,
+      rows = new object[]
+      {
+        new { station = 10.0, elevation = 101.25 },
+        new { station = 20.0, elevation = double.PositiveInfinity },
+      },
+      point = new Point3d(1, 2, double.NaN),
+      ratio = float.NegativeInfinity,
+    }), """
+      {
+        "result": {
+          "name": "EG",
+          "min": null,
+          "rows": [
+            { "station": 10, "elevation": 101.25 },
+            { "station": 20, "elevation": null }
+          ],
+          "point": { "x": 1, "y": 2, "z": null },
+          "ratio": null
+        },
+        "nonFinite": {
+          "count": 4,
+          "paths": ["$.min", "$.rows[1].elevation", "$.point.z", "$.ratio"]
+        }
+      }
+      """);
+
+    AssertJson(ResultSerializer.Serialize(double.NaN),
+      "{\"result\":null,\"nonFinite\":{\"count\":1,\"paths\":[\"$\"]}}");
+
+    // Every value is counted; only the first paths are listed.
+    var many = ResultSerializer.Serialize(Enumerable.Repeat(double.NaN, 50).ToList())!.AsObject();
+    Assert(many["nonFinite"]!["count"]!.GetValue<int>() == 50, "all non-finite values must be counted");
+    Assert(many["nonFinite"]!["paths"]!.AsArray().Count == ResultSerializer.MaxNonFinitePaths,
+      "listed paths must be bounded");
+    Assert(many["truncated"] == null, "the truncated key must appear only for a cut list");
+
+    // A cut list and a non-finite value are reported side by side.
+    var both = ResultSerializer.Serialize(new
+    {
+      bad = double.NaN,
+      items = Enumerable.Range(0, ResultSerializer.MaxCollectionItems + 1).ToList(),
+    })!.AsObject();
+    AssertJson(both["truncated"], "[{\"path\":\"$.items\",\"returned\":1000,\"total\":1001}]");
+    AssertJson(both["nonFinite"], "{\"count\":1,\"paths\":[\"$.bad\"]}");
   }
 
   private static void UnknownType()

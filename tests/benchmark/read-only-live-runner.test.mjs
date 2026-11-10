@@ -181,7 +181,8 @@ test("live connection stays on loopback and outlasts inner timeouts", () => {
     port: 8080,
     connectTimeoutMs: 5_000,
     commandTimeoutMs: 120_000,
-    sdkRequestTimeoutMs: 135_000,
+    // 5 s connect + 150 s (the tool waits 30 s past the 120 s script limit) + 10 s grace.
+    sdkRequestTimeoutMs: 165_000,
   });
   assert.equal(
     parseReadOnlyConnectionSettings({

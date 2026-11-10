@@ -221,28 +221,68 @@ function getSkills(category?: string, query?: string, skillsDirectory = SKILLS_D
     );
   }
 
-  if (query) {
-    // Every whitespace-separated word must occur somewhere in the skill's
-    // metadata. Underscores count as spaces so "surface volume" finds
-    // surface_volume, and word order does not matter.
-    const tokens = normalizeSearchText(query).split(" ").filter(Boolean);
-    if (tokens.length === 0) return [];
-    skills = skills.filter((s) => {
-      const haystack = normalizeSearchText(
-        [
-          s.metadata.name,
-          s.metadata.category,
-          s.metadata.description,
-          ...s.metadata.aliases,
-          ...s.metadata.workflow_tags,
-          ...s.metadata.parameters.map((p) => `${p.name} ${p.description ?? ""}`),
-        ].join(" ")
-      );
-      return tokens.every((token) => haystack.includes(token));
-    });
-  }
+  if (query) return searchSkills(skills, query).skills;
 
   return skills;
+}
+
+/** Shorter words are too likely to match inside unrelated words to rank a partial match. */
+const MIN_PARTIAL_WORD_LENGTH = 3;
+
+interface SkillSearchResult {
+  skills: SkillFile[];
+  /** Set when no skill contains every word and the closest matches are returned instead. */
+  partial?: { matchedWords: number; queryWords: number };
+}
+
+/**
+ * Every whitespace-separated word must occur somewhere in the skill's
+ * metadata. Underscores count as spaces so "surface volume" finds
+ * surface_volume, and word order does not matter. When no skill has every
+ * word, the closest skills are returned and flagged as partial, so one extra
+ * or unknown word does not hide the whole catalog. Closeness is the total
+ * length of the matched words: a long domain word outweighs short filler
+ * words, which match by accident inside other words.
+ */
+function searchSkills(skills: SkillFile[], query: string): SkillSearchResult {
+  const tokens = [...new Set(normalizeSearchText(query).split(" ").filter(Boolean))];
+  if (tokens.length === 0) return { skills: [] };
+
+  const scored = skills.map((skill) => {
+    const haystack = normalizeSearchText(
+      [
+        skill.metadata.name,
+        skill.metadata.category,
+        skill.metadata.description,
+        ...skill.metadata.aliases,
+        ...skill.metadata.workflow_tags,
+        ...skill.metadata.parameters.map((p) => `${p.name} ${p.description ?? ""}`),
+      ].join(" ")
+    );
+    const matched = tokens.filter((token) => haystack.includes(token));
+    return {
+      skill,
+      matched: matched.length,
+      weight: matched.reduce(
+        (sum, token) => sum + (token.length >= MIN_PARTIAL_WORD_LENGTH ? token.length : 0),
+        0
+      ),
+    };
+  });
+
+  const complete = scored.filter((entry) => entry.matched === tokens.length);
+  if (complete.length > 0) return { skills: complete.map((entry) => entry.skill) };
+
+  const bestWeight = Math.max(0, ...scored.map((entry) => entry.weight));
+  if (bestWeight === 0) return { skills: [] };
+  const closest = scored.filter((entry) => entry.weight === bestWeight);
+  return {
+    skills: closest.map((entry) => entry.skill),
+    partial: {
+      matchedWords: Math.max(...closest.map((entry) => entry.matched)),
+      queryWords: tokens.length,
+    },
+  };
 }
 
 function normalizeSearchText(value: string): string {
@@ -355,7 +395,8 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
     "Browse and read Civil 3D code skills (documented C# code templates). " +
       "Use 'list' to see available skills, 'search' to find by keyword, " +
       "'get' to read the full skill with code template, or 'api_lookup' to search public metadata from already-loaded Civil 3D host assemblies. " +
-      "Search matches every word across metadata, Hungarian/English aliases and workflow tags, ignoring accents and hyphens. " +
+      "Search matches every word across metadata, Hungarian/English aliases and workflow tags, ignoring accents and hyphens; " +
+      "when no skill has every word it returns the closest ones with partial=true. " +
       "List/search include write scope, tested Civil version and a scoped validation summary; missing evidence stays null. " +
       "Skills are pre-built C# patterns you can adapt and execute via civil3d_execute or civil3d_query. " +
       "When run_by_name is true, read it with get and includeCode=false, then pass skill and params to " +
@@ -385,6 +426,7 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
         .optional()
         .describe("Opaque nextCursor from a prior list/search call with the same filters"),
     },
+    { title: "Civil 3D skills and API lookup", readOnlyHint: true, openWorldHint: false },
     async (args) => {
       try {
         switch (args.action) {
@@ -430,7 +472,11 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
               };
             }
 
-            const page = paginateSkills(getSkills(args.category, args.query, skillsDirectory), {
+            const found = searchSkills(
+              getSkills(args.category, undefined, skillsDirectory),
+              args.query
+            );
+            const page = paginateSkills(found.skills, {
               action: "search",
               category: args.category,
               query: args.query,
@@ -457,6 +503,13 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
                       returned: results.length,
                       truncated: page.truncated,
                       nextCursor: page.nextCursor,
+                      ...(found.partial
+                        ? {
+                            partial: true,
+                            matchedWords: found.partial.matchedWords,
+                            queryWords: found.partial.queryWords,
+                          }
+                        : {}),
                     }),
                 },
               ],

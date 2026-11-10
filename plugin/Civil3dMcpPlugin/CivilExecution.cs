@@ -86,6 +86,16 @@ public static class CivilExecution
                   "The active drawing has not been named yet. Save it once in Civil 3D before using saveDrawing."
                 );
               }
+              // Checked before the script runs: otherwise the write would be
+              // committed in memory and only the save at the end would fail.
+              if (doc.IsReadOnly)
+              {
+                throw new JsonRpcDispatchException(
+                  "CIVIL3D.DRAWING_READ_ONLY",
+                  "The active drawing is open read-only, so saveDrawing cannot write its file. Nothing was run. " +
+                    "Reopen the drawing for writing, or run without saveDrawing and save a copy in Civil 3D."
+                );
+              }
             }
 
             progress?.SetStage(OperationStage.AcquiringDocumentLock);

@@ -32,7 +32,30 @@ test("multi-word search matches every word in any order and across underscores",
   assert.ok((await names("volume surface")).includes("surface_volume"));
   assert.ok((await names("create profile")).includes("create_design_profile_from_pvis"));
   assert.ok((await names("  SECTION   views ")).includes("create_section_views"));
-  assert.deepEqual(await names("surface zzz-no-such-word"), []);
+  assert.deepEqual(await names("zzzqqq xyzzyq"), []);
+});
+
+test("an unknown extra word returns the closest skills flagged as partial", async () => {
+  const exact = (await search("térfogat")).body;
+  assert.equal(Object.hasOwn(exact, "partial"), false);
+  assert.ok(exact.results.some((skill) => skill.name === "surface_volume"));
+
+  // No skill has all three words; before the fallback this returned nothing.
+  const partial = (await search("felület térfogat számítás")).body;
+  assert.equal(partial.partial, true);
+  assert.equal(partial.queryWords, 3);
+  assert.equal(partial.matchedWords, 2);
+  assert.ok(partial.results.some((skill) => skill.name === "surface_volume"));
+  assert.equal(partial.total, partial.results.length);
+
+  // Short filler words must not outrank the real domain words.
+  const filler = (await search("hossz-szelvény no_such_word")).body;
+  assert.equal(filler.partial, true);
+  assert.ok(filler.results.some((skill) => skill.name === "create_design_profile_from_pvis"));
+  assert.deepEqual(
+    filler.results.map((skill) => skill.name),
+    (await search("hossz-szelvény")).body.results.map((skill) => skill.name)
+  );
 });
 
 test("skill listings are returned as compact single-line JSON", async () => {

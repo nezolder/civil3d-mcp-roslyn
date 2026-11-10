@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -102,6 +103,116 @@ test("multiple Civil instances fail closed and route by instance or drawing iden
     await rm(endpointDirectory, { recursive: true, force: true });
   }
 });
+
+test("a record left behind by a dead process is skipped while a live session exists", async () => {
+  const endpointDirectory = await mkdtemp(path.join(os.tmpdir(), "civil3d-mcp-stale-"));
+  const savedEnvironment = {
+    CIVIL3D_HOST: process.env.CIVIL3D_HOST,
+    CIVIL3D_PORT: process.env.CIVIL3D_PORT,
+    CIVIL3D_CONNECT_TIMEOUT: process.env.CIVIL3D_CONNECT_TIMEOUT,
+    CIVIL3D_DISCOVERY_TIMEOUT: process.env.CIVIL3D_DISCOVERY_TIMEOUT,
+    CIVIL3D_MCP_ENDPOINT_DIR: process.env.CIVIL3D_MCP_ENDPOINT_DIR,
+  };
+  const deadProcessId = await exitedProcessId();
+  const live = await startMockPlugin({
+    instanceId: FIRST_INSTANCE,
+    processId: process.pid,
+    databaseFilename: String.raw`C:\Projects\First.dwg`,
+    fingerprintGuid: FIRST_FINGERPRINT,
+  });
+  // Something still answers on the stale record's port, so a probe would be visible.
+  const stale = await startMockPlugin({
+    instanceId: SECOND_INSTANCE,
+    processId: deadProcessId,
+    databaseFilename: String.raw`C:\Projects\Second.dwg`,
+    fingerprintGuid: SECOND_FINGERPRINT,
+  });
+
+  try {
+    process.env.CIVIL3D_HOST = "127.0.0.1";
+    delete process.env.CIVIL3D_PORT;
+    process.env.CIVIL3D_CONNECT_TIMEOUT = "1000";
+    process.env.CIVIL3D_DISCOVERY_TIMEOUT = "1000";
+    process.env.CIVIL3D_MCP_ENDPOINT_DIR = endpointDirectory;
+    await writeEndpointRecord(endpointDirectory, live);
+    await writeEndpointRecord(endpointDirectory, stale);
+
+    // Without the check this is ambiguous (two answering records).
+    const result = await withApplicationConnection((client) =>
+      client.sendCommand("executeCode", { code: "return 1;", readOnly: true })
+    );
+    assert.deepEqual(result, { servedBy: FIRST_INSTANCE });
+    assert.deepEqual(stale.methods, []);
+
+    // An instance the caller names is always probed, whatever its record says.
+    const named = await withApplicationConnection(
+      (client) => client.sendCommand("executeCode", { code: "return 2;", readOnly: true }),
+      { instanceId: SECOND_INSTANCE }
+    );
+    assert.deepEqual(named, { servedBy: SECOND_INSTANCE });
+
+    // With no live session left, skipped records are probed after all.
+    await live.close();
+    const fallback = await withApplicationConnection((client) =>
+      client.sendCommand("executeCode", { code: "return 3;", readOnly: true })
+    );
+    assert.deepEqual(fallback, { servedBy: SECOND_INSTANCE });
+  } finally {
+    await live.close().catch(() => {});
+    await stale.close();
+    restoreEnvironment(savedEnvironment);
+    await rm(endpointDirectory, { recursive: true, force: true });
+  }
+});
+
+test("a cancelled call is not sent to any Civil instance", async () => {
+  const endpointDirectory = await mkdtemp(path.join(os.tmpdir(), "civil3d-mcp-cancel-"));
+  const savedEnvironment = {
+    CIVIL3D_HOST: process.env.CIVIL3D_HOST,
+    CIVIL3D_PORT: process.env.CIVIL3D_PORT,
+    CIVIL3D_MCP_ENDPOINT_DIR: process.env.CIVIL3D_MCP_ENDPOINT_DIR,
+  };
+  const plugin = await startMockPlugin({
+    instanceId: FIRST_INSTANCE,
+    processId: process.pid,
+    databaseFilename: String.raw`C:\Projects\First.dwg`,
+    fingerprintGuid: FIRST_FINGERPRINT,
+  });
+  const controller = new AbortController();
+  controller.abort();
+
+  try {
+    process.env.CIVIL3D_HOST = "127.0.0.1";
+    delete process.env.CIVIL3D_PORT;
+    process.env.CIVIL3D_MCP_ENDPOINT_DIR = endpointDirectory;
+    await writeEndpointRecord(endpointDirectory, plugin);
+
+    const error = await captureError(
+      withApplicationConnection(
+        (client) => client.sendCommand("executeCode", { code: "return 1;" }),
+        { signal: controller.signal }
+      )
+    );
+    assert.ok(error instanceof Civil3dMcpError);
+    assert.equal(error.code, "CIVIL3D.CANCELLED");
+    assert.equal(error.outcome, "not_started");
+    assert.deepEqual(plugin.methods, []);
+  } finally {
+    await plugin.close();
+    restoreEnvironment(savedEnvironment);
+    await rm(endpointDirectory, { recursive: true, force: true });
+  }
+});
+
+/** A process id that existed a moment ago and is gone now. */
+async function exitedProcessId() {
+  const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+  await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", resolve);
+  });
+  return child.pid;
+}
 
 async function startMockPlugin({
   instanceId,

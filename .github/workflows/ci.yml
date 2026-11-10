@@ -1,0 +1,53 @@
+name: CI
+
+# Host-independent checks only: no Civil 3D, no Autodesk assemblies. The
+# plugin core tests use Windows paths, so they need a Windows runner. The
+# recipe compile check (tests/skills, .NET part) needs the Autodesk reference
+# assemblies and stays a local step.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Node and .NET tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: npm ci --ignore-scripts
+      # The plugin runs on Hungarian Windows, where numbers are written with a
+      # decimal comma. Test under that setting so culture-dependent text is caught.
+      - name: Switch to the Hungarian regional setting
+        run: Set-Culture hu-HU
+      - name: Confirm the regional setting
+        run: |
+          $name = (Get-Culture).Name
+          if ($name -ne 'hu-HU') { throw "Expected hu-HU, got $name" }
+          (1.5).ToString()
+      - name: Error and settings tests
+        run: npm run test:errors
+      - name: Transport tests
+        run: npm run test:transport
+      - name: Plugin core and Roslyn tests
+        run: npm run test:plugin
+      - name: Benchmark tests
+        run: npm run test:benchmark
+      - name: Skill catalogue tests (Node part)
+        run: node --test "tests/skills/*.test.mjs"
+      - name: MCP smoke test
+        run: npm run test:mcp

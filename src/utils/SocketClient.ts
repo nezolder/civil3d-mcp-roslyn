@@ -16,7 +16,6 @@ import {
 } from "../errors/structuredError.js";
 
 const log = createLogger("SocketClient");
-const COMMAND_TIMEOUT_MS = readTimeoutEnvironment("CIVIL3D_COMMAND_TIMEOUT", 120_000);
 const JSON_FRAME_DELIMITER = 0x0a;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -35,7 +34,33 @@ export function readTimeoutEnvironment(name: string, fallback: number): number {
   return parsed;
 }
 
+/** Default wait for one plugin reply; script calls extend it (see scriptTimeout.ts). */
+export const COMMAND_TIMEOUT_MS = readTimeoutEnvironment("CIVIL3D_COMMAND_TIMEOUT", 120_000);
+
 export const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
+
+/** The MCP client cancelled the tool call (for example the user pressed Stop). */
+export function cancelledBeforeSend(): Civil3dMcpError {
+  return new Civil3dMcpError(
+    "CIVIL3D.CANCELLED",
+    "The client cancelled the call before it was sent to Civil 3D; nothing ran.",
+    "transport",
+    "node",
+    "not_started"
+  );
+}
+
+function cancelledAfterSend(): Civil3dMcpError {
+  return new Civil3dMcpError(
+    "CIVIL3D.CANCELLED",
+    "The client cancelled the call. The connection to Civil 3D was closed, so the plugin stops the " +
+      "script at its next loop iteration, or discards its result when it returns, and rolls it back; " +
+      "a write that had already committed stays committed. Check the drawing before repeating a write.",
+    "transport",
+    "node",
+    "unknown"
+  );
+}
 
 interface PendingResponse {
   handle: (response: Record<string, unknown>) => void;
@@ -245,12 +270,15 @@ export class ApplicationClientConnection {
 
   /**
    * Send a JSON-RPC command to the Civil 3D plugin and wait for a response.
+   * Aborting the optional signal closes the connection, which the plugin
+   * treats as "the client gave up" and uses to stop the running script.
    */
   public sendCommand(
     command: string,
     params: Record<string, unknown> = {},
     benchmarkTrace?: BenchmarkTraceRequest,
-    timeoutMs: number = COMMAND_TIMEOUT_MS
+    timeoutMs: number = COMMAND_TIMEOUT_MS,
+    signal?: AbortSignal
   ): Promise<any | MeasuredCommandResult> {
     return new Promise((resolve, reject) => {
       const fallbackStartedAt = benchmarkTrace ? performance.now() : undefined;
@@ -259,6 +287,11 @@ export class ApplicationClientConnection {
       let benchmarkStartedAt: number | undefined;
       let timeoutHandle: NodeJS.Timeout | undefined;
       let pendingRequestId: string | undefined;
+      let onAbort: (() => void) | undefined;
+      const settle = () => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (onAbort) signal?.removeEventListener("abort", onAbort);
+      };
 
       const elapsedBenchmarkMs = () =>
         performance.now() - (benchmarkStartedAt ?? fallbackStartedAt ?? performance.now());
@@ -281,6 +314,7 @@ export class ApplicationClientConnection {
       };
 
       try {
+        if (signal?.aborted) throw cancelledBeforeSend();
         const requestId = this.generateRequestId();
         pendingRequestId = requestId;
         const commandParams = benchmarkTrace
@@ -321,11 +355,11 @@ export class ApplicationClientConnection {
 
         this.responseCallbacks.set(requestId, {
           fail: (error) => {
-            if (timeoutHandle) clearTimeout(timeoutHandle);
+            settle();
             reject(attachPartial(error, "transport_error"));
           },
           handle: (response) => {
-            if (timeoutHandle) clearTimeout(timeoutHandle);
+            settle();
             try {
               const benchmarkEvent =
                 benchmarkTrace && forwardedCode !== undefined
@@ -368,6 +402,7 @@ export class ApplicationClientConnection {
           if (this.responseCallbacks.has(requestId)) {
             this.responseCallbacks.delete(requestId);
             this.resetResponseBuffer();
+            settle();
             log.warn("Command timed out", {
               method: command,
               requestId,
@@ -386,12 +421,24 @@ export class ApplicationClientConnection {
             this.socket.destroy();
           }
         }, timeoutMs);
+        if (signal) {
+          onAbort = () => {
+            if (!this.responseCallbacks.has(requestId)) return;
+            this.responseCallbacks.delete(requestId);
+            this.resetResponseBuffer();
+            settle();
+            log.warn("Command cancelled by the client", { method: command, requestId });
+            reject(attachPartial(cancelledAfterSend(), "transport_error"));
+            this.socket.destroy();
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
         this.commandSent = true;
         this.socket.write(`${commandString}\n`);
       } catch (error) {
         if (pendingRequestId) this.responseCallbacks.delete(pendingRequestId);
         this.resetResponseBuffer();
-        if (timeoutHandle) clearTimeout(timeoutHandle);
+        settle();
         const commandError =
           error instanceof Civil3dMcpError
             ? error

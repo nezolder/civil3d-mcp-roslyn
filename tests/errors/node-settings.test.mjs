@@ -134,3 +134,103 @@ test("default IPv4 routing and invalid timeouts preserve compact query/execute/s
     await new Promise((resolve) => mock.close(resolve));
   }
 });
+
+test("the reply wait always outlasts the script limit the plugin applies", async () => {
+  const { commandWaitMs } = await import("../../build/tools/scriptTimeout.js");
+  // Default script limit (120 s): wait past it so the plugin's answer arrives.
+  assert.equal(commandWaitMs(120_000, undefined), 150_000);
+  // A configured longer wait is kept; a shorter one is raised to the floor.
+  assert.equal(commandWaitMs(300_000, undefined), 300_000);
+  assert.equal(commandWaitMs(1_000, undefined), 150_000);
+  // A longer script limit extends the wait by the same amount.
+  assert.equal(commandWaitMs(120_000, 600), 630_000);
+  assert.equal(commandWaitMs(600_000, 600), 1_080_000);
+  // A shorter limit never shortens the configured wait.
+  assert.equal(commandWaitMs(120_000, 10), 120_000);
+  assert.equal(commandWaitMs(600_000, 10), 600_000);
+});
+
+test("timeoutSeconds is validated, forwarded to the plugin and reflected in tool annotations", async () => {
+  const keys = ["CIVIL3D_HOST", "CIVIL3D_PORT"];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const requests = [];
+  const sockets = new Set();
+  const mock = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    let buffered = Buffer.alloc(0);
+    socket.on("data", (chunk) => {
+      buffered = Buffer.concat([buffered, chunk]);
+      const delimiter = buffered.indexOf(0x0a);
+      if (delimiter < 0) return;
+      const request = JSON.parse(buffered.subarray(0, delimiter).toString("utf8"));
+      buffered = Buffer.alloc(0);
+      requests.push(request);
+      socket.end(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: 1 }) + "\n");
+    });
+  });
+  await new Promise((resolve, reject) => {
+    mock.once("error", reject);
+    mock.listen(0, "127.0.0.1", resolve);
+  });
+  let client;
+  let server;
+  try {
+    delete process.env.CIVIL3D_HOST;
+    process.env.CIVIL3D_PORT = String(mock.address().port);
+    const { registerQueryTool } = await import("../../build/tools/queryTool.js");
+    const { registerExecuteTool } = await import("../../build/tools/executeTool.js");
+    const { registerSkillsTool } = await import("../../build/tools/skillsTool.js");
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    server = new McpServer({ name: "timeout-test", version: "1" });
+    registerQueryTool(server);
+    registerExecuteTool(server);
+    registerSkillsTool(server);
+    client = new Client({ name: "timeout-test", version: "1" });
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const expectedDrawing = {
+      databaseFilename: String.raw`C:\Tests\Settings.dwg`,
+      fingerprintGuid: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    };
+
+    for (const name of ["civil3d_query", "civil3d_execute"]) {
+      const plain = await client.callTool({ name, arguments: { code: "return 1;", expectedDrawing } });
+      assert.notEqual(plain.isError, true, JSON.stringify(plain));
+      assert.equal(Object.hasOwn(requests.at(-1).params, "timeoutSeconds"), false);
+
+      const long = await client.callTool({
+        name,
+        arguments: { code: "return 1;", expectedDrawing, timeoutSeconds: 900 },
+      });
+      assert.notEqual(long.isError, true, JSON.stringify(long));
+      assert.equal(requests.at(-1).params.timeoutSeconds, 900);
+
+      const sent = requests.length;
+      for (const timeoutSeconds of [0, -5, 1.5, 1801, "600"]) {
+        const rejected = await client.callTool({
+          name,
+          arguments: { code: "return 1;", expectedDrawing, timeoutSeconds },
+        }).catch((error) => ({ isError: true, thrown: error }));
+        assert.equal(rejected.isError, true, String(timeoutSeconds));
+      }
+      assert.equal(requests.length, sent, "an invalid limit must not reach the plugin");
+    }
+
+    const tools = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]));
+    assert.equal(tools.get("civil3d_skills").annotations.readOnlyHint, true);
+    assert.equal(tools.get("civil3d_execute").annotations.readOnlyHint, false);
+    assert.equal(tools.get("civil3d_execute").annotations.destructiveHint, true);
+    assert.equal(tools.get("civil3d_execute").annotations.idempotentHint, false);
+    // Arbitrary code is never advertised as read-only, even when rolled back.
+    assert.equal(Object.hasOwn(tools.get("civil3d_query").annotations, "readOnlyHint"), false);
+    assert.equal(tools.get("civil3d_query").annotations.destructiveHint, false);
+    for (const tool of tools.values()) assert.equal(tool.annotations.openWorldHint, false, tool.name);
+  } finally {
+    await client?.close();
+    await server?.close();
+    restoreEnvironment(saved);
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => mock.close(resolve));
+  }
+});

@@ -161,6 +161,7 @@ namespace Autodesk.AutoCAD.ApplicationServices
     public Database Database { get; }
     public Editor Editor { get; } = new();
     public string Name { get; set; } = "TestDrawing";
+    public bool IsReadOnly { get; set; }
     public int ActiveLockCount => Volatile.Read(ref _activeLockCount);
     public int LockCount => Volatile.Read(ref _lockCount);
     public event EventHandler<CommandEventArgs>? CommandEnded;
