@@ -1566,6 +1566,9 @@ internal static class PluginCoreTests
     var refused = await SendAsync(CreateSafetyWriteRequest(
       "clean-refused", "must-not-run", ActualPath, p => p["requireClean"] = true));
     AssertError(refused, "CIVIL3D.DRAWING_NOT_CLEAN");
+    Assert(JsonNode.Parse(refused)!["error"]!["message"]!.GetValue<string>()
+      .Contains("without requireClean", StringComparison.Ordinal),
+      "the refusal must name the switch the caller set");
     AssertNoCivilResourcesOpened();
     var refusedReceipt = JsonNode.Parse(refused)!["receipt"]?.AsObject();
     Assert(refusedReceipt?["dbmodBefore"]?.GetValue<int>() == 5 && refusedReceipt["committed"]?.GetValue<bool>() == false,
@@ -1648,9 +1651,13 @@ internal static class PluginCoreTests
     ResetEnvironment(actualPath: drawingPath);
     Application.DbMod = 1;
     var copiesBefore = Directory.GetFiles(BackupDirectory).Length;
-    AssertError(
-      await SendAsync(CreateSafetyWriteRequest("backup-dirty", "must-not-run", drawingPath, p => p["backup"] = true)),
-      "CIVIL3D.DRAWING_NOT_CLEAN");
+    var dirtyBackup = await SendAsync(
+      CreateSafetyWriteRequest("backup-dirty", "must-not-run", drawingPath, p => p["backup"] = true));
+    AssertError(dirtyBackup, "CIVIL3D.DRAWING_NOT_CLEAN");
+    var dirtyBackupMessage = JsonNode.Parse(dirtyBackup)!["error"]!["message"]!.GetValue<string>();
+    Assert(dirtyBackupMessage.Contains("requireClean: false", StringComparison.Ordinal)
+      && !dirtyBackupMessage.Contains("without requireClean", StringComparison.Ordinal),
+      "the refusal must name the way out for a caller who only asked for a backup");
     AssertNoCivilResourcesOpened();
     Assert(Directory.GetFiles(BackupDirectory).Length == copiesBefore, "a refused call must not leave a copy");
 

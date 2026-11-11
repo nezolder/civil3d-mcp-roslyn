@@ -16,6 +16,8 @@ internal sealed class ExecutionRecord
   // ── Request ──
   internal bool IsWrite { get; private set; }
   internal bool RequireClean { get; set; }
+  /// <summary>The caller did not ask for the check itself; a backup request brought it along.</summary>
+  internal bool RequireCleanFromBackup { get; set; }
   internal bool Backup { get; set; }
   internal string? BackupDirectory { get; set; }
   internal bool SaveRequested { get; set; }

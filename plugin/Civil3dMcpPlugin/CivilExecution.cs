@@ -266,7 +266,10 @@ public static class CivilExecution
         dbmod == null
           ? "It could not be checked whether the active drawing has unsaved changes, so nothing was run."
           : $"The active drawing has unsaved changes (DBMOD={dbmod.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}), so nothing was run. " +
-            "Save the drawing in Civil 3D first, or repeat the call without requireClean if the unsaved state is intended."
+            (record.RequireCleanFromBackup
+              ? "The backup is a copy of the saved file and would not contain them. Save the drawing in Civil 3D first, " +
+                "or repeat the call with requireClean: false to accept a backup of the last saved state."
+              : "Save the drawing in Civil 3D first, or repeat the call without requireClean if the unsaved state is intended.")
       );
     }
 

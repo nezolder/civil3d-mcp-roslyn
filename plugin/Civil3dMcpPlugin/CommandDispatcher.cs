@@ -130,6 +130,7 @@ public static class CommandDispatcher
 
     if (record == null) return;
     record.RequireClean = requireClean ?? backup;
+    record.RequireCleanFromBackup = requireClean == null && backup;
     record.Backup = backup;
     record.BackupDirectory = backupDirectory;
     record.SaveRequested = saveDrawing;
