@@ -22,6 +22,7 @@ test("multiple Civil instances fail closed and route by instance or drawing iden
     CIVIL3D_CONNECT_TIMEOUT: process.env.CIVIL3D_CONNECT_TIMEOUT,
     CIVIL3D_DISCOVERY_TIMEOUT: process.env.CIVIL3D_DISCOVERY_TIMEOUT,
     CIVIL3D_MCP_ENDPOINT_DIR: process.env.CIVIL3D_MCP_ENDPOINT_DIR,
+    CIVIL3D_MCP_DEFAULT_PORT_FALLBACK: process.env.CIVIL3D_MCP_DEFAULT_PORT_FALLBACK,
   };
   const first = await startMockPlugin({
     instanceId: FIRST_INSTANCE,
@@ -42,6 +43,8 @@ test("multiple Civil instances fail closed and route by instance or drawing iden
     process.env.CIVIL3D_CONNECT_TIMEOUT = "1000";
     process.env.CIVIL3D_DISCOVERY_TIMEOUT = "1000";
     process.env.CIVIL3D_MCP_ENDPOINT_DIR = endpointDirectory;
+    // A Civil 3D that happens to run on this machine must never be reached.
+    process.env.CIVIL3D_MCP_DEFAULT_PORT_FALLBACK = "0";
     await writeEndpointRecord(endpointDirectory, first);
     await writeEndpointRecord(endpointDirectory, second);
     await writeFile(path.join(endpointDirectory, "invalid.json"), "not json", "utf8");
@@ -112,6 +115,7 @@ test("a record left behind by a dead process is skipped while a live session exi
     CIVIL3D_CONNECT_TIMEOUT: process.env.CIVIL3D_CONNECT_TIMEOUT,
     CIVIL3D_DISCOVERY_TIMEOUT: process.env.CIVIL3D_DISCOVERY_TIMEOUT,
     CIVIL3D_MCP_ENDPOINT_DIR: process.env.CIVIL3D_MCP_ENDPOINT_DIR,
+    CIVIL3D_MCP_DEFAULT_PORT_FALLBACK: process.env.CIVIL3D_MCP_DEFAULT_PORT_FALLBACK,
   };
   const deadProcessId = await exitedProcessId();
   const live = await startMockPlugin({
@@ -134,6 +138,8 @@ test("a record left behind by a dead process is skipped while a live session exi
     process.env.CIVIL3D_CONNECT_TIMEOUT = "1000";
     process.env.CIVIL3D_DISCOVERY_TIMEOUT = "1000";
     process.env.CIVIL3D_MCP_ENDPOINT_DIR = endpointDirectory;
+    // A Civil 3D that happens to run on this machine must never be reached.
+    process.env.CIVIL3D_MCP_DEFAULT_PORT_FALLBACK = "0";
     await writeEndpointRecord(endpointDirectory, live);
     await writeEndpointRecord(endpointDirectory, stale);
 
@@ -171,6 +177,7 @@ test("a cancelled call is not sent to any Civil instance", async () => {
     CIVIL3D_HOST: process.env.CIVIL3D_HOST,
     CIVIL3D_PORT: process.env.CIVIL3D_PORT,
     CIVIL3D_MCP_ENDPOINT_DIR: process.env.CIVIL3D_MCP_ENDPOINT_DIR,
+    CIVIL3D_MCP_DEFAULT_PORT_FALLBACK: process.env.CIVIL3D_MCP_DEFAULT_PORT_FALLBACK,
   };
   const plugin = await startMockPlugin({
     instanceId: FIRST_INSTANCE,
@@ -185,6 +192,8 @@ test("a cancelled call is not sent to any Civil instance", async () => {
     process.env.CIVIL3D_HOST = "127.0.0.1";
     delete process.env.CIVIL3D_PORT;
     process.env.CIVIL3D_MCP_ENDPOINT_DIR = endpointDirectory;
+    // A Civil 3D that happens to run on this machine must never be reached.
+    process.env.CIVIL3D_MCP_DEFAULT_PORT_FALLBACK = "0";
     await writeEndpointRecord(endpointDirectory, plugin);
 
     const error = await captureError(

@@ -46,6 +46,12 @@ interface ConnectionSettings {
   host: string;
   port: number;
   explicitPort: boolean;
+  /**
+   * Whether the default port is also tried when no endpoint record covers it.
+   * On for plugins from before the endpoint records; tests switch it off so
+   * that they can never reach a Civil 3D that happens to run on the machine.
+   */
+  defaultPortFallback: boolean;
   connectTimeoutMs: number;
   discoveryTimeoutMs: number;
   endpointDirectory: string;
@@ -197,6 +203,11 @@ function getConnectionSettings(): ConnectionSettings {
     host: process.env.CIVIL3D_HOST ?? DEFAULT_HOST,
     port: parseIntegerEnvironment("CIVIL3D_PORT", explicitPortValue, DEFAULT_PORT, 1, 65_535),
     explicitPort: explicitPortValue !== undefined,
+    defaultPortFallback: parseSwitchEnvironment(
+      "CIVIL3D_MCP_DEFAULT_PORT_FALLBACK",
+      process.env.CIVIL3D_MCP_DEFAULT_PORT_FALLBACK,
+      true
+    ),
     connectTimeoutMs: parseIntegerEnvironment(
       "CIVIL3D_CONNECT_TIMEOUT",
       process.env.CIVIL3D_CONNECT_TIMEOUT,
@@ -233,6 +244,19 @@ function parseIntegerEnvironment(
   return parsed;
 }
 
+function parseSwitchEnvironment(name: string, value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  if (value === "1") return true;
+  if (value === "0") return false;
+  throw new Civil3dMcpError(
+    "CIVIL3D.INVALID_INPUT",
+    `${name} must be 0 or 1.`,
+    "validation",
+    "node",
+    "not_started"
+  );
+}
+
 function invalidConfiguration(name: string, minimum: number, maximum: number) {
   return new Civil3dMcpError(
     "CIVIL3D.INVALID_INPUT",
@@ -262,6 +286,7 @@ async function selectEndpoint(
   const endpoints = await discoverLiveEndpoints(settings, target.instanceId);
   if (endpoints.length === 0) {
     if (target.instanceId) throw instanceNotFound(target.instanceId, []);
+    if (!settings.defaultPortFallback) throw noInstanceFound(settings);
     // Backward-compatible final attempt for a pre-registry plugin.
     return fixedEndpoint(settings.host, settings.port);
   }
@@ -318,6 +343,7 @@ async function discoverLiveEndpoints(
   const registered = await probeRecords(likely, settings);
 
   if (
+    settings.defaultPortFallback &&
     !registered.some((endpoint) => endpoint.port === settings.port) &&
     !wasRecentlyRefused(settings.host, settings.port, null)
   ) {
@@ -766,6 +792,17 @@ async function withDirectConnection<T>(
   } finally {
     appClient.disconnect();
   }
+}
+
+function noInstanceFound(settings: ConnectionSettings): Civil3dMcpError {
+  return new Civil3dMcpError(
+    "CIVIL3D.CONNECTION_FAILED",
+    `No running Civil 3D with the MCP plugin is registered in ${settings.endpointDirectory}, ` +
+      "and the default port is not tried because CIVIL3D_MCP_DEFAULT_PORT_FALLBACK is 0.",
+    "connection",
+    "transport",
+    "not_started"
+  );
 }
 
 function connectionFailed(endpoint: Pick<LiveEndpoint, "host" | "port">): Civil3dMcpError {

@@ -26,6 +26,7 @@ const ENVIRONMENT_NAMES = [
   "CIVIL3D_CONNECT_TIMEOUT",
   "CIVIL3D_DISCOVERY_TIMEOUT",
   "CIVIL3D_MCP_ENDPOINT_DIR",
+  "CIVIL3D_MCP_DEFAULT_PORT_FALLBACK",
 ];
 
 const identityCommands = (plugin) =>
@@ -211,6 +212,52 @@ test("the instance list shows each plugin build and whether it matches the serve
   });
 });
 
+test("with the default-port fallback switched off, nothing outside the endpoint records is contacted", async () => {
+  // Stands in for a Civil 3D that listens on the default port without a record.
+  const connections = [];
+  const bystander = net.createServer((socket) => {
+    connections.push(socket);
+    socket.destroy();
+  });
+  const listening = await new Promise((resolve) => {
+    bystander.once("error", () => resolve(false));
+    bystander.listen(8080, "127.0.0.1", () => resolve(true));
+  });
+
+  try {
+    await withInstances([], async () => {
+      assert.deepEqual(await listInstances(), []);
+      const error = await captureError(withApplicationConnection(query));
+      assert.ok(error instanceof Civil3dMcpError);
+      assert.equal(error.code, "CIVIL3D.CONNECTION_FAILED");
+      assert.equal(error.outcome, "not_started");
+      assert.match(error.message, /CIVIL3D_MCP_DEFAULT_PORT_FALLBACK/);
+    });
+
+    await withInstances(
+      [{ instanceId: FIRST_INSTANCE, processId: 41001, drawing: FIRST_DRAWING, reportsDrawing: true }],
+      async ([only]) => {
+        assert.deepEqual(await withApplicationConnection(query), { servedBy: FIRST_INSTANCE });
+        assert.equal(scriptCalls(only), 1);
+        assert.deepEqual((await listInstances()).map((instance) => instance.instanceId), [FIRST_INSTANCE]);
+      }
+    );
+
+    await withInstances([], async () => {
+      process.env.CIVIL3D_MCP_DEFAULT_PORT_FALLBACK = "yes";
+      const invalid = await captureError(withApplicationConnection(query));
+      assert.equal(invalid.code, "CIVIL3D.INVALID_INPUT");
+      assert.match(invalid.message, /CIVIL3D_MCP_DEFAULT_PORT_FALLBACK must be 0 or 1/);
+    });
+
+    // When the port was taken by something else, the checks above still hold;
+    // only this last one needs the stand-in.
+    if (listening) assert.equal(connections.length, 0, "the default port must not be contacted");
+  } finally {
+    if (listening) await new Promise((resolve) => bystander.close(resolve));
+  }
+});
+
 async function withInstances(definitions, run) {
   const endpointDirectory = await mkdtemp(path.join(os.tmpdir(), "civil3d-mcp-health-routing-"));
   const saved = Object.fromEntries(ENVIRONMENT_NAMES.map((name) => [name, process.env[name]]));
@@ -222,6 +269,8 @@ async function withInstances(definitions, run) {
     process.env.CIVIL3D_CONNECT_TIMEOUT = "1000";
     process.env.CIVIL3D_DISCOVERY_TIMEOUT = "1000";
     process.env.CIVIL3D_MCP_ENDPOINT_DIR = endpointDirectory;
+    // A Civil 3D that happens to run on this machine must never be reached.
+    process.env.CIVIL3D_MCP_DEFAULT_PORT_FALLBACK = "0";
     for (const plugin of plugins) {
       await writeFile(
         path.join(endpointDirectory, `${plugin.processId}-${plugin.instanceId}.json`),

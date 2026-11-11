@@ -216,6 +216,7 @@ Neither command changes an MCP client's configuration.
 |----------|---------|-------------|
 | `CIVIL3D_HOST` | `127.0.0.1` | Plugin host. The plugin listens on IPv4 loopback only. |
 | `CIVIL3D_PORT` | unset | Optional fixed-port override. When omitted, local instance discovery is active and the plugin prefers port 8080. |
+| `CIVIL3D_MCP_DEFAULT_PORT_FALLBACK` | `1` | With `0`, discovery uses the endpoint records only and never tries port 8080 on its own. The repository tests set it so that they cannot reach a Civil 3D running on the same machine. |
 | `CIVIL3D_CONNECT_TIMEOUT` | `5000` | TCP connection timeout (ms) |
 | `CIVIL3D_DISCOVERY_TIMEOUT` | `5000` | Timeout for private health and drawing-identity probes (ms) |
 | `CIVIL3D_COMMAND_TIMEOUT` | `120000` | Base wait for one plugin reply (ms). For scripts the wait is never shorter than the script limit plus 30 s; see [time limit](#time-limit-and-cancelling). |
