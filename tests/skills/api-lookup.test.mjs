@@ -38,7 +38,7 @@ test("api_lookup keeps the three-tool schema and forwards only bounded metadata 
     const { tools } = await client.listTools();
     assert.equal(tools.length, 1);
     assert.equal(tools[0].name, "civil3d_skills");
-    assert.deepEqual(tools[0].inputSchema.properties.action.enum, ["list", "search", "get", "api_lookup"]);
+    assert.deepEqual(tools[0].inputSchema.properties.action.enum, ["list", "search", "get", "api_lookup", "status"]);
     assert.match(tools[0].description, /already-loaded Civil 3D host assemblies/);
 
     const result = await client.callTool({

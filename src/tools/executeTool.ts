@@ -34,6 +34,16 @@ import {
 } from "../utils/operationAudit.js";
 
 const log = createLogger("ExecuteTool");
+/** Plugin ability behind requireClean and backup; an older plugin would ignore them. */
+const WRITE_SAFETY_FEATURE = "writeSafety";
+
+/** The plugin's account of what happened to the drawing, sent next to the result. */
+function readReceipt(response: Record<string, unknown>): Record<string, unknown> | undefined {
+  const receipt = response.receipt;
+  return typeof receipt === "object" && receipt !== null && !Array.isArray(receipt)
+    ? (receipt as Record<string, unknown>)
+    : undefined;
+}
 const SAVE_COMMAND_TIMEOUT_MS = readTimeoutEnvironment("CIVIL3D_SAVE_TIMEOUT", 600_000);
 const idempotencyKeySchema = z
   .string()
@@ -70,7 +80,10 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
       "Use this for operations that MODIFY the drawing (create, edit, delete objects). " +
       "expectedDrawing must come from a prior read-only identity query. " +
       "Instead of code you can pass skill and params to run a skill whose run_by_name is true. " +
-      "To persist the drawing file, set saveDrawing=true; do not call Database.SaveAs or queue QSAVE from the C# code.",
+      "To persist the drawing file, set saveDrawing=true; do not call Database.SaveAs or queue QSAVE from the C# code. " +
+      "Safety switches: requireClean=true refuses a drawing with unsaved changes, backup=true first copies the saved DWG. " +
+      "The reply has a second text block {\"receipt\": {...}} with DBMOD before/after, committed, saved, the file time and the backup path, " +
+      "so no separate checks are needed around a write.",
     {
       code: z.string().optional().describe(
         "C# code to execute. Has access to Document, CivilDoc, Database, Transaction, Editor. " +
@@ -79,7 +92,8 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
       skill: skillNameSchema,
       params: skillParamsSchema,
       description: z.string().optional().describe(
-        "Optional human-readable summary; excluded from operation audit logs."
+        "Optional one-line summary of the change. It is shown on the Civil 3D command line and kept " +
+          "in the local write journal, so write it for the person at the computer."
       ),
       expectedDrawing: expectedDrawingSchema,
       instanceId: instanceIdSchema,
@@ -91,6 +105,27 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
           "When true, save the currently named DWG after the write transaction commits and wait for completion. " +
             "Use this instead of Database.SaveAs or Document.SendStringToExecute(\"QSAVE\") in code. " +
             "An unsaved drawing must first be named in Civil 3D."
+        ),
+      requireClean: z
+        .boolean()
+        .optional()
+        .describe(
+          "When true, run only if the drawing has no unsaved changes (DBMOD=0); otherwise nothing runs " +
+            "(CIVIL3D.DRAWING_NOT_CLEAN). Defaults to the value of backup."
+        ),
+      backup: z
+        .boolean()
+        .optional()
+        .describe(
+          "When true, copy the saved DWG file to a time-stamped backup before the script runs; the receipt " +
+            "returns its path. Needs a named drawing, and a clean one unless requireClean is explicitly false."
+        ),
+      backupDirectory: z
+        .string()
+        .optional()
+        .describe(
+          "Absolute folder for the backup copy (only with backup=true). Default: the CIVIL3D_MCP_BACKUP_DIR " +
+            "setting of Civil 3D, else %LOCALAPPDATA%\\Civil3dMcpRoslyn\\backups."
         ),
       timeoutSeconds: timeoutSecondsSchema,
     },
@@ -124,6 +159,9 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
         return createStructuredToolErrorResult(error, "Execution failed: ");
       }
       const audit = createOperationAuditContext("civil3d_execute", code, performance.now());
+      const usesWriteSafety =
+        args.requireClean === true || args.backup === true || args.backupDirectory !== undefined;
+      let receipt: Record<string, unknown> | undefined;
       try {
         const commandResult = await withApplicationConnection(
           async (client) =>
@@ -137,18 +175,25 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
                 idempotencyKey: args.idempotencyKey,
                 saveDrawing: args.saveDrawing,
                 timeoutSeconds: args.timeoutSeconds,
+                requireClean: args.requireClean,
+                backup: args.backup,
+                backupDirectory: args.backupDirectory,
               },
               benchmarkTrace,
               commandWaitMs(
                 args.saveDrawing ? SAVE_COMMAND_TIMEOUT_MS : COMMAND_TIMEOUT_MS,
                 args.timeoutSeconds
               ),
-              extra.signal
+              extra.signal,
+              (response) => {
+                receipt = readReceipt(response);
+              }
             ),
           {
             expectedDrawing: args.expectedDrawing,
             instanceId: args.instanceId,
             signal: extra.signal,
+            requiredFeatures: usesWriteSafety ? [WRITE_SAFETY_FEATURE] : undefined,
           }
         );
         const result = benchmarkTrace
@@ -158,12 +203,16 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
           ? (commandResult as MeasuredCommandResult).benchmarkEvent
           : undefined;
 
+        // The result keeps the first block to itself; the receipt follows in its own.
         const normalResult = {
           content: [
             {
               type: "text" as const,
               text: JSON.stringify(result) ?? "null",
             },
+            ...(receipt
+              ? [{ type: "text" as const, text: JSON.stringify({ receipt }) }]
+              : []),
           ],
         };
         logOperationSuccess(log, audit, performance.now());
@@ -174,7 +223,19 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
       } catch (error) {
         const normalizedError = normalizeCivil3dError(error);
         logOperationFailure(log, audit, performance.now(), normalizedError);
-        const normalResult = createStructuredToolErrorResult(error, "Execution failed: ");
+        const errorResult = createStructuredToolErrorResult(error, "Execution failed: ");
+        // A refusal or failure that reached the drawing still reports its state,
+        // for example that a write was committed although the save failed.
+        const normalResult = receipt
+          ? {
+              ...errorResult,
+              content: [
+                ...errorResult.content,
+                { type: "text" as const, text: JSON.stringify({ receipt }) },
+              ],
+              structuredContent: { ...errorResult.structuredContent, receipt },
+            }
+          : errorResult;
         return withBenchmarkEventMeta(
           normalResult,
           finalizeReturnedPayloadMeasurement(

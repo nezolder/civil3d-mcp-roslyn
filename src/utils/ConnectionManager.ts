@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { ApplicationClientConnection, cancelledBeforeSend } from "./SocketClient.js";
 import { createLogger } from "./logger.js";
 import { Civil3dMcpError } from "../errors/structuredError.js";
+import { BuildInfo, SERVER_BUILD, buildsDiffer } from "../buildInfo.js";
 
 const log = createLogger("ConnectionManager");
 
@@ -33,6 +34,12 @@ export interface ApplicationConnectionTarget {
   instanceId?: string;
   /** Aborted when the MCP client cancels the tool call. */
   signal?: AbortSignal;
+  /**
+   * Plugin abilities the call depends on (see the plugin's health reply). An
+   * older plugin would silently ignore an input it does not know, so the call
+   * is refused before it is sent when one is missing.
+   */
+  requiredFeatures?: string[];
 }
 
 interface ConnectionSettings {
@@ -52,6 +59,19 @@ interface EndpointRecord {
   startedAtUtc: string;
 }
 
+/** What the plugin's health reply says beyond "alive". Older plugins leave most of it empty. */
+interface EndpointHealth {
+  /** True when the plugin has looked at its active drawing; false for plugins that cannot say. */
+  activeDrawingKnown: boolean;
+  /** The remembered active drawing, or null when none is open (or unknown). */
+  activeDrawing: { databaseFilename: string; fingerprintGuid: string; observedAtUtc: string | null } | null;
+  build: BuildInfo | null;
+  features: string[];
+  operationInProgress: boolean;
+  queueDepth: number | null;
+  executionBackend: string | null;
+}
+
 interface LiveEndpoint {
   host: string;
   port: number;
@@ -59,6 +79,8 @@ interface LiveEndpoint {
   processId: number | null;
   startedAtUtc: string | null;
   legacy: boolean;
+  /** Present once the endpoint answered a health probe. */
+  health?: EndpointHealth;
 }
 
 interface DrawingIdentity {
@@ -70,6 +92,25 @@ interface DrawingIdentity {
 interface EndpointWithIdentity {
   endpoint: LiveEndpoint;
   identity: DrawingIdentity | null;
+  /** The plugin reported that no drawing is open, as opposed to not answering. */
+  noDrawing?: boolean;
+}
+
+/** One running Civil 3D with the plugin, as shown by the civil3d_skills status action. */
+export interface InstanceStatus {
+  instanceId: string;
+  processId: number | null;
+  port: number;
+  startedAtUtc: string | null;
+  pluginBuild: BuildInfo | null;
+  /** Null when either side does not know its commit. */
+  buildMatchesServer: boolean | null;
+  activeDrawingKnown: boolean;
+  activeDrawing: EndpointHealth["activeDrawing"];
+  operationInProgress: boolean;
+  queueDepth: number | null;
+  executionBackend: string | null;
+  features: string[];
 }
 
 /**
@@ -83,8 +124,69 @@ export async function withApplicationConnection<T>(
   const settings = getConnectionSettings();
   if (target.signal?.aborted) throw cancelledBeforeSend();
   const endpoint = await selectEndpoint(settings, target);
+  if (target.requiredFeatures?.length) {
+    await requireFeatures(endpoint, target.requiredFeatures, settings);
+  }
   if (target.signal?.aborted) throw cancelledBeforeSend();
   return await withDirectConnection(endpoint, operation, settings.connectTimeoutMs);
+}
+
+/**
+ * The running Civil 3D instances and what each says about itself. Uses the
+ * health reply only, so it runs no command in any instance.
+ */
+export async function listInstances(): Promise<InstanceStatus[]> {
+  const settings = getConnectionSettings();
+  let endpoints: LiveEndpoint[];
+  if (settings.explicitPort || !isLocalHost(settings.host)) {
+    const live = await probeEndpoint(fixedEndpoint(settings.host, settings.port), settings);
+    endpoints = live ? [live] : [];
+  } else {
+    endpoints = await discoverLiveEndpoints(settings);
+  }
+  return endpoints.map((endpoint) => {
+    const health = endpoint.health;
+    const pluginBuild = health?.build ?? null;
+    return {
+      instanceId: endpoint.instanceId,
+      processId: endpoint.processId,
+      port: endpoint.port,
+      startedAtUtc: endpoint.startedAtUtc,
+      pluginBuild,
+      buildMatchesServer: pluginBuild ? matchesServerBuild(pluginBuild) : null,
+      activeDrawingKnown: health?.activeDrawingKnown ?? false,
+      activeDrawing: health?.activeDrawing ?? null,
+      operationInProgress: health?.operationInProgress ?? false,
+      queueDepth: health?.queueDepth ?? null,
+      executionBackend: health?.executionBackend ?? null,
+      features: health?.features ?? [],
+    };
+  });
+}
+
+function matchesServerBuild(pluginBuild: BuildInfo): boolean | null {
+  const differ = buildsDiffer(SERVER_BUILD, pluginBuild);
+  return differ === null ? null : !differ;
+}
+
+async function requireFeatures(
+  endpoint: LiveEndpoint,
+  features: string[],
+  settings: ConnectionSettings
+): Promise<void> {
+  // A fixed port is used without a probe, so ask now.
+  const health = endpoint.health ?? (await probeEndpoint(endpoint, settings))?.health;
+  const missing = features.filter((feature) => !health?.features.includes(feature));
+  if (missing.length === 0) return;
+  throw new Civil3dMcpError(
+    "CIVIL3D.PLUGIN_UPDATE_REQUIRED",
+    `The Civil 3D plugin in the selected instance does not support: ${missing.join(", ")}. ` +
+      "It would ignore the matching inputs, so nothing was sent. Update the plugin in Civil 3D " +
+      "(see the status action of civil3d_skills for the versions), or repeat the call without those inputs.",
+    "validation",
+    "node",
+    "not_started"
+  );
 }
 
 function getConnectionSettings(): ConnectionSettings {
@@ -177,6 +279,9 @@ async function selectEndpoint(
   // authoritative and no routing-only drawing query is added.
   if (endpoints.length === 1) return endpoints[0];
 
+  // The health reply of each instance already says which drawing is active
+  // there, so choosing between instances normally runs no command in any of
+  // them. Only a plugin too old to say is still asked with a command.
   if (target.expectedDrawing) {
     const candidates = await readDrawingIdentities(endpoints, settings);
     const matches = candidates.filter(
@@ -364,6 +469,7 @@ async function probeEndpoint(
         ? (payload.port as number)
         : endpoint.port;
 
+    const healthDetails = readEndpointHealth(payload);
     if (!endpoint.legacy) {
       if (
         healthInstanceId !== endpoint.instanceId ||
@@ -372,11 +478,14 @@ async function probeEndpoint(
       ) {
         return null;
       }
-      return endpoint;
+      warnOnBuildMismatch(endpoint.instanceId, healthDetails.build);
+      return { ...endpoint, health: healthDetails };
     }
 
+    warnOnBuildMismatch(healthInstanceId ?? endpoint.instanceId, healthDetails.build);
     return {
       ...endpoint,
+      health: healthDetails,
       instanceId: healthInstanceId ?? endpoint.instanceId,
       processId: healthProcessId,
       port: healthPort,
@@ -396,15 +505,85 @@ async function probeEndpoint(
   }
 }
 
+function readEndpointHealth(payload: Record<string, unknown>): EndpointHealth {
+  const drawing = payload.activeDrawing;
+  const activeDrawing =
+    typeof drawing === "object" &&
+    drawing !== null &&
+    !Array.isArray(drawing) &&
+    typeof (drawing as Record<string, unknown>).databaseFilename === "string" &&
+    typeof (drawing as Record<string, unknown>).fingerprintGuid === "string"
+      ? {
+          databaseFilename: (drawing as Record<string, unknown>).databaseFilename as string,
+          fingerprintGuid: (drawing as Record<string, unknown>).fingerprintGuid as string,
+          observedAtUtc:
+            typeof (drawing as Record<string, unknown>).observedAtUtc === "string"
+              ? ((drawing as Record<string, unknown>).observedAtUtc as string)
+              : null,
+        }
+      : null;
+  const build = payload.build;
+  const buildRecord =
+    typeof build === "object" && build !== null && !Array.isArray(build)
+      ? (build as Record<string, unknown>)
+      : null;
+  return {
+    activeDrawingKnown: payload.activeDrawingKnown === true,
+    activeDrawing: payload.activeDrawingKnown === true ? activeDrawing : null,
+    build:
+      buildRecord && typeof buildRecord.commit === "string"
+        ? {
+            commit: buildRecord.commit,
+            dirty: typeof buildRecord.dirty === "boolean" ? buildRecord.dirty : null,
+            builtAtUtc: typeof buildRecord.builtAtUtc === "string" ? buildRecord.builtAtUtc : null,
+          }
+        : null,
+    features: Array.isArray(payload.features)
+      ? payload.features.filter((feature): feature is string => typeof feature === "string")
+      : [],
+    operationInProgress: payload.operationInProgress === true,
+    queueDepth: Number.isInteger(payload.queueDepth) ? (payload.queueDepth as number) : null,
+    executionBackend: typeof payload.executionBackend === "string" ? payload.executionBackend : null,
+  };
+}
+
+const warnedBuildMismatches = new Set<string>();
+
+/** Said once per Civil 3D session; the status action shows the details at any time. */
+function warnOnBuildMismatch(instanceId: string, pluginBuild: BuildInfo | null): void {
+  if (!pluginBuild || buildsDiffer(SERVER_BUILD, pluginBuild) !== true) return;
+  if (warnedBuildMismatches.has(instanceId)) return;
+  if (warnedBuildMismatches.size >= 256) warnedBuildMismatches.clear();
+  warnedBuildMismatches.add(instanceId);
+  log.warn("The Civil 3D plugin and the MCP server were built from different commits", {
+    instanceId,
+    pluginCommit: pluginBuild.commit,
+    serverCommit: SERVER_BUILD.commit,
+  });
+}
+
 async function readDrawingIdentities(
   endpoints: LiveEndpoint[],
   settings: ConnectionSettings
 ): Promise<EndpointWithIdentity[]> {
   return await Promise.all(
-    endpoints.map(async (endpoint) => ({
-      endpoint,
-      identity: await readDrawingIdentity(endpoint, settings),
-    }))
+    endpoints.map(async (endpoint) => {
+      const health = endpoint.health;
+      if (health?.activeDrawingKnown) {
+        return health.activeDrawing
+          ? {
+              endpoint,
+              identity: {
+                instanceId: endpoint.instanceId,
+                databaseFilename: health.activeDrawing.databaseFilename,
+                fingerprintGuid: health.activeDrawing.fingerprintGuid,
+              },
+            }
+          : { endpoint, identity: null, noDrawing: true };
+      }
+      // An older plugin, or one that has not been idle yet since it started.
+      return { endpoint, identity: await readDrawingIdentity(endpoint, settings) };
+    })
   );
 }
 
@@ -505,10 +684,11 @@ function drawingMismatch(
 function formatCandidates(candidates: EndpointWithIdentity[]): string {
   return candidates
     .slice(0, 16)
-    .map(({ endpoint, identity }) => {
+    .map(({ endpoint, identity, noDrawing }) => {
       const process = endpoint.processId === null ? "unknown" : String(endpoint.processId);
       if (!identity) {
-        return `- instanceId=${endpoint.instanceId}; processId=${process}; drawing identity unavailable`;
+        return `- instanceId=${endpoint.instanceId}; processId=${process}; ` +
+          (noDrawing ? "no drawing open" : "drawing identity unavailable");
       }
       return (
         `- instanceId=${endpoint.instanceId}; processId=${process}; ` +
