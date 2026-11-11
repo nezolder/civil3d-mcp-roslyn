@@ -29,9 +29,9 @@ This independent project is not affiliated with or endorsed by Autodesk. Autodes
 
 | Tool | Purpose | Safety |
 |------|---------|--------|
-| `civil3d_execute` | Execute C# code with **write** access; optional save after commit | ⚠️ Modifies drawing |
+| `civil3d_execute` | Execute C# code with **write** access; optional clean-drawing check and backup before, save after, and a receipt of what happened | ⚠️ Modifies drawing |
 | `civil3d_query` | Run intended read-only C# without committing the host transaction | Trusted code only; not a side-effect sandbox |
-| `civil3d_skills` | Browse/search/read code skill templates; `api_lookup` searches already-loaded public Civil 3D API metadata | ✅ Metadata only |
+| `civil3d_skills` | Browse/search/read code skill templates; `api_lookup` searches already-loaded public Civil 3D API metadata; `status` shows the server and plugin versions and the running instances | ✅ Metadata only |
 
 The tools carry MCP annotations so a client can tell them apart: `civil3d_skills` is read-only, `civil3d_execute` is a non-idempotent write, and none reaches outside the local Civil 3D session. `civil3d_query` is deliberately not advertised as read-only: its transaction is rolled back, but it still runs arbitrary code.
 
@@ -61,7 +61,7 @@ Result: [{ "Name": "EG", "Layer": "C-TOPO-EG" }, ...]
 
 ## Skills Library
 
-`civil3d_skills` also supports `action: "api_lookup"` for a bounded, read-only search of public type and member names/signatures from already-loaded allowlisted Civil 3D host assemblies. It does not load assemblies, run C# code, or access the active drawing. Supply a query and optionally an assembly, namespace prefix, and result limit.
+`civil3d_skills` also supports `action: "api_lookup"` for a bounded, read-only search of public type and member names/signatures from already-loaded allowlisted Civil 3D host assemblies. It does not load assemblies, run C# code, or access the active drawing. Supply a query and optionally an assembly, namespace prefix, and result limit. `action: "status"` reports [versions and running instances](#versions-and-installing-a-build).
 
 Skills are documented C# code templates in `skills/`:
 
@@ -121,6 +121,32 @@ A full name, the script's own `using X = …;` alias or a type the script declar
 
 Committing the `civil3d_execute` transaction changes the open drawing but does not by itself write the DWG file to disk. First identify the active drawing with `civil3d_query`, then pass its full `Database.Filename` and `FingerprintGuid` as `expectedDrawing`; the plugin checks that identity immediately before Civil API access. Set `saveDrawing: true` when the completed change should also be saved. The plugin saves only after the script transaction and document lock are closed; scripts must not call `Database.SaveAs` or queue `QSAVE` themselves. The save request uses a separate 10-minute default timeout and is never retried automatically. A drawing that is open read-only is refused with `CIVIL3D.DRAWING_READ_ONLY` (`outcome: "not_started"`) before the script runs, instead of committing the change in memory and failing only at the save.
 
+### Safety switches, receipt and journal for writes
+
+`civil3d_execute` can do the checks around a write itself, so the assistant does not need separate calls for them:
+
+| Input | Effect |
+|-------|--------|
+| `requireClean: true` | Runs only when the drawing has no unsaved changes (`DBMOD` is 0). Otherwise nothing runs: `CIVIL3D.DRAWING_NOT_CLEAN`, `outcome: "not_started"`. |
+| `backup: true` | Copies the saved DWG file to a time-stamped copy before the script runs, for example `Plan.20261111-103000.dwg`. The copy is verified by size, and an existing file is never overwritten. If it cannot be made, nothing runs (`CIVIL3D.BACKUP_FAILED`); an unnamed drawing is refused with `CIVIL3D.SAVE_PATH_REQUIRED`. Because the copy shows the last saved state, `backup` also asks for a clean drawing unless `requireClean: false` is set explicitly. |
+| `backupDirectory` | Absolute folder for that copy. Default: `CIVIL3D_MCP_BACKUP_DIR` of the Civil 3D process, else `%LOCALAPPDATA%\Civil3dMcpRoslyn\backups`. Copies are never deleted automatically. |
+| `description` | One line about the change. It is shown on the Civil 3D command line as `[Civil 3D MCP] …` before the script runs, and kept in the journal. |
+
+Every write that reached the drawing returns a **receipt** next to its result. The result stays alone in the first text block; the receipt is a second text block:
+
+```json
+{"receipt": {"drawing": {"databaseFilename": "C:\\Projects\\Plan.dwg", "fingerprintGuid": "{…}"},
+  "dbmodBefore": 0, "dbmodAfter": 1, "committed": true, "saved": true,
+  "fileLastWriteUtc": "2026-11-11T09:30:00.0000000+00:00", "fileBytes": 1843200,
+  "backupPath": "C:\\Users\\me\\AppData\\Local\\Civil3dMcpRoslyn\\backups\\Plan.20261111-103000.dwg"}}
+```
+
+`committed` says whether the change is in the open drawing, `saved` whether this call wrote the file, and the file fields describe the file on disk after the call. A refused or failed write carries the same block (and `structuredContent.receipt`), so a failed save is visibly a committed, unsaved change. Queries have no receipt.
+
+The plugin also appends one line per write request to a local **journal**, `%LOCALAPPDATA%\Civil3dMcpRoslyn\journal\<year>-<month>.jsonl` (override with `CIVIL3D_MCP_JOURNAL_DIR` in the Civil 3D process): time, Civil 3D session, drawing, description, SHA-256 and size of the code, success or error code, committed, saved, backup path, `DBMOD` before and after, duration and plugin commit. It never contains the code or the result. A journal that cannot be written does not change the outcome of the write.
+
+A plugin from before these switches would ignore them silently. The server therefore asks the plugin for its feature list first and refuses with `CIVIL3D.PLUGIN_UPDATE_REQUIRED` (`not_started`) when `requireClean`, `backup` or `backupDirectory` cannot be honoured.
+
 ### Time limit and cancelling
 
 A script may run for 120 seconds. `timeoutSeconds` (1–1800) on `civil3d_query` and `civil3d_execute` changes the limit for that one call; use it for a known long operation such as a large rebuild. At the limit the script is stopped at its next loop iteration and the transaction is rolled back. A script that reaches no loop cannot be stopped midway, but when it returns after the limit its result is discarded and nothing is committed either. In both cases the reply is `CIVIL3D.TIMEOUT` with `outcome: "reported_error"`: the drawing is unchanged, and the same write can be sent again with a larger `timeoutSeconds`.
@@ -139,8 +165,7 @@ npm install && npm run build
 ### 2. Build Plugin
 ```bash
 # Copy DLLs from Civil 3D to C_References/ (see C_References/README.md)
-cd plugin/Civil3dMcpPlugin
-dotnet build
+dotnet build plugin/Civil3dMcpPlugin -c Release
 ```
 
 ### 3. Load in Civil 3D
@@ -148,6 +173,8 @@ dotnet build
 NETLOAD → select Civil3dMcpPlugin.dll
 C3DMCPSTATUS → verify running
 ```
+
+For a permanent installation use the autoload bundle instead; see [Installing a build](#installing-a-build).
 
 ### 4. Configure AI
 ```json
@@ -161,17 +188,43 @@ C3DMCPSTATUS → verify running
 }
 ```
 
+## Versions and installing a build
+
+Both halves say which source state they were built from. `npm run build` writes the commit and build time next to the compiled server, and the plugin build stamps them into the DLL. The server reports itself to MCP clients as `1.0.0+<short commit>`.
+
+`civil3d_skills` with `action: "status"` returns the server's commit, build time and skills folder, and for every running Civil 3D instance its `instanceId`, process, port, plugin commit and build time, the active drawing, whether an operation is running, and `buildMatchesServer`. Its `warnings` list names an instance whose plugin was built from another commit, a plugin too old to report its build, and builds made with uncommitted changes. The status reads health replies only and runs no command in Civil 3D. A mismatch is also logged once per Civil 3D session.
+
+A build made where git is unavailable reports `unknown`. Pass the commit in when needed: `CIVIL3D_MCP_COMMIT=<full hash>` for `npm run build`, `-p:Civil3dMcpCommit=<full hash>` for `dotnet build`.
+
+### Installing a build
+
+The development folder is a poor place to run from: switching a branch there changes the live skill catalogue at once, and `npm run build` empties `build/` while it compiles. Two commands copy a finished build to where it runs:
+
+```bash
+npm run install:server   # or: node scripts/install.mjs --server --target <folder>
+npm run install:plugin   # or: node scripts/install.mjs --plugin
+```
+
+- **Server:** copies `build/`, `skills/` and only the packages needed at run time to `%LOCALAPPDATA%\Civil3dMcpRoslyn\server`, checks that the copy loads on its own, then swaps it in. The copy it replaces is kept as `server.previous`. Point the MCP client at `<that folder>\build\index.js`.
+- **Plugin:** copies the Release build into `%APPDATA%\Autodesk\ApplicationPlugins\Civil3dMcpPlugin.bundle`, which every Civil 3D loads at start. It refuses while a running Civil 3D holds the installed DLL, first copies the installed bundle to `%LOCALAPPDATA%\Civil3dMcpRoslyn\backup\<date-time>\`, and verifies each copied file by hash. Civil 3D asks once at its next start whether to load the new, unsigned file.
+
+Neither command changes an MCP client's configuration.
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CIVIL3D_HOST` | `127.0.0.1` | Plugin host. The plugin listens on IPv4 loopback only. |
 | `CIVIL3D_PORT` | unset | Optional fixed-port override. When omitted, local instance discovery is active and the plugin prefers port 8080. |
+| `CIVIL3D_MCP_DEFAULT_PORT_FALLBACK` | `1` | With `0`, discovery uses the endpoint records only and never tries port 8080 on its own. The repository tests set it so that they cannot reach a Civil 3D running on the same machine. |
 | `CIVIL3D_CONNECT_TIMEOUT` | `5000` | TCP connection timeout (ms) |
 | `CIVIL3D_DISCOVERY_TIMEOUT` | `5000` | Timeout for private health and drawing-identity probes (ms) |
 | `CIVIL3D_COMMAND_TIMEOUT` | `120000` | Base wait for one plugin reply (ms). For scripts the wait is never shorter than the script limit plus 30 s; see [time limit](#time-limit-and-cancelling). |
 | `CIVIL3D_MCP_EXECUTION_BACKEND` | `modal` | Plugin process: `native` selects the legacy route for a controlled comparison in a fresh Civil session. |
 | `CIVIL3D_SAVE_TIMEOUT` | `600000` | Base wait for execute requests with `saveDrawing: true` (ms); extended the same way by `timeoutSeconds`. |
+| `CIVIL3D_MCP_BACKUP_DIR` | `%LOCALAPPDATA%\Civil3dMcpRoslyn\backups` | Plugin process: default folder for `backup: true` copies (absolute path). |
+| `CIVIL3D_MCP_JOURNAL_DIR` | `%LOCALAPPDATA%\Civil3dMcpRoslyn\journal` | Plugin process: folder of the write journal (absolute path). |
+| `CIVIL3D_MCP_COMMIT` | from git | Build time only: commit recorded by `npm run build` when git cannot be asked. |
 | `LOG_LEVEL` | `info` | Log level |
 
 Command/save timeouts must resolve to a positive integer of at most `2147483647` milliseconds; invalid or empty settings use the listed defaults. Log levels are `debug`, `info`, `warn` and `error`, ignoring case and surrounding whitespace; unrecognized values use `info`. Invalid timeout warnings omit the supplied value.
@@ -180,11 +233,13 @@ Civil requests run as correlated modal commands. The existing serialization gate
 
 ## Multiple Civil 3D instances
 
-Each loaded plugin session publishes a small local endpoint record containing only an opaque instance ID, process ID, port, and start time. It contains no drawing name or project data. The first Civil 3D instance prefers port 8080; another instance automatically uses a free localhost port.
+Each loaded plugin session publishes a small local endpoint record containing only an opaque instance ID, process ID, program name, port, and start time. It contains no drawing name or project data. The first Civil 3D instance prefers port 8080; another instance automatically uses a free localhost port.
 
-A record normally disappears when its Civil 3D session ends. One left behind by a crash or a killed process is removed by the next plugin session that starts, and until then the MCP server skips records whose process no longer exists, so stale records do not slow down every call. A session that the caller names with `instanceId` is always probed.
+A record normally disappears when its Civil 3D session ends. One left behind by a crash or a killed process is removed by the next plugin session that starts, and until then the MCP server skips records whose process no longer exists, so stale records do not slow down every call. Windows may reuse the process ID of a closed Civil 3D for another program; a record whose ID now belongs to a different program is removed as well. A session that the caller names with `instanceId` is always probed.
 
 If exactly one instance is available, existing calls work as before. With multiple instances, `expectedDrawing` is used to find the matching active drawing before the requested C# reaches any plugin. An unguarded bootstrap query fails closed with `CIVIL3D.INSTANCE_SELECTION_REQUIRED` and reports the live candidates; retry it with the optional `instanceId` on the existing tool. The final plugin-side drawing guard still checks the path and fingerprint immediately before Civil API access. No fourth public MCP tool is added.
+
+Choosing between instances runs no command in any of them. Each plugin remembers which drawing is active, refreshed on the main thread whenever Civil 3D is idle (at most four times a second) and after each MCP operation, and repeats it in its health reply (`activeDrawingKnown`, `activeDrawing`). The server matches `expectedDrawing` against those replies, so the other instances, for example ones another assistant is working in, are not interrupted. Only an instance that cannot say yet (an older plugin, or one that has not been idle since it started) is still asked with the internal identity command. If the remembered drawing is a moment out of date, the call is refused by the drawing guard as `not_started`; it never reaches the wrong drawing. `civil3d_skills` with `action: "status"` lists the instances and their drawings.
 
 Leave `CIVIL3D_PORT` unset for automatic selection. Setting it deliberately pins the MCP server to that one port for compatibility or diagnostics.
 
@@ -214,7 +269,7 @@ Each localhost TCP connection carries one UTF-8 JSON-RPC request and one respons
 
 ## Operation audit logging and write idempotency (phase 2I.1 / 2I.2)
 
-At the default `info` log level, each accepted `civil3d_query` and `civil3d_execute` operation emits one bounded stderr audit event. It contains a new opaque operation ID, tool name, SHA-256 and UTF-8 byte length of the C# source, success/error status, and elapsed milliseconds; errors add only stable code/category/source/outcome fields. The audit event never contains caller code, description, drawing identity, result, or error message.
+At the default `info` log level, each accepted `civil3d_query` and `civil3d_execute` operation emits one bounded stderr audit event. It contains a new opaque operation ID, tool name, SHA-256 and UTF-8 byte length of the C# source, success/error status, and elapsed milliseconds; errors add only stable code/category/source/outcome fields. The audit event never contains caller code, description, drawing identity, result, or error message. It exists only where the client keeps the server's stderr; the lasting record of writes is the plugin's [journal](#safety-switches-receipt-and-journal-for-writes), which does hold the drawing path and the description.
 
 `civil3d_execute` also accepts an optional opaque `idempotencyKey` (1–128 ASCII letters, digits, `.`, `_`, `:`, `-`). In one plugin session it binds the key to the UTF-8 C# SHA-256, normalized `expectedDrawing` identity, and `saveDrawing` choice. A duplicate is rejected as in-progress, conflicting, or already committed; committed entries retain no result and callers must reconcile with a read-only query. A save failure occurs after the in-memory write commit, so its key is kept as completed to prevent an accidental duplicate modification. The session keeps at most 256 completed keys, evicting the oldest deterministically. This adds neither persistence nor automatic retry or exactly-once semantics.
 

@@ -12,7 +12,8 @@ namespace Autodesk.AutoCAD.EditorInput
     public bool IsQuiescent { get; set; } = true;
     public string CommandToken { get; set; } = string.Empty;
     public PromptResult GetString(PromptStringOptions options) => new(PromptStatus.OK, CommandToken);
-    public void WriteMessage(string message) { }
+    public List<string> Messages { get; } = new();
+    public void WriteMessage(string message) => Messages.Add(message);
   }
 }
 
@@ -395,11 +396,16 @@ namespace Autodesk.AutoCAD.ApplicationServices
     public static void RaiseIdle() => Idle?.Invoke(null, EventArgs.Empty);
     public static DocumentCollection DocumentManager { get; } = new();
     public static int DwgTitled { get; set; } = 1;
+    /// <summary>Unsaved-changes flag of the active drawing; 0 means clean.</summary>
+    public static int DbMod { get; set; }
 
     public static object GetSystemVariable(string name)
-      => name == "DWGTITLED"
-        ? DwgTitled
-        : throw new InvalidOperationException($"Unsupported test system variable: {name}");
+      => name switch
+      {
+        "DWGTITLED" => DwgTitled,
+        "DBMOD" => DbMod,
+        _ => throw new InvalidOperationException($"Unsupported test system variable: {name}"),
+      };
   }
 }
 

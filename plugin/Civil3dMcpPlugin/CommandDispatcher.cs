@@ -21,11 +21,12 @@ public static class CommandDispatcher
     JsonObject? parameters,
     CancellationToken cancellationToken,
     InternalBenchmarkMeasurement? benchmarkMeasurement,
-    OperationProgress? progress = null)
+    OperationProgress? progress = null,
+    ExecutionRecord? record = null)
   {
     return method switch
     {
-      "executeCode" => await ExecuteCodeAsync(parameters, benchmarkMeasurement, progress, cancellationToken),
+      "executeCode" => await ExecuteCodeAsync(parameters, benchmarkMeasurement, progress, record, cancellationToken),
       "getCivil3DHealth" => await GetHealthAsync(),
       "getActiveDrawingIdentity" => await GetActiveDrawingIdentityAsync(progress, cancellationToken),
       "apiLookup" => ApiLookup.Lookup(parameters),
@@ -44,6 +45,7 @@ public static class CommandDispatcher
     JsonObject? parameters,
     InternalBenchmarkMeasurement? benchmarkMeasurement,
     OperationProgress? progress,
+    ExecutionRecord? record,
     CancellationToken cancellationToken)
   {
     var code = PluginRuntime.GetRequiredString(parameters, "code");
@@ -59,6 +61,7 @@ public static class CommandDispatcher
     }
     var expectedDrawing = DrawingGuard.Parse(parameters, required: !readOnly);
     var timeLimit = ReadScriptTimeLimit(parameters);
+    ReadWriteSafetyOptions(parameters, readOnly, saveDrawing, record);
     // Keep the plugin debug output free of caller-provided description text.
     System.Diagnostics.Debug.WriteLine($"[C3D-MCP] {(readOnly ? "QUERY" : "EXECUTE")}");
 
@@ -77,7 +80,60 @@ public static class CommandDispatcher
       // A lazy result runs caller code while it is serialized; keep it stoppable.
       return RoslynExecutor.RunWithScriptCancellation(
         () => ResultSerializer.Serialize(rawResult), cancellationToken, timeLimit);
-    }, write: !readOnly, expectedDrawing, benchmarkMeasurement, saveDrawing, progress, cancellationToken);
+    }, write: !readOnly, expectedDrawing, benchmarkMeasurement, saveDrawing, progress, cancellationToken, record);
+  }
+
+  /// <summary>
+  /// Optional safety switches of a write: requireClean refuses a drawing with
+  /// unsaved changes, backup copies the saved drawing file first. A backup is
+  /// taken from the file on disk, so it asks for a clean drawing unless the
+  /// caller explicitly sets requireClean to false.
+  /// </summary>
+  internal static void ReadWriteSafetyOptions(
+    JsonObject? parameters,
+    bool readOnly,
+    bool saveDrawing,
+    ExecutionRecord? record)
+  {
+    var requireClean = PluginRuntime.GetOptionalBool(parameters, "requireClean");
+    var backup = PluginRuntime.GetOptionalBool(parameters, "backup") ?? false;
+    string? backupDirectory = null;
+    var backupDirectoryNode = parameters?["backupDirectory"];
+    if (backupDirectoryNode != null)
+    {
+      if (backupDirectoryNode is not JsonValue backupDirectoryValue
+        || !backupDirectoryValue.TryGetValue<string>(out backupDirectory)
+        || string.IsNullOrWhiteSpace(backupDirectory)
+        || !Path.IsPathFullyQualified(backupDirectory))
+      {
+        throw new JsonRpcDispatchException(
+          "CIVIL3D.INVALID_INPUT",
+          "Parameter 'backupDirectory' must be an absolute folder path."
+        );
+      }
+    }
+
+    if (readOnly && (requireClean == true || backup || backupDirectory != null))
+    {
+      throw new JsonRpcDispatchException(
+        "CIVIL3D.INVALID_INPUT",
+        "Parameters 'requireClean', 'backup' and 'backupDirectory' are only valid when readOnly is false."
+      );
+    }
+    if (backupDirectory != null && !backup)
+    {
+      throw new JsonRpcDispatchException(
+        "CIVIL3D.INVALID_INPUT",
+        "Parameter 'backupDirectory' is only valid together with backup: true."
+      );
+    }
+
+    if (record == null) return;
+    record.RequireClean = requireClean ?? backup;
+    record.RequireCleanFromBackup = requireClean == null && backup;
+    record.Backup = backup;
+    record.BackupDirectory = backupDirectory;
+    record.SaveRequested = saveDrawing;
   }
 
   /// <summary>
@@ -108,6 +164,8 @@ public static class CommandDispatcher
   private static Task<object?> GetHealthAsync()
   {
     var status = PluginRuntime.GetStatus();
+    var observation = ActiveDrawingTracker.Current;
+    var drawing = observation?.Drawing;
     return Task.FromResult<object?>(new
     {
       connected = true,
@@ -127,8 +185,34 @@ public static class CommandDispatcher
       mode = "code_execution",
       roslyn = true,
       executionBackend = CivilExecution.UseNativeBackend ? "native" : "modal",
+      // Which drawing was active when the application was last idle. Read
+      // from memory, so asking for it runs no command. False until the first
+      // look; a null drawing with true means no drawing is open.
+      activeDrawingKnown = observation != null,
+      activeDrawing = drawing == null
+        ? null
+        : new
+        {
+          databaseFilename = drawing.DatabaseFilename,
+          fingerprintGuid = drawing.FingerprintGuid,
+          observedAtUtc = drawing.ObservedAtUtc,
+        },
+      build = new
+      {
+        commit = BuildInfo.Commit,
+        dirty = BuildInfo.Dirty,
+        builtAtUtc = BuildInfo.BuiltAtUtc,
+      },
+      features = Features,
     });
   }
+
+  /// <summary>
+  /// Optional abilities of this plugin build. The MCP host checks them before
+  /// it relies on one, so that an older plugin cannot silently ignore a
+  /// safety switch.
+  /// </summary>
+  internal static readonly string[] Features = { "activeDrawing", "writeSafety" };
 
   /// <summary>
   /// Returns the active drawing identity without compiling or running caller

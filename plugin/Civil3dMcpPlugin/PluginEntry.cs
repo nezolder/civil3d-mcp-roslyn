@@ -17,6 +17,7 @@ public sealed class PluginEntry : IExtensionApplication
   public void Initialize()
   {
     if (!CivilExecution.UseNativeBackend) ModalCommandAdmission.Initialize();
+    ActiveDrawingTracker.Initialize();
     try
     {
       PluginRuntime.StartServer();
@@ -31,6 +32,7 @@ public sealed class PluginEntry : IExtensionApplication
   public void Terminate()
   {
     PluginRuntime.StopServer();
+    ActiveDrawingTracker.Terminate();
     ModalCommandAdmission.Terminate();
   }
 

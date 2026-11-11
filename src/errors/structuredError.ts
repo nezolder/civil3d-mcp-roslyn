@@ -76,7 +76,11 @@ function classifyPluginCode(code: string): {
       return { category: "drawing", outcome: "not_started" };
     case "CIVIL3D.SAVE_PATH_REQUIRED":
     case "CIVIL3D.DRAWING_READ_ONLY":
+    case "CIVIL3D.DRAWING_NOT_CLEAN":
       return { category: "drawing", outcome: "not_started" };
+    case "CIVIL3D.BACKUP_FAILED":
+      // Raised before the document lock: the script never ran.
+      return { category: "execution", outcome: "not_started" };
     case "CIVIL3D.DRAWING_GUARD_INVALID":
       return { category: "validation", outcome: "not_started" };
     case "CIVIL3D.IDEMPOTENCY_CONFLICT":

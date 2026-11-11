@@ -6,7 +6,18 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { registerSkillsTool } from "../../build/tools/skillsTool.js";
+import { SKILLS_DIR, registerSkillsTool } from "../../build/tools/skillsTool.js";
+
+function countSkillFiles(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).reduce(
+    (count, entry) =>
+      count +
+      (entry.isDirectory()
+        ? countSkillFiles(path.join(directory, entry.name))
+        : entry.name.endsWith(".skill.md") ? 1 : 0),
+    0
+  );
+}
 
 async function withClient(run, options = {}) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -129,7 +140,10 @@ test("real catalogue aliases cover engineering work words without claiming new o
 test("pages expose scoped evidence and write flags, with aliases only in get", async () => {
   await withClient(async (call) => {
     const inventory = await call({ action: "list", limit: 50 });
-    assert.equal(inventory.total, 39);
+    // The number is not kept by hand here; documented-counts.test.mjs ties the
+    // documentation to the same folder.
+    assert.equal(inventory.total, countSkillFiles(SKILLS_DIR));
+    assert.ok(inventory.total <= 50, "raise the page limit of this test when the catalogue outgrows one page");
     for (const item of inventory.skills) {
       assert.ok(item.workflow_tags.length > 0, item.name);
       assert.equal(item.tested_civil_version, "2025", item.name);

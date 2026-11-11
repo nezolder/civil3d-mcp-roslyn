@@ -4,7 +4,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { createLogger } from "../utils/logger.js";
 import { fileURLToPath } from "url";
-import { withApplicationConnection } from "../utils/ConnectionManager.js";
+import { InstanceStatus, listInstances, withApplicationConnection } from "../utils/ConnectionManager.js";
+import { SERVER_BUILD, SERVER_VERSION, UNKNOWN_COMMIT } from "../buildInfo.js";
 import { Civil3dMcpError, createStructuredToolErrorResult } from "../errors/structuredError.js";
 import { instanceIdSchema } from "./instanceSelection.js";
 import { isRunnableByName, omitCodeTemplate } from "./skillBinding.js";
@@ -31,6 +32,8 @@ interface SkillsToolOptions {
   apiLookup?: (parameters: ApiLookupParameters, instanceId?: string) => Promise<unknown>;
   // Internal fixture directory only; this is not a public MCP input.
   skillsDirectory?: string;
+  // Narrow test seam; production asks the running Civil 3D instances for their health.
+  listInstances?: () => Promise<InstanceStatus[]>;
 }
 
 interface SkillMetadata {
@@ -381,8 +384,57 @@ function paginateSkills(skills: SkillFile[], options: PaginationOptions) {
   };
 }
 
+const shortCommit = (commit: string) => (commit === UNKNOWN_COMMIT ? commit : commit.slice(0, 7));
+
+/**
+ * Which server is answering, from which folder, and which Civil 3D instances
+ * it can reach with which plugin build. Reads health replies only.
+ */
+function buildStatus(instances: InstanceStatus[], skillsDirectory: string) {
+  const skills = getSkills(undefined, undefined, skillsDirectory);
+  const warnings: string[] = [];
+  if (SERVER_BUILD.commit === UNKNOWN_COMMIT) {
+    warnings.push("The MCP server does not know which commit it was built from.");
+  } else if (SERVER_BUILD.dirty) {
+    warnings.push("The MCP server was built from a folder with uncommitted changes.");
+  }
+  if (instances.length === 0) {
+    warnings.push("No running Civil 3D with the MCP plugin was found.");
+  }
+  for (const instance of instances) {
+    const label = `Instance ${instance.instanceId} (process ${instance.processId ?? "unknown"})`;
+    if (!instance.pluginBuild) {
+      warnings.push(`${label} runs an older plugin that does not report its build; update the plugin.`);
+    } else if (instance.buildMatchesServer === false) {
+      warnings.push(
+        `${label} runs a plugin built from ${shortCommit(instance.pluginBuild.commit)}, ` +
+          `the MCP server from ${shortCommit(SERVER_BUILD.commit)}; update the older side.`
+      );
+    } else if (instance.pluginBuild.dirty) {
+      warnings.push(`${label} runs a plugin built from a folder with uncommitted changes.`);
+    }
+  }
+  return {
+    server: {
+      name: "civil3d-mcp",
+      version: SERVER_VERSION,
+      commit: SERVER_BUILD.commit,
+      dirty: SERVER_BUILD.dirty,
+      builtAtUtc: SERVER_BUILD.builtAtUtc,
+      skillsDirectory,
+      skillCount: skills.length,
+      runByNameCount: skills.filter((skill) =>
+        isRunnableByName(skill.content, skill.metadata.parameters)
+      ).length,
+    },
+    instances,
+    warnings,
+  };
+}
+
 export function registerSkillsTool(server: McpServer, options: SkillsToolOptions = {}) {
   const skillsDirectory = options.skillsDirectory ?? SKILLS_DIR;
+  const readInstances = options.listInstances ?? listInstances;
   const apiLookup = options.apiLookup ?? ((parameters: ApiLookupParameters, instanceId?: string) =>
     withApplicationConnection(
       (client) => client.sendCommand("apiLookup", parameters),
@@ -394,7 +446,9 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
     "civil3d_skills",
     "Browse and read Civil 3D code skills (documented C# code templates). " +
       "Use 'list' to see available skills, 'search' to find by keyword, " +
-      "'get' to read the full skill with code template, or 'api_lookup' to search public metadata from already-loaded Civil 3D host assemblies. " +
+      "'get' to read the full skill with code template, 'api_lookup' to search public metadata from already-loaded Civil 3D host assemblies, " +
+      "or 'status' to see the server's version and folder and every running Civil 3D instance with its plugin version, " +
+      "active drawing and instanceId (runs no command in Civil 3D). " +
       "Search matches every word across metadata, Hungarian/English aliases and workflow tags, ignoring accents and hyphens; " +
       "when no skill has every word it returns the closest ones with partial=true. " +
       "List/search include write scope, tested Civil version and a scoped validation summary; missing evidence stays null. " +
@@ -403,8 +457,11 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
       "civil3d_query (read skills) or civil3d_execute (write skills) instead of sending the code.",
     {
       action: z
-        .enum(["list", "search", "get", "api_lookup"])
-        .describe("list = browse skill metadata, search = find by keyword, get = read full skill, api_lookup = read-only public API metadata search"),
+        .enum(["list", "search", "get", "api_lookup", "status"])
+        .describe(
+          "list = browse skill metadata, search = find by keyword, get = read full skill, " +
+            "api_lookup = read-only public API metadata search, status = server and plugin versions plus running instances"
+        ),
       category: z.string().optional().describe("Filter by category (surfaces, alignments, points, etc.)"),
       query: z.string().optional().describe("Search query for 'search' or 'api_lookup' action"),
       skillName: z.string().optional().describe("Skill name for 'get' action"),
@@ -584,12 +641,26 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
               content: [{ type: "text" as const, text: JSON.stringify(result) }],
             };
           }
+
+          case "status": {
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify(buildStatus(await readInstances(), skillsDirectory)),
+                },
+              ],
+            };
+          }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         log.error("Skills operation failed", { error: message });
         if (args.action === "api_lookup") {
           return createStructuredToolErrorResult(error, "API lookup failed: ");
+        }
+        if (args.action === "status") {
+          return createStructuredToolErrorResult(error, "Status failed: ");
         }
         return {
           content: [{ type: "text" as const, text: `Skills error: ${message}` }],

@@ -1,8 +1,33 @@
 # Published development status
 
-Updated: 2026-11-10
+Updated: 2026-11-11
 
 This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
+
+## Current catalogue
+
+The catalogue contains **39 skills** with **42 C# templates**; **26** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+
+## Operational safety from the architecture review (2026-11-11)
+
+The second group of review findings concerns running the server day to day: which version runs, what a write did, and how several Civil 3D instances are told apart. The three public tools remain; `civil3d_execute` gains three optional inputs and `civil3d_skills` one action.
+
+- **Choosing an instance without commands.** With several Civil 3D instances the host used to run an internal command in every one of them before each guarded call, also in instances another assistant was working in. The plugin now remembers its active drawing and repeats it in the health reply; the host matches `expectedDrawing` against those replies. The drawing guard in the plugin is unchanged and still decides.
+- **Safety switches.** `requireClean` refuses a drawing with unsaved changes before the script runs; `backup` first copies the saved DWG to a time-stamped file (`backupDirectory` chooses the folder). An older plugin that would ignore them is detected and the call refused.
+- **Receipt.** Every write that reached the drawing returns, next to its result, the drawing, `DBMOD` before and after, whether it was committed and saved, the file's size and time, and the backup path.
+- **Journal.** The plugin appends one line per write request to a local monthly file: time, session, drawing, description, code hash, outcome. No code and no result. The `description` of a write is also shown on the Civil 3D command line.
+- **Versions.** Server and plugin record the commit and time of their build. `civil3d_skills` `action: "status"` shows both, the running instances and their active drawings, and warns when the two sides come from different commits.
+- **Installing.** `scripts/install.mjs` copies the built server to a folder of its own and the built plugin into the autoload bundle, with a backup of what it replaces. It does not change any client configuration.
+- **Stale endpoint records.** A record whose process ID was reused by another program is now recognised by the program name; previously it was kept when the new owner was a system process.
+- **Tests stay on their own.** Discovery also tries the default port 8080. With `CIVIL3D_MCP_DEFAULT_PORT_FALLBACK=0` it uses the endpoint records only; the routing tests set it, so they cannot reach a Civil 3D that runs on the same machine.
+- **Documented counts.** The skill counts in the README and in this file are tied to the `skills/` folder by a test. The count in the discovery test is computed from the folder.
+
+Evidence boundaries:
+
+- **Proven offline:** plugin core tests for the remembered drawing (unknown, known, switched, none open, refreshed after an operation), `requireClean`, the backup (made before the script, never overwriting, refused when unsaved, unnamed or uncopyable), the receipt on success, failure and refusal, the journal content and its failure isolation, the command-line text, and the program-name check; Node tests for routing two instances without any identity command, the fallback for an older plugin, the feature check before a safety switch is sent, the receipt block, the status action and the install script. The plugin builds against the Civil 3D 2025 assemblies.
+- **Proven live (2026-11-11, commit `3eeec27`, two Civil 3D 2025 instances on disposable copies):** the status action with matching builds; routing by `expectedDrawing` with no identity command in either instance; the refusal without a target; `requireClean` accepting a saved and refusing an unsaved drawing; `DBMOD` 0 after a host-managed save, so the switch works on consecutive saved writes; the backup of a drawing that Civil 3D holds open, in the default and in a given folder; the receipt on success, refusal and a failed script; the journal written by both instances; the description on the command line; the remembered drawing following a drawing switch within about half a second; both halves of the install script, including its refusal while Civil 3D runs; removal of a stale record whose process ID belongs to another program. Report: `docs/validation/operational-safety-3eeec27-2026-11-11.md`.
+- **Observed, not explained:** one of the two freshly opened copies showed `DBMOD` 1 before any call. `requireClean` refuses such a drawing until it is saved.
+- **Unverified in Civil 3D:** three or more instances; an older plugin next to a new one; a backup from a network drive or of a very large drawing; two instances writing the journal in the same moment.
 
 ## Reliability fixes from the architecture review (2026-11-10)
 
@@ -73,7 +98,7 @@ The extension is additive. Missing or invalid evidence remains unknown, and exac
 | Experimental surface profile and ordinary profile view | **Proven offline; live authoring Unverified.** Creates one full-length dynamic profile from an explicitly identified local alignment and TIN surface, plus one view using existing named styles. Rejects reference/volume sources, duplicate names and invalid inputs. Finite endpoint elevations do not prove that the surface has no interior gaps. |
 | Post-commit saving | **Proven live** with `saveDrawing: true`, `DBMOD=0` and independent readback. Saving occurs after transaction/lock disposal; scripts must not call `Database.SaveAs` or queue `QSAVE`. |
 
-The published catalog contains **29 skills** and **32 C# templates**, behind the same three public tools. The surface-profile recipe is experimental and has no live authoring evidence. Build instructions and test commands remain in [README.md](README.md) and `package.json`; Autodesk reference assemblies must be supplied locally and are not distributed.
+At the 2026-10-02 publication the catalog contained 29 skills and 32 C# templates, behind the same three public tools; the current numbers are under [Current catalogue](#current-catalogue). The surface-profile recipe is experimental and has no live authoring evidence. Build instructions and test commands remain in [README.md](README.md) and `package.json`; Autodesk reference assemblies must be supplied locally and are not distributed.
 
 **Proven offline for the previous accepted snapshot (2026-09-03):** TypeScript typecheck/build, plugin Release build, benchmark/error/discovery/routing tests, plugin core and serialization tests, transport tests, the three-tool MCP smoke check, all 24 template metadata compilations and 18 fixed-primitive input checks passed. NuGet vulnerability-feed retrieval produced an environment warning; these checks are not a dependency-security audit.
 

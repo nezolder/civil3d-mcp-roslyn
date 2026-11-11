@@ -272,13 +272,16 @@ export class ApplicationClientConnection {
    * Send a JSON-RPC command to the Civil 3D plugin and wait for a response.
    * Aborting the optional signal closes the connection, which the plugin
    * treats as "the client gave up" and uses to stop the running script.
+   * onResponse sees the whole reply, result or error, before it is settled;
+   * it is how a caller reads what the plugin sends next to the result.
    */
   public sendCommand(
     command: string,
     params: Record<string, unknown> = {},
     benchmarkTrace?: BenchmarkTraceRequest,
     timeoutMs: number = COMMAND_TIMEOUT_MS,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onResponse?: (response: Record<string, unknown>) => void
   ): Promise<any | MeasuredCommandResult> {
     return new Promise((resolve, reject) => {
       const fallbackStartedAt = benchmarkTrace ? performance.now() : undefined;
@@ -361,6 +364,7 @@ export class ApplicationClientConnection {
           handle: (response) => {
             settle();
             try {
+              onResponse?.(response);
               const benchmarkEvent =
                 benchmarkTrace && forwardedCode !== undefined
                   ? createMeasurementEventFromResponse(
