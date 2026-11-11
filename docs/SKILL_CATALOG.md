@@ -1,6 +1,6 @@
 # Recipe discovery and validation metadata
 
-`civil3d_skills` keeps the same `list`, `search`, `get` and `api_lookup` actions and the same three-tool public interface. Catalogue `list`, `search` and `get` never execute a template or connect to a drawing; the separate `api_lookup` action still reads metadata through the connected Civil host. The C# recipe bodies, stable names, categories, parameters and write requirements remain unchanged.
+`civil3d_skills` keeps the same `list`, `search`, `get` and `api_lookup` actions and the same three-tool public interface. Catalogue `list`, `search` and `get` never execute a template or connect to a drawing; the separate `api_lookup` action still reads metadata through the connected Civil host, and the `status` action reads only the health replies of the running instances to report versions and active drawings. The C# recipe bodies, stable names, categories, parameters and write requirements remain unchanged.
 
 ## Find the required operation
 
