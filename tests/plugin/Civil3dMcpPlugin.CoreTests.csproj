@@ -9,6 +9,11 @@
 
   <ItemGroup>
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\CivilExecution.cs" Link="CivilExecution.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ActiveDrawingTracker.cs" Link="ActiveDrawingTracker.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\BuildInfo.cs" Link="BuildInfo.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\DrawingBackup.cs" Link="DrawingBackup.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ExecutionRecord.cs" Link="ExecutionRecord.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\WriteJournal.cs" Link="WriteJournal.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ApiLookup.cs" Link="ApiLookup.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\CommandDispatcher.cs" Link="CommandDispatcher.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\CommandContextAdmission.cs" Link="CommandContextAdmission.cs" />

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Net.Sockets;
@@ -165,6 +166,10 @@ public static class PluginRuntime
       return SerializeError(id, "CIVIL3D.INVALID_INPUT", "JSON-RPC request is missing method.");
     }
 
+    // Receipt and journal data of an executeCode request; unused for the rest.
+    var record = method == "executeCode" ? ExecutionRecord.FromRequest(parameters) : null;
+    var startedAt = Stopwatch.GetTimestamp();
+    string? journalErrorCode = null;
     IdempotencyReservation reservation = IdempotencyReservation.None;
     try
     {
@@ -188,37 +193,47 @@ public static class PluginRuntime
             parameters,
             cancellationToken,
             benchmarkMeasurement,
-            lease.Progress
+            lease.Progress,
+            record
           );
         }
         reservation.Complete();
       }
-      return SerializeResult(id, result, benchmarkMeasurement);
+      return SerializeResult(id, result, benchmarkMeasurement, record);
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
+      journalErrorCode = "CIVIL3D.CANCELLED";
       throw;
     }
     catch (JsonRpcDispatchException ex)
     {
+      journalErrorCode = ex.Code;
       if (ex.OperationCommitted)
       {
         reservation.Complete();
       }
-      return SerializeError(id, ex.Code, ex.Message, benchmarkMeasurement);
+      return SerializeError(id, ex.Code, ex.Message, benchmarkMeasurement, record);
     }
     catch (Exception ex)
     {
+      journalErrorCode = "CIVIL3D.TRANSACTION_FAILED";
       return SerializeError(
         id,
         "CIVIL3D.TRANSACTION_FAILED",
         ex.Message,
-        benchmarkMeasurement
+        benchmarkMeasurement,
+        record
       );
     }
     finally
     {
       reservation.ReleaseIfIncomplete();
+      if (record is { IsWrite: true })
+      {
+        WriteJournal.Append(
+          record, journalErrorCode, Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+      }
     }
   }
 
@@ -304,7 +319,8 @@ public static class PluginRuntime
   private static string SerializeResult(
     JsonNode? id,
     object? result,
-    InternalBenchmarkMeasurement? benchmarkMeasurement = null)
+    InternalBenchmarkMeasurement? benchmarkMeasurement = null,
+    ExecutionRecord? record = null)
   {
     var response = new JsonObject
     {
@@ -317,14 +333,30 @@ public static class PluginRuntime
       response[InternalBenchmarkMeasurement.ResponsePropertyName] =
         benchmarkMeasurement.ToJsonObject();
     }
+    AddReceipt(response, record);
     return response.ToJsonString(JsonSerializerOptions);
   }
+
+  /// <summary>
+  /// A write that reached the drawing reports what happened to it next to the
+  /// result, so the result itself keeps its shape.
+  /// </summary>
+  private static void AddReceipt(JsonObject response, ExecutionRecord? record)
+  {
+    if (record is { IsWrite: true, ReachedDrawing: true })
+    {
+      response[ReceiptPropertyName] = record.ToReceipt();
+    }
+  }
+
+  internal const string ReceiptPropertyName = "receipt";
 
   private static string SerializeError(
     JsonNode? id,
     string code,
     string message,
-    InternalBenchmarkMeasurement? benchmarkMeasurement = null)
+    InternalBenchmarkMeasurement? benchmarkMeasurement = null,
+    ExecutionRecord? record = null)
   {
     var response = new JsonObject
     {
@@ -341,6 +373,7 @@ public static class PluginRuntime
       response[InternalBenchmarkMeasurement.ResponsePropertyName] =
         benchmarkMeasurement.ToJsonObject();
     }
+    AddReceipt(response, record);
     return response.ToJsonString(JsonSerializerOptions);
   }
 

@@ -35,7 +35,8 @@ public static class CivilExecution
     InternalBenchmarkMeasurement? benchmarkMeasurement,
     bool saveDrawing = false,
     OperationProgress? progress = null,
-    CancellationToken commandContextStartCancellationToken = default)
+    CancellationToken commandContextStartCancellationToken = default,
+    ExecutionRecord? record = null)
   {
     T? result = default;
     Exception? capturedException = null;
@@ -59,6 +60,9 @@ public static class CivilExecution
         );
       }
 
+      // Only a write gets a receipt and a journal line.
+      var writeRecord = write ? record : null;
+      string? namedDrawingPath = null;
       try
       {
         progress?.SetStage(OperationStage.ResolvingDrawing);
@@ -67,6 +71,7 @@ public static class CivilExecution
         var civilDoc = CivilApplication.ActiveDocument
           ?? throw new JsonRpcDispatchException("CIVIL3D.NO_DRAWING", "No active Civil 3D document is available.");
         var database = doc.Database;
+        writeRecord?.RecordDrawing(database.Filename, database.FingerprintGuid.ToString());
 
         result = DrawingGuard.ValidateThenRun(
           expectedDrawing,
@@ -96,6 +101,11 @@ public static class CivilExecution
                     "Reopen the drawing for writing, or run without saveDrawing and save a copy in Civil 3D."
                 );
               }
+            }
+
+            if (writeRecord != null)
+            {
+              namedDrawingPath = ApplyWriteSafety(writeRecord, doc, database.Filename);
             }
 
             progress?.SetStage(OperationStage.AcquiringDocumentLock);
@@ -158,6 +168,7 @@ public static class CivilExecution
               database.SecurityParameters
             );
             progress?.RecordSave(true);
+            if (writeRecord != null) writeRecord.Saved = true;
           }
           catch (Exception ex)
           {
@@ -176,6 +187,17 @@ public static class CivilExecution
       }
       finally
       {
+        if (writeRecord != null)
+        {
+          writeRecord.Committed = operationCommitted;
+          if (writeRecord.ReachedDrawing)
+          {
+            writeRecord.DbmodAfter = TryReadDbmod();
+            writeRecord.RecordFile(namedDrawingPath);
+          }
+        }
+        // Still on the main thread: keep the health reply's drawing identity current.
+        ActiveDrawingTracker.Refresh();
         if (executionStartedAt is long startedAt)
         {
           benchmarkMeasurement!.RecordExecution(Stopwatch.GetElapsedTime(startedAt));
@@ -210,6 +232,92 @@ public static class CivilExecution
     }
 
     return result!;
+  }
+
+  /// <summary>
+  /// Runs before the document lock and the script: notes the unsaved-changes
+  /// state, refuses a drawing that is not clean when that was asked for, makes
+  /// the backup copy, and shows the caller's description on the command line.
+  /// Returns the drawing's file path when the drawing has been named.
+  /// </summary>
+  private static string? ApplyWriteSafety(ExecutionRecord record, Document doc, string? databaseFilename)
+  {
+    var dbmod = TryReadDbmod();
+    record.DbmodBefore = dbmod;
+
+    string? namedDrawingPath = null;
+    try
+    {
+      if (Convert.ToInt16(App.GetSystemVariable("DWGTITLED")) != 0
+        && !string.IsNullOrWhiteSpace(databaseFilename))
+      {
+        namedDrawingPath = databaseFilename;
+      }
+    }
+    catch (Exception)
+    {
+      // Unknown counts as not named: no file facts in the receipt, no backup.
+    }
+
+    if (record.RequireClean && dbmod != 0)
+    {
+      throw new JsonRpcDispatchException(
+        "CIVIL3D.DRAWING_NOT_CLEAN",
+        dbmod == null
+          ? "It could not be checked whether the active drawing has unsaved changes, so nothing was run."
+          : $"The active drawing has unsaved changes (DBMOD={dbmod.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}), so nothing was run. " +
+            "Save the drawing in Civil 3D first, or repeat the call without requireClean if the unsaved state is intended."
+      );
+    }
+
+    if (record.Backup)
+    {
+      if (namedDrawingPath == null)
+      {
+        throw new JsonRpcDispatchException(
+          "CIVIL3D.SAVE_PATH_REQUIRED",
+          "The active drawing has not been named yet, so there is no file to back up. Nothing was run. " +
+            "Save it once in Civil 3D before using backup."
+        );
+      }
+      record.BackupPath = DrawingBackup.Create(namedDrawingPath, record.BackupDirectory, DateTime.Now);
+    }
+
+    EchoDescription(doc, record.Description);
+    return namedDrawingPath;
+  }
+
+  /// <summary>DBMOD is 0 when the drawing has no unsaved changes. Null when it cannot be read.</summary>
+  private static int? TryReadDbmod()
+  {
+    try
+    {
+      return Convert.ToInt32(App.GetSystemVariable("DBMOD"), System.Globalization.CultureInfo.InvariantCulture);
+    }
+    catch (Exception)
+    {
+      return null;
+    }
+  }
+
+  /// <summary>
+  /// Lets the person at the computer see what the assistant is about to do.
+  /// The text is the caller's, so anything the command line could treat as a
+  /// format instruction is replaced first.
+  /// </summary>
+  private static void EchoDescription(Document doc, string? description)
+  {
+    var text = ExecutionRecord.ToSingleLine(description, 200);
+    if (text == null) return;
+    try
+    {
+      text = text.Replace("%", "pct").Replace('{', '(').Replace('}', ')');
+      doc.Editor.WriteMessage("\n[Civil 3D MCP] " + text + "\n");
+    }
+    catch (Exception)
+    {
+      // A message that cannot be shown must not stop the write.
+    }
   }
 
   /// <summary>Execute a read-only operation (no commit).</summary>

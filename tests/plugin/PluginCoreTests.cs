@@ -18,6 +18,13 @@ internal static class PluginCoreTests
     Path.GetTempPath(),
     $"civil3d-mcp-plugin-tests-{Guid.NewGuid():N}"
   );
+  // Journal and backup files of the tests never go to the real user folders.
+  private static readonly string SafetyDirectory = Path.Combine(
+    Path.GetTempPath(),
+    $"civil3d-mcp-plugin-safety-tests-{Guid.NewGuid():N}"
+  );
+  private static readonly string JournalDirectory = Path.Combine(SafetyDirectory, "journal");
+  private static readonly string BackupDirectory = Path.Combine(SafetyDirectory, "backups");
 
   public static async Task Main()
   {
@@ -28,6 +35,8 @@ internal static class PluginCoreTests
       EndpointRegistration.DirectoryEnvironmentVariable,
       EndpointDirectory
     );
+    Environment.SetEnvironmentVariable(WriteJournal.DirectoryEnvironmentVariable, JournalDirectory);
+    Environment.SetEnvironmentVariable(DrawingBackup.DirectoryEnvironmentVariable, BackupDirectory);
     var tests = new (string Name, Func<Task> Run)[]
     {
       ("compiled modal command registration preserves implied selection", ModalCommandRegistrationAsync),
@@ -39,6 +48,12 @@ internal static class PluginCoreTests
       ("save runs after commit and releases transaction resources", SaveAfterCommitOrderingAsync),
       ("save rejects unsupported request states before Roslyn", SaveRequestValidationAsync),
       ("save into a read-only drawing is refused before the script runs", ReadOnlyDrawingSaveAsync),
+      ("requireClean refuses a drawing with unsaved changes before the script runs", RequireCleanAsync),
+      ("backup copies the saved drawing first and fails closed", BackupBeforeWriteAsync),
+      ("a write returns a receipt next to its result and a query does not", WriteReceiptAsync),
+      ("every write request leaves one journal line without code or result", WriteJournalAsync),
+      ("the description is shown on the command line as plain text", DescriptionEchoAsync),
+      ("health reports the cached active drawing and the build without a command", HealthActiveDrawingAsync),
       ("script time limit parameter is validated and forwarded", ScriptTimeLimitParameterAsync),
       ("save failure preserves committed idempotency state", SaveFailureCompletesIdempotencyAsync),
       ("failed listener start does not report running", FailedListenerStartDoesNotReportRunningAsync),
@@ -76,6 +91,7 @@ internal static class PluginCoreTests
       DirectGuardContractAsync, DrawingIdentityOrderingAsync, PrivateDrawingIdentityAsync,
       SaveAfterCommitOrderingAsync, SaveRequestValidationAsync, SaveFailureCompletesIdempotencyAsync,
       ReadOnlyDrawingSaveAsync, ScriptTimeLimitParameterAsync,
+      RequireCleanAsync, BackupBeforeWriteAsync, WriteReceiptAsync, WriteJournalAsync, DescriptionEchoAsync,
       SerializedDispatchStatusAsync, RunningScriptProgressAndCancellationAsync, ProgressCleanupAsync,
       HealthBypassesSerializedQueueAsync, ApiLookupBypassesSerializedQueueAsync,
       CancellationAndErrorCleanupAsync, GateWaitMeasurementAsync, ExecuteResultSerializationAsync,
@@ -122,6 +138,12 @@ internal static class PluginCoreTests
       if (Directory.Exists(EndpointDirectory))
       {
         Directory.Delete(EndpointDirectory, recursive: true);
+      }
+      Environment.SetEnvironmentVariable(WriteJournal.DirectoryEnvironmentVariable, null);
+      Environment.SetEnvironmentVariable(DrawingBackup.DirectoryEnvironmentVariable, null);
+      if (Directory.Exists(SafetyDirectory))
+      {
+        Directory.Delete(SafetyDirectory, recursive: true);
       }
     }
   }
@@ -878,7 +900,11 @@ internal static class PluginCoreTests
         beforeStatusDiagnostic.ReturnedCallbackTaskObservedElapsedMs is double callbackTaskObservedElapsedMs &&
         callbackTaskObservedElapsedMs >= callbackExitedElapsedMs,
         "callback entry, exit, and returned-task observation must use operation-relative timing");
-      var healthJson = beforeNativeCompletion.ToJsonString();
+      // The remembered active drawing is a deliberate health field of its own;
+      // everything else, the diagnostics above all, stays free of drawing data.
+      var withoutActiveDrawing = beforeNativeCompletion.DeepClone().AsObject();
+      withoutActiveDrawing.Remove("activeDrawing");
+      var healthJson = withoutActiveDrawing.ToJsonString();
       Assert(!healthJson.Contains("Target.dwg", StringComparison.Ordinal) &&
         !healthJson.Contains(ActualFingerprint.ToString("D"), StringComparison.OrdinalIgnoreCase) &&
         !healthJson.Contains("completion-suppressed-first", StringComparison.Ordinal),
@@ -1506,6 +1532,407 @@ internal static class PluginCoreTests
     Assert(CurrentDatabase.SaveAsCallCount == 0, "no save was requested");
   }
 
+  private static string CreateSafetyWriteRequest(
+    string id,
+    string code,
+    string path,
+    Action<JsonObject> configure)
+  {
+    var request = JsonNode.Parse(CreateRequest(
+      id,
+      readOnly: false,
+      includeExpectedDrawing: true,
+      expectedDrawing: Guard(path, ActualFingerprint),
+      code: code
+    ))!.AsObject();
+    configure(request["params"]!.AsObject());
+    return request.ToJsonString();
+  }
+
+  private static string[] ReadJournalLines()
+    => Directory.Exists(JournalDirectory)
+      ? Directory.GetFiles(JournalDirectory, "*.jsonl").SelectMany(File.ReadAllLines).ToArray()
+      : Array.Empty<string>();
+
+  private static void ClearSafetyFiles()
+  {
+    if (Directory.Exists(SafetyDirectory)) Directory.Delete(SafetyDirectory, recursive: true);
+  }
+
+  private static async Task RequireCleanAsync()
+  {
+    ResetEnvironment();
+    Application.DbMod = 5;
+    var refused = await SendAsync(CreateSafetyWriteRequest(
+      "clean-refused", "must-not-run", ActualPath, p => p["requireClean"] = true));
+    AssertError(refused, "CIVIL3D.DRAWING_NOT_CLEAN");
+    AssertNoCivilResourcesOpened();
+    var refusedReceipt = JsonNode.Parse(refused)!["receipt"]?.AsObject();
+    Assert(refusedReceipt?["dbmodBefore"]?.GetValue<int>() == 5 && refusedReceipt["committed"]?.GetValue<bool>() == false,
+      "a refusal must still say what state the drawing was found in");
+
+    // The same drawing is written when the caller does not ask for the check.
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(await SendAsync(CreateGuardedWriteRequest("clean-not-asked", "written")), "written");
+
+    ResetEnvironment();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(
+      await SendAsync(CreateSafetyWriteRequest("clean-ok", "clean-ok", ActualPath, p => p["requireClean"] = true)),
+      "clean-ok");
+    Assert(CurrentDatabase.TransactionManager.CommittedCount == 1, "a clean drawing must be written");
+
+    // The switches belong to writes only, and are validated before anything runs.
+    ResetEnvironment();
+    foreach (var name in new[] { "requireClean", "backup" })
+    {
+      var query = JsonNode.Parse(CreateRequest("clean-query", readOnly: true, code: "must-not-run"))!.AsObject();
+      query["params"]!.AsObject()[name] = true;
+      AssertError(await SendAsync(query.ToJsonString()), "CIVIL3D.INVALID_INPUT");
+    }
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("clean-text", "must-not-run", ActualPath, p => p["requireClean"] = "yes")),
+      "CIVIL3D.INVALID_INPUT");
+    AssertNoCivilResourcesOpened();
+  }
+
+  private static async Task BackupBeforeWriteAsync()
+  {
+    ClearSafetyFiles();
+    var drawingDirectory = Path.Combine(SafetyDirectory, "drawings");
+    Directory.CreateDirectory(drawingDirectory);
+    var drawingPath = Path.Combine(drawingDirectory, "Út terv.dwg");
+    File.WriteAllText(drawingPath, "saved drawing content");
+
+    // The copy exists before the script runs, in the configured default folder.
+    ResetEnvironment(actualPath: drawingPath);
+    string? copySeenByScript = null;
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      copySeenByScript = Directory.Exists(BackupDirectory)
+        ? Directory.GetFiles(BackupDirectory).SingleOrDefault()
+        : null;
+      return Task.FromResult<object?>(code);
+    };
+    var written = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "backup-default", "backup-default", drawingPath, p => p["backup"] = true)))!.AsObject();
+    Assert(written["result"]?.GetValue<string>() == "backup-default", "the write must run after the backup");
+    var backupPath = written["receipt"]?["backupPath"]?.GetValue<string>();
+    Assert(backupPath != null && backupPath == copySeenByScript, "the receipt must name the copy made before the script");
+    Assert(Path.GetDirectoryName(backupPath) == BackupDirectory, "the default folder comes from the setting");
+    Assert(Path.GetFileName(backupPath)!.StartsWith("Út terv.", StringComparison.Ordinal)
+      && backupPath!.EndsWith(".dwg", StringComparison.Ordinal),
+      "the copy keeps the drawing name and extension around a time stamp");
+    Assert(File.ReadAllText(backupPath) == "saved drawing content", "the copy must equal the saved file");
+
+    // A second copy in the same second gets its own name; nothing is overwritten.
+    var first = DrawingBackup.Create(drawingPath, null, new DateTime(2026, 11, 11, 9, 30, 0));
+    var second = DrawingBackup.Create(drawingPath, null, new DateTime(2026, 11, 11, 9, 30, 0));
+    Assert(Path.GetFileName(first) == "Út terv.20261111-093000.dwg", "the stamp is fixed-format local time");
+    Assert(Path.GetFileName(second) == "Út terv.20261111-093000-2.dwg", "a name that is taken is never reused");
+
+    // A requested folder wins over the setting.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    var requestedDirectory = Path.Combine(SafetyDirectory, "requested");
+    var requested = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "backup-requested", "backup-requested", drawingPath, p =>
+      {
+        p["backup"] = true;
+        p["backupDirectory"] = requestedDirectory;
+      })))!.AsObject();
+    Assert(Path.GetDirectoryName(requested["receipt"]?["backupPath"]?.GetValue<string>()) == requestedDirectory,
+      "backupDirectory must choose the folder of the copy");
+
+    // The copy is taken from the saved file, so unsaved changes refuse it by default.
+    ResetEnvironment(actualPath: drawingPath);
+    Application.DbMod = 1;
+    var copiesBefore = Directory.GetFiles(BackupDirectory).Length;
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("backup-dirty", "must-not-run", drawingPath, p => p["backup"] = true)),
+      "CIVIL3D.DRAWING_NOT_CLEAN");
+    AssertNoCivilResourcesOpened();
+    Assert(Directory.GetFiles(BackupDirectory).Length == copiesBefore, "a refused call must not leave a copy");
+
+    // The caller may knowingly take the copy of the last saved state anyway.
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    var knowingly = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "backup-dirty-allowed", "backup-dirty-allowed", drawingPath, p =>
+      {
+        p["backup"] = true;
+        p["requireClean"] = false;
+      })))!.AsObject();
+    Assert(knowingly["receipt"]?["backupPath"] != null && knowingly["receipt"]?["dbmodBefore"]?.GetValue<int>() == 1,
+      "an explicit requireClean=false keeps the backup and reports the unsaved state");
+
+    // No file, no backup, no write.
+    ResetEnvironment(actualPath: drawingPath, dwgTitled: false);
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("backup-unnamed", "must-not-run", drawingPath, p => p["backup"] = true)),
+      "CIVIL3D.SAVE_PATH_REQUIRED");
+    AssertNoCivilResourcesOpened();
+
+    var missingPath = Path.Combine(drawingDirectory, "missing.dwg");
+    ResetEnvironment(actualPath: missingPath);
+    var failed = await SendAsync(CreateSafetyWriteRequest(
+      "backup-missing", "must-not-run", missingPath, p => p["backup"] = true));
+    AssertError(failed, "CIVIL3D.BACKUP_FAILED");
+    AssertNoCivilResourcesOpened();
+    Assert(JsonNode.Parse(failed)!["receipt"]?["backupPath"] == null, "a failed copy must not be named");
+
+    ResetEnvironment(actualPath: drawingPath);
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("backup-relative", "must-not-run", drawingPath, p =>
+      {
+        p["backup"] = true;
+        p["backupDirectory"] = "relative-folder";
+      })),
+      "CIVIL3D.INVALID_INPUT");
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("backup-folder-only", "must-not-run", drawingPath,
+        p => p["backupDirectory"] = requestedDirectory)),
+      "CIVIL3D.INVALID_INPUT");
+    AssertNoCivilResourcesOpened();
+  }
+
+  private static async Task WriteReceiptAsync()
+  {
+    ClearSafetyFiles();
+    var drawingDirectory = Path.Combine(SafetyDirectory, "drawings");
+    Directory.CreateDirectory(drawingDirectory);
+    var drawingPath = Path.Combine(drawingDirectory, "Receipt.dwg");
+    File.WriteAllText(drawingPath, "12345");
+
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
+    var saved = JsonNode.Parse(await SendAsync(CreateRequest(
+      "receipt-saved",
+      readOnly: false,
+      includeExpectedDrawing: true,
+      expectedDrawing: Guard(drawingPath, ActualFingerprint),
+      code: "receipt-saved",
+      saveDrawing: true)))!.AsObject();
+    Assert(saved["result"]?.GetValue<string>() == "receipt-saved", "the result keeps its own place and shape");
+    var receipt = saved["receipt"]?.AsObject();
+    Assert(receipt != null, "a write must return a receipt next to the result");
+    Assert(receipt!["drawing"]?["databaseFilename"]?.GetValue<string>() == drawingPath
+      && receipt["drawing"]?["fingerprintGuid"]?.GetValue<string>() == ActualFingerprint.ToString("B").ToUpperInvariant(),
+      "the receipt names the drawing that was written");
+    Assert(receipt["dbmodBefore"]?.GetValue<int>() == 0 && receipt["dbmodAfter"]?.GetValue<int>() == 1,
+      "the receipt reports the unsaved-changes flag before and after");
+    Assert(receipt["committed"]?.GetValue<bool>() == true && receipt["saved"]?.GetValue<bool>() == true,
+      "the receipt reports commit and save");
+    Assert(receipt["fileBytes"]?.GetValue<long>() == 5 && receipt["fileLastWriteUtc"] != null,
+      "the receipt reports the file as it is on disk after the call");
+    Assert(receipt["backupPath"] == null, "no backup was asked for");
+
+    // Without saveDrawing the change is in memory only, and the receipt says so.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    var memoryOnly = JsonNode.Parse(await SendAsync(CreateRequest(
+      "receipt-memory",
+      readOnly: false,
+      includeExpectedDrawing: true,
+      expectedDrawing: Guard(drawingPath, ActualFingerprint),
+      code: "receipt-memory")))!["receipt"]?.AsObject();
+    Assert(memoryOnly?["committed"]?.GetValue<bool>() == true && memoryOnly["saved"]?.GetValue<bool>() == false,
+      "a committed but unsaved write must not claim a save");
+
+    // A failed save keeps the committed fact visible.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    CurrentDatabase.SaveAsException = new InvalidOperationException("disk full");
+    var saveFailed = await SendAsync(CreateRequest(
+      "receipt-save-failed",
+      readOnly: false,
+      includeExpectedDrawing: true,
+      expectedDrawing: Guard(drawingPath, ActualFingerprint),
+      code: "receipt-save-failed",
+      saveDrawing: true));
+    AssertError(saveFailed, "CIVIL3D.SAVE_FAILED");
+    var failedReceipt = JsonNode.Parse(saveFailed)!["receipt"]?.AsObject();
+    Assert(failedReceipt?["committed"]?.GetValue<bool>() == true && failedReceipt["saved"]?.GetValue<bool>() == false,
+      "a save failure must report a committed, unsaved write");
+
+    // A script error rolls back; the receipt says nothing was committed.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (_, _) => throw new InvalidOperationException("script failed");
+    var scriptFailed = JsonNode.Parse(await SendAsync(CreateRequest(
+      "receipt-script-failed",
+      readOnly: false,
+      includeExpectedDrawing: true,
+      expectedDrawing: Guard(drawingPath, ActualFingerprint),
+      code: "receipt-script-failed")))!.AsObject();
+    Assert(scriptFailed["error"] != null && scriptFailed["receipt"]?["committed"]?.GetValue<bool>() == false,
+      "a failed script must report an uncommitted write");
+
+    // Queries change nothing, so they carry no receipt; neither does a call refused before the drawing.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    var query = JsonNode.Parse(await SendAsync(CreateRequest("receipt-query", readOnly: true, code: "query")))!.AsObject();
+    Assert(query["result"]?.GetValue<string>() == "query" && !query.ContainsKey("receipt"),
+      "a query must not carry a receipt");
+    var unguarded = JsonNode.Parse(await SendAsync(CreateRequest("receipt-unguarded", readOnly: false)))!.AsObject();
+    Assert(unguarded["error"] != null && !unguarded.ContainsKey("receipt"),
+      "a write refused before the drawing was looked at has nothing to report");
+  }
+
+  private static async Task WriteJournalAsync()
+  {
+    ClearSafetyFiles();
+    ResetEnvironment();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>("secret-result");
+    const string secretCode = "var secret = 42; return secret;";
+    AssertResult(
+      await SendAsync(CreateSafetyWriteRequest("journal-ok", secretCode, ActualPath, p =>
+      {
+        p["description"] = "Tengelyek\r\nátnevezése   a 12-es úton";
+        p["requireClean"] = true;
+      })),
+      "secret-result");
+
+    Application.DbMod = 1;
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("journal-refused", secretCode, ActualPath, p => p["requireClean"] = true)),
+      "CIVIL3D.DRAWING_NOT_CLEAN");
+    Application.DbMod = 0;
+
+    // Queries are not journaled.
+    AssertResult(await SendAsync(CreateRequest("journal-query", readOnly: true, code: "query")), "secret-result");
+
+    var lines = ReadJournalLines();
+    Assert(lines.Length == 2, $"exactly the two write requests must be journaled, found {lines.Length}");
+    var ok = JsonNode.Parse(lines[0])!.AsObject();
+    var refused = JsonNode.Parse(lines[1])!.AsObject();
+    Assert(ok["ok"]?.GetValue<bool>() == true && ok["errorCode"] == null && ok["committed"]?.GetValue<bool>() == true,
+      "a successful write is journaled as committed");
+    Assert(ok["description"]?.GetValue<string>() == "Tengelyek átnevezése a 12-es úton",
+      "the description is kept as one readable line");
+    Assert(ok["drawing"]?.GetValue<string>() == ActualPath && ok["instanceId"]?.GetValue<string>() == PluginRuntime.InstanceId,
+      "the line names the drawing and the Civil 3D session");
+    Assert(ok["codeBytes"]?.GetValue<int>() == secretCode.Length
+      && ok["codeSha256"]?.GetValue<string>() == Convert.ToHexString(
+        System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(secretCode))).ToLowerInvariant(),
+      "the code is identified by size and hash");
+    Assert(ok["timeUtc"] != null && ok["durationMs"] != null && ok["pluginCommit"]?.GetValue<string>() == BuildInfo.Commit,
+      "the line carries time, duration and plugin build");
+    Assert(refused["ok"]?.GetValue<bool>() == false
+      && refused["errorCode"]?.GetValue<string>() == "CIVIL3D.DRAWING_NOT_CLEAN"
+      && refused["committed"]?.GetValue<bool>() == false
+      && refused["dbmodBefore"]?.GetValue<int>() == 1,
+      "a refused write is journaled with its reason");
+    Assert(lines.All(line => !line.Contains("secret", StringComparison.Ordinal)),
+      "the journal must hold neither the code nor the result");
+
+    // A journal that cannot be written never changes the answer of the write.
+    var blocked = Path.Combine(SafetyDirectory, "blocked");
+    File.WriteAllText(blocked, "a file where the folder should be");
+    Environment.SetEnvironmentVariable(WriteJournal.DirectoryEnvironmentVariable, blocked);
+    try
+    {
+      AssertResult(await SendAsync(CreateGuardedWriteRequest("journal-blocked", "code")), "secret-result");
+    }
+    finally
+    {
+      Environment.SetEnvironmentVariable(WriteJournal.DirectoryEnvironmentVariable, JournalDirectory);
+    }
+  }
+
+  private static async Task DescriptionEchoAsync()
+  {
+    ResetEnvironment();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(
+      await SendAsync(CreateSafetyWriteRequest("echo", "echo", ActualPath,
+        p => p["description"] = "Lejtés 2,5% {0}\nmásodik sor")),
+      "echo");
+    var message = CurrentDocument.Editor.Messages.Single(text => text.Contains("[Civil 3D MCP]", StringComparison.Ordinal));
+    Assert(message.Trim() == "[Civil 3D MCP] Lejtés 2,5pct (0) második sor",
+      $"the text must be one line without format characters, got: {message}");
+
+    // No description, no message; a query never writes one.
+    ResetEnvironment();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(await SendAsync(CreateGuardedWriteRequest("echo-none", "echo-none")), "echo-none");
+    var query = JsonNode.Parse(CreateRequest("echo-query", readOnly: true, code: "echo-query"))!.AsObject();
+    query["params"]!.AsObject()["description"] = "only a query";
+    AssertResult(await SendAsync(query.ToJsonString()), "echo-query");
+    Assert(!CurrentDocument.Editor.Messages.Any(text => text.Contains("[Civil 3D MCP]", StringComparison.Ordinal)),
+      "nothing is shown without a description or for a query");
+  }
+
+  private static async Task HealthActiveDrawingAsync()
+  {
+    ResetEnvironment();
+    var commandContextsBefore = Application.DocumentManager.CommandContextCallCount;
+
+    var unknown = await GetHealthAsync();
+    Assert(unknown["activeDrawingKnown"]?.GetValue<bool>() == false && unknown["activeDrawing"] == null,
+      "before the first look the drawing is unknown, not guessed");
+    Assert(unknown["build"]?["commit"]?.GetValue<string>() == BuildInfo.Unknown
+      && unknown["build"]?.AsObject().ContainsKey("builtAtUtc") == true
+      && unknown["build"]?.AsObject().ContainsKey("dirty") == true,
+      "a build without a stamp says so instead of inventing a commit");
+    Assert(unknown["features"]?.AsArray().Select(item => item?.GetValue<string>()).SequenceEqual(
+      new[] { "activeDrawing", "writeSafety" }) == true,
+      "health lists what this plugin build can do");
+
+    // The identity is picked up when the application is idle.
+    ActiveDrawingTracker.Initialize();
+    try
+    {
+      Application.RaiseIdle();
+      var known = await GetHealthAsync();
+      Assert(known["activeDrawingKnown"]?.GetValue<bool>() == true, "an idle moment must record the drawing");
+      Assert(known["activeDrawing"]?["databaseFilename"]?.GetValue<string>() == ActualPath
+        && known["activeDrawing"]?["fingerprintGuid"]?.GetValue<string>() == ActualFingerprint.ToString("B").ToUpperInvariant()
+        && known["activeDrawing"]?["observedAtUtc"] != null,
+        "health repeats the identity exactly as the drawing reports it");
+
+      // Switching to another drawing shows up at the next look.
+      const string otherPath = @"C:\Projects\Plans\Other.dwg";
+      Application.DocumentManager.MdiActiveDocument = new Document(new Database
+      {
+        Filename = otherPath,
+        FingerprintGuid = "{AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE}",
+      });
+      ActiveDrawingTracker.Refresh();
+      var switched = await GetHealthAsync();
+      Assert(switched["activeDrawing"]?["databaseFilename"]?.GetValue<string>() == otherPath,
+        "a switched drawing must replace the remembered one");
+
+      // No open drawing is a known state of its own.
+      Application.DocumentManager.MdiActiveDocument = null;
+      ActiveDrawingTracker.Refresh();
+      var none = await GetHealthAsync();
+      Assert(none["activeDrawingKnown"]?.GetValue<bool>() == true && none["activeDrawing"] == null,
+        "no open drawing is reported as known and empty");
+    }
+    finally
+    {
+      ActiveDrawingTracker.Terminate();
+    }
+
+    // After Terminate the idle event is no longer followed.
+    ResetEnvironment();
+    Application.RaiseIdle();
+    Assert((await GetHealthAsync())["activeDrawingKnown"]?.GetValue<bool>() == false,
+      "a terminated tracker must not keep listening");
+
+    // Every operation refreshes the identity when it ends, on the main thread.
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(await SendAsync(CreateRequest("health-after-query", readOnly: true, code: "query")), "query");
+    var afterQuery = await GetHealthAsync();
+    Assert(afterQuery["activeDrawing"]?["databaseFilename"]?.GetValue<string>() == ActualPath,
+      "a finished operation leaves the identity current");
+    Assert(Application.DocumentManager.CommandContextCallCount - commandContextsBefore <= 1,
+      "only the query itself may enter the command context; health never does");
+  }
+
   private static async Task ScriptTimeLimitParameterAsync()
   {
     static string WithTimeLimit(string request, JsonNode? value)
@@ -1866,6 +2293,17 @@ internal static class PluginCoreTests
       "a record written by a running process must count as running");
     Assert(!EndpointRegistration.IsRecordedProcessRunning(Environment.ProcessId, now.AddDays(-30)),
       "a process that started after the record was written only reuses the id");
+    // Windows may hand the id of a closed Civil 3D to another program whose
+    // start time cannot be read; its name still tells that the id was reused.
+    using (var self = System.Diagnostics.Process.GetCurrentProcess())
+    {
+      Assert(EndpointRegistration.IsRecordedProcessRunning(Environment.ProcessId, now, self.ProcessName),
+        "a record of the same program must count as running");
+      Assert(EndpointRegistration.IsRecordedProcessRunning(Environment.ProcessId, now, self.ProcessName.ToUpperInvariant()),
+        "the program name is compared without regard to case");
+    }
+    Assert(!EndpointRegistration.IsRecordedProcessRunning(Environment.ProcessId, now, "some-other-program"),
+      "an id that now belongs to another program was reused");
 
     string Record(int processId, string instanceId) => new JsonObject
     {
@@ -1969,6 +2407,10 @@ internal static class PluginCoreTests
         "mode",
         "roslyn",
         "executionBackend",
+        "activeDrawingKnown",
+        "activeDrawing",
+        "build",
+        "features",
       };
       Assert(health!.Count == expectedFields.Count && health.All(item => expectedFields.Contains(item.Key)),
         "health response must remain limited to the stable status fields");
@@ -2001,6 +2443,8 @@ internal static class PluginCoreTests
       Assert(health["mode"]?.GetValue<string>() == "code_execution", "health mode must remain stable");
       Assert(health["roslyn"]?.GetValue<bool>() == true, "health must report Roslyn mode");
       Assert(!health.ContainsKey("drawingName"), "health must not inspect or guess drawing identity");
+      Assert(health["activeDrawingKnown"]?.GetValue<bool>() == false && health["activeDrawing"] == null,
+        "health must only repeat a remembered drawing identity and never read one itself");
 
       var statusAfter = PluginRuntime.GetStatus();
       Assert(statusBefore.QueueDepth == 1 && statusAfter.QueueDepth == 1,
@@ -2297,6 +2741,8 @@ internal static class PluginCoreTests
     _modalHost?.Attach(CurrentDocument);
     Application.DocumentManager.CommandContextDelay = TimeSpan.Zero;
     Application.DwgTitled = (dwgTitled ?? !string.IsNullOrEmpty(actualPath)) ? 1 : 0;
+    Application.DbMod = 0;
+    ActiveDrawingTracker.ResetForTests();
     CivilApplication.ActiveDocument = new CivilDocument();
     RoslynExecutor.Reset();
   }

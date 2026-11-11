@@ -50,7 +50,8 @@ internal sealed class EndpointRegistration : IDisposable
       instanceId,
       processId,
       port,
-      startedAtUtc
+      startedAtUtc,
+      CurrentProcessName
     );
     var json = JsonSerializer.Serialize(payload, JsonOptions);
 
@@ -106,7 +107,7 @@ internal sealed class EndpointRegistration : IDisposable
           var record = JsonSerializer.Deserialize<EndpointRecord>(File.ReadAllText(path), JsonOptions);
           if (record is null || record.SchemaVersion != SchemaVersion || record.ProcessId <= 0) continue;
           if (record.ProcessId == Environment.ProcessId) continue;
-          if (IsRecordedProcessRunning(record.ProcessId, record.StartedAtUtc)) continue;
+          if (IsRecordedProcessRunning(record.ProcessId, record.StartedAtUtc, record.ProcessName)) continue;
           File.Delete(path);
           removed++;
         }
@@ -124,15 +125,38 @@ internal sealed class EndpointRegistration : IDisposable
   }
 
   /// <summary>
-  /// False only when no process has this id, or the process with this id
-  /// started after the record was written (the id was reused). Anything
-  /// uncertain, such as a process that may not be inspected, counts as running.
+  /// False only when no process has this id, or the id was reused: the process
+  /// with this id is a different program, or it started after the record was
+  /// written. Anything uncertain counts as running.
+  ///
+  /// The program name matters because Windows may give the id of a closed
+  /// Civil 3D to a system service, whose start time may not be read. Its name
+  /// can always be read. Records written before the name was stored are
+  /// compared with this process, which is the same program.
   /// </summary>
-  internal static bool IsRecordedProcessRunning(int processId, DateTimeOffset recordedAtUtc)
+  internal static bool IsRecordedProcessRunning(
+    int processId,
+    DateTimeOffset recordedAtUtc,
+    string? recordedProcessName = null)
   {
     try
     {
       using var process = Process.GetProcessById(processId);
+      try
+      {
+        var expectedName = string.IsNullOrWhiteSpace(recordedProcessName)
+          ? CurrentProcessName
+          : recordedProcessName;
+        if (expectedName != null
+          && !string.Equals(process.ProcessName, expectedName, StringComparison.OrdinalIgnoreCase))
+        {
+          return false;
+        }
+      }
+      catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
+      {
+        // The name is unknown; fall through to the start-time check.
+      }
       try
       {
         if (process.HasExited) return false;
@@ -177,8 +201,24 @@ internal sealed class EndpointRegistration : IDisposable
     string InstanceId,
     int ProcessId,
     int Port,
-    DateTimeOffset StartedAtUtc
+    DateTimeOffset StartedAtUtc,
+    string? ProcessName = null
   );
+
+  private static readonly string? CurrentProcessName = ReadCurrentProcessName();
+
+  private static string? ReadCurrentProcessName()
+  {
+    try
+    {
+      using var current = Process.GetCurrentProcess();
+      return current.ProcessName;
+    }
+    catch (Exception)
+    {
+      return null;
+    }
+  }
 
   private static readonly JsonSerializerOptions JsonOptions = new()
   {
