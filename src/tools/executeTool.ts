@@ -55,6 +55,12 @@ const idempotencyKeySchema = z
     "Optional opaque session key. Reuse it only to manually reconcile an uncertain outcome; use a new key for an intentional new write."
   );
 
+/** Leads from the tool description to the working order (docs/USAGE.md). */
+const EXECUTE_GUIDE_POINTER =
+  "Before the first write, call civil3d_skills with action 'status' and read civil3d_skills action 'guide' " +
+  "with topic 'writing'; after any error or timeout read topic 'errors' before sending anything again, " +
+  "and never resend a write whose outcome is unknown. ";
+
 /**
  * civil3d_execute — Executes C# code in Civil 3D with WRITE access.
  * The code runs inside a transaction that gets committed on success. Optional
@@ -74,6 +80,7 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
   server.tool(
     "civil3d_execute",
     "Execute C# code in Civil 3D with write access. The code runs inside a committed transaction. " +
+      EXECUTE_GUIDE_POINTER +
       "Available globals: Document, CivilDoc, Database, Transaction, Editor. " +
       "Common Civil 3D and AutoCAD namespaces are auto-imported. Return a value to get results back as JSON. " +
       "The script rules of civil3d_query apply. " +

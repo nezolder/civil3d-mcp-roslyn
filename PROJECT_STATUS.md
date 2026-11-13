@@ -1,12 +1,26 @@
 # Published development status
 
-Updated: 2026-11-11
+Updated: 2026-11-13
 
 This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
 
 ## Current catalogue
 
 The catalogue contains **39 skills** with **42 C# templates**; **26** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+
+## The server hands over its own working order (2026-11-13)
+
+Until now an assistant received only the three tool descriptions; the order of work around them (status first, identifying the target drawing, the safety inputs of a write, the receipt, what to do after an error) stood in the README and in separately installed skills. It is now written once, in [docs/USAGE.md](docs/USAGE.md), and the server delivers it:
+
+- **One source.** `docs/USAGE.md`, in English, about the mechanism only. The build copies it next to the compiled server, so an installed build carries the text it was built with. The README, `docs/ENGINEERING_SKILLS.md` and four recipe notes refer to it instead of restating the older hand-made check and copy.
+- **Always delivered.** The first part (under 2 KB) is the server's MCP `instructions`. Because not every client shows instructions, the descriptions of `civil3d_query` and `civil3d_execute` name the first step and point to the guide, and the `status` reply carries the same pointer.
+- **On request.** `civil3d_skills` gains `action: "guide"` with an optional `topic` (`drawing`, `writing`, `errors`, `csharp`); each topic is under 6 KB. The three public tools remain; the format of the recipe files is unchanged.
+- **Kept in step by tests.** Every error code named in the guide must exist in the code, every `civil3d_execute` input must be explained, the receipt, journal and status field names are compared with the source, and the sizes are limited. The text must be plain ASCII without a local path.
+
+Evidence boundaries:
+
+- **Proven offline:** over a real stdio connection the server sends the working order as its instructions and as the guide reply, and each topic is returned; the tool descriptions lead to the guide within their first 500 characters. The four compile-time API pitfalls in the guide were reproduced with the offline code-body check against the Civil 3D 2025 assemblies.
+- **Unverified:** which MCP clients show server instructions to the model; an assistant that has only this server (no skill) carrying out a write in Civil 3D by following the guide. The API pitfalls listed as field reports have no reproduction in this repository.
 
 ## Operational safety from the architecture review (2026-11-11)
 

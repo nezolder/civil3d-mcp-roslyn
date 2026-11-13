@@ -9,6 +9,7 @@ import { SERVER_BUILD, SERVER_VERSION, UNKNOWN_COMMIT } from "../buildInfo.js";
 import { Civil3dMcpError, createStructuredToolErrorResult } from "../errors/structuredError.js";
 import { instanceIdSchema } from "./instanceSelection.js";
 import { isRunnableByName, omitCodeTemplate } from "./skillBinding.js";
+import { GUIDE_POINTER, GUIDE_TOPICS, GUIDE_UNAVAILABLE_TEXT, usageGuideText } from "../usageGuide.js";
 
 const log = createLogger("SkillsTool");
 
@@ -429,6 +430,7 @@ function buildStatus(instances: InstanceStatus[], skillsDirectory: string) {
     },
     instances,
     warnings,
+    guide: GUIDE_POINTER,
   };
 }
 
@@ -447,8 +449,10 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
     "Browse and read Civil 3D code skills (documented C# code templates). " +
       "Use 'list' to see available skills, 'search' to find by keyword, " +
       "'get' to read the full skill with code template, 'api_lookup' to search public metadata from already-loaded Civil 3D host assemblies, " +
-      "or 'status' to see the server's version and folder and every running Civil 3D instance with its plugin version, " +
-      "active drawing and instanceId (runs no command in Civil 3D). " +
+      "'status' to see the server's version and folder and every running Civil 3D instance with its plugin version, " +
+      "active drawing and instanceId (runs no command in Civil 3D), " +
+      "or 'guide' to read how to work with this server: the working order, and with a topic the details on " +
+      "identifying the target drawing, writing, errors and C# scripts. Read the guide before the first write. " +
       "Search matches every word across metadata, Hungarian/English aliases and workflow tags, ignoring accents and hyphens; " +
       "when no skill has every word it returns the closest ones with partial=true. " +
       "List/search include write scope, tested Civil version and a scoped validation summary; missing evidence stays null. " +
@@ -457,10 +461,19 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
       "civil3d_query (read skills) or civil3d_execute (write skills) instead of sending the code.",
     {
       action: z
-        .enum(["list", "search", "get", "api_lookup", "status"])
+        .enum(["list", "search", "get", "api_lookup", "status", "guide"])
         .describe(
           "list = browse skill metadata, search = find by keyword, get = read full skill, " +
-            "api_lookup = read-only public API metadata search, status = server and plugin versions plus running instances"
+            "api_lookup = read-only public API metadata search, status = server and plugin versions plus running instances, " +
+            "guide = how to work with this server (working order; details with topic)"
+        ),
+      topic: z
+        .enum(GUIDE_TOPICS)
+        .optional()
+        .describe(
+          "For 'guide': drawing = identify the target drawing and read, writing = safety inputs, receipt and readback, " +
+            "errors = outcomes, time limits and uncertain results, csharp = script rules and API pitfalls. " +
+            "Omit it for the short working order."
         ),
       category: z.string().optional().describe("Filter by category (surfaces, alignments, points, etc.)"),
       query: z.string().optional().describe("Search query for 'search' or 'api_lookup' action"),
@@ -651,6 +664,14 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
                 },
               ],
             };
+          }
+
+          case "guide": {
+            // Plain markdown, not JSON: the text is meant to be read as it is.
+            const text = usageGuideText(args.topic);
+            return text === null
+              ? { content: [{ type: "text" as const, text: GUIDE_UNAVAILABLE_TEXT }], isError: true }
+              : { content: [{ type: "text" as const, text }] };
           }
         }
       } catch (error) {

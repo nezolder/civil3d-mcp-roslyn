@@ -34,7 +34,7 @@ The caller must first run a fresh `alignment_geometry_audit` and copy its comple
 
 The plan must already be bounded and independently checked. This template deliberately limits the first reusable case to a starting station of `0`, no station equations, no superelevation, no design-criteria/check-set state, no profiles, and no corridor baseline using the alignment. The supplied audit assertions default to `false`; setting them true states independently verified prerequisites, not an automatic detector. The geometry audit alone does not prove absence of dependent alignments or superelevation. Do not infer those assertions from its empty warnings list.
 
-Reading this skill grants no write permission. Before an approved execution, use the existing drawing guard with the full drawing filename and fingerprint, obtain the required unchanged timestamped backup through the established workflow, and use the approved `saveDrawing: true` path. Independently read the saved drawing back and require `DBMOD=0`. This template does not call `SaveAs`, `QSAVE`, or `WBLOCK`.
+Reading this skill grants no write permission. Before an approved execution, follow the write order of the usage guide (`civil3d_skills` with `action: "guide"`, topic `writing`): the drawing guard with the full drawing filename and fingerprint, the clean-drawing check and the backup through the call's own inputs, and `saveDrawing: true`. Independently read the saved drawing back and require `DBMOD=0`. This template does not call `SaveAs`, `QSAVE`, or `WBLOCK`.
 
 ## Code Template
 

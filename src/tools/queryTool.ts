@@ -53,6 +53,16 @@ export const SCRIPT_RULES =
   "A script still running at its time limit (120 s unless timeoutSeconds is set) is stopped and rolled back.";
 
 /**
+ * The working order is docs/USAGE.md. A tool description is the one text every
+ * client passes to the assistant, so each script tool names the first step and
+ * where the rest is read.
+ */
+const QUERY_GUIDE_POINTER =
+  "Before the first drawing call, call civil3d_skills with action 'status' to see the running instances, " +
+  "their active drawing and whether an operation is running; " +
+  "civil3d_skills with action 'guide' gives the working order for this server. ";
+
+/**
  * civil3d_query — Executes C# code in Civil 3D in READ-ONLY mode.
  * The transaction is NOT committed — no changes are persisted.
  *
@@ -63,6 +73,7 @@ export function registerQueryTool(server: McpServer, options: ScriptSourceOption
   server.tool(
     "civil3d_query",
     "Execute C# code in Civil 3D in READ-ONLY mode (no changes saved). " +
+      QUERY_GUIDE_POINTER +
       "Available globals: Document, CivilDoc, Database, Transaction, Editor. " +
       "Common Civil 3D and AutoCAD namespaces are auto-imported. Return a value to get results as JSON. " +
       "Use this for querying data: listing objects, getting properties, analyzing surfaces, etc. " +

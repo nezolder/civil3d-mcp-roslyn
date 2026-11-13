@@ -17,8 +17,8 @@ The [catalogue contract](SKILL_CATALOG.md) explains task aliases, workflow tags,
 
 1. Identify the drawing and the necessary objects with the existing inventory recipes. Search/get the recipe above; reuse its validated body instead of writing a new implementation.
 2. Supply project-approved values. The recipes do not invent design criteria, a vertical datum, material mapping, style names or allowable tolerances.
-3. For a write, verify the full `Database.Filename`, `FingerprintGuid` and `DBMOD=0`; make an unchanged timestamped filesystem backup. Use the matching `expectedDrawing`, the selected instance and `saveDrawing: true`.
-4. Independently verify returned objects, requested engineering values and the saved state. Reconcile a timeout before any further write. For views, inspect bands, clipping and readability visually before delivery.
+3. Read and write in the order of the [usage guide](USAGE.md) (`civil3d_skills` with `action: "guide"`): status, target drawing, one write call with its safety inputs, receipt, independent readback, and its rules for errors and timeouts. The recipes add nothing to that order and change nothing in it.
+4. In the readback, check the returned objects and the requested engineering values. For views, inspect bands, clipping and readability visually before delivery.
 
 Detail caps do not mean a full list was checked. Surface statistics include every supplied valid point, even when details are capped. Reference-state scans and corridor target-object scans explicitly report incomplete coverage. A material row represents the interval ending at its station; summing selected rows does not prove an exactly clipped volume at arbitrary range boundaries.
 
