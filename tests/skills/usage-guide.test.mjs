@@ -10,6 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerTools } from "../../build/tools/register.js";
+import { registerSkillsTool } from "../../build/tools/skillsTool.js";
 import {
   DEFAULT_SCRIPT_TIMEOUT_SECONDS,
   MAX_SCRIPT_TIMEOUT_SECONDS,
@@ -136,13 +137,25 @@ test("guide returns each topic as plain text and refuses an unknown one", async 
 });
 
 test("the status reply points to the guide", async () => {
-  await withClient(async (client) => {
+  // The real status action asks every running Civil 3D for its health reply.
+  // A test must not reach a Civil 3D that happens to run on the same machine,
+  // so the instances are supplied here.
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = new McpServer({ name: "usage-guide-status-test", version: "1.0.0" });
+  registerSkillsTool(server, { listInstances: async () => [] });
+  const client = new Client({ name: "usage-guide-status-test-client", version: "1.0.0" });
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
     const result = await client.callTool({ name: "civil3d_skills", arguments: { action: "status" } });
     assert.notEqual(result.isError, true);
     const status = JSON.parse(result.content[0].text);
     assert.match(status.guide, /action "guide"/);
     for (const topic of GUIDE_TOPICS) assert.ok(status.guide.includes(topic));
-  });
+  } finally {
+    await client.close();
+    await server.close();
+  }
 });
 
 test("the always-delivered part stays short and the topics bounded", () => {
