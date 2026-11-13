@@ -89,6 +89,31 @@ try {
     throw new Error("Civil 3D skill get returned an invalid skill");
   }
 
+  // The working order reaches the assistant over the real stdio server:
+  // as server instructions and as the reply of the guide action.
+  const instructions = client.getInstructions();
+  const guideResult = await client.callTool({
+    name: "civil3d_skills",
+    arguments: { action: "guide" },
+  });
+  const guideText = guideResult.content[0].text;
+  if (guideResult.isError || !guideText.startsWith("## Working order") || instructions !== guideText) {
+    throw new Error("The server must send the working order as its instructions and as the guide reply");
+  }
+  const writingResult = await client.callTool({
+    name: "civil3d_skills",
+    arguments: { action: "guide", topic: "writing" },
+  });
+  if (writingResult.isError || !writingResult.content[0].text.includes("requireClean")) {
+    throw new Error("The guide's writing topic is missing");
+  }
+  for (const name of ["civil3d_query", "civil3d_execute"]) {
+    const description = tools.find((tool) => tool.name === name).description;
+    if (!description.includes("action 'guide'")) {
+      throw new Error(`${name} must point to the usage guide`);
+    }
+  }
+
   console.log(
     JSON.stringify({
       ok: true,
@@ -97,6 +122,7 @@ try {
       skillCount: firstPage.total,
       pagination: true,
       searchAndGet: skillName,
+      guide: { instructionsBytes: Buffer.byteLength(instructions, "utf8") },
     })
   );
 } finally {

@@ -10,7 +10,7 @@
   "scripts": {
     "clean": "rimraf build",
     "prebuild": "npm run clean",
-    "build": "tsc && node scripts/write-build-info.mjs",
+    "build": "tsc && node scripts/write-build-info.mjs && node scripts/copy-usage-guide.mjs",
     "typecheck": "tsc --noEmit",
     "test:benchmark": "npm run build && node --test tests/benchmark/*.test.mjs",
     "test:errors": "npm run build && node --test tests/errors/*.test.mjs",

@@ -31,9 +31,22 @@ This independent project is not affiliated with or endorsed by Autodesk. Autodes
 |------|---------|--------|
 | `civil3d_execute` | Execute C# code with **write** access; optional clean-drawing check and backup before, save after, and a receipt of what happened | ⚠️ Modifies drawing |
 | `civil3d_query` | Run intended read-only C# without committing the host transaction | Trusted code only; not a side-effect sandbox |
-| `civil3d_skills` | Browse/search/read code skill templates; `api_lookup` searches already-loaded public Civil 3D API metadata; `status` shows the server and plugin versions and the running instances | ✅ Metadata only |
+| `civil3d_skills` | Browse/search/read code skill templates; `api_lookup` searches already-loaded public Civil 3D API metadata; `status` shows the server and plugin versions and the running instances; `guide` returns the working order for assistants | ✅ Metadata only |
 
 The tools carry MCP annotations so a client can tell them apart: `civil3d_skills` is read-only, `civil3d_execute` is a non-idempotent write, and none reaches outside the local Civil 3D session. `civil3d_query` is deliberately not advertised as read-only: its transaction is rolled back, but it still runs arbitrary code.
+
+### Working order for assistants
+
+How an assistant works with the server (status first, identifying the target drawing, sending a write with its safety inputs, reading the receipt, what to do after an error or a timeout) is written in one place: **[docs/USAGE.md](docs/USAGE.md)**. The other sections of this README describe what the server does; they do not restate that order.
+
+The server hands the guide to the assistant itself, so nothing else has to be installed:
+
+- its first part is sent as the MCP server `instructions` when a client connects;
+- `civil3d_skills` with `action: "guide"` returns the same part, and with `topic` (`drawing`, `writing`, `errors`, `csharp`) the details;
+- the descriptions of `civil3d_query` and `civil3d_execute` name the first step and point to the guide, because not every client shows server instructions;
+- the `status` reply ends with a `guide` line that says the same.
+
+The guide covers only how this server works. Where backups are kept, how many attempts are allowed and how results are reported are the user's own rules and are not part of it.
 
 ### How It Works
 
@@ -61,7 +74,7 @@ Result: [{ "Name": "EG", "Layer": "C-TOPO-EG" }, ...]
 
 ## Skills Library
 
-`civil3d_skills` also supports `action: "api_lookup"` for a bounded, read-only search of public type and member names/signatures from already-loaded allowlisted Civil 3D host assemblies. It does not load assemblies, run C# code, or access the active drawing. Supply a query and optionally an assembly, namespace prefix, and result limit. `action: "status"` reports [versions and running instances](#versions-and-installing-a-build).
+`civil3d_skills` also supports `action: "api_lookup"` for a bounded, read-only search of public type and member names/signatures from already-loaded allowlisted Civil 3D host assemblies. It does not load assemblies, run C# code, or access the active drawing. Supply a query and optionally an assembly, namespace prefix, and result limit. `action: "status"` reports [versions and running instances](#versions-and-installing-a-build), and `action: "guide"` returns the [working order for assistants](#working-order-for-assistants).
 
 Skills are documented C# code templates in `skills/`:
 
@@ -119,11 +132,11 @@ All Civil 3D namespaces are auto-imported. A few type names exist in two of them
 
 A full name, the script's own `using X = …;` alias or a type the script declares still wins. Other duplicated names (for example `Table`) stay ambiguous and need the full name.
 
-Committing the `civil3d_execute` transaction changes the open drawing but does not by itself write the DWG file to disk. First identify the active drawing with `civil3d_query`, then pass its full `Database.Filename` and `FingerprintGuid` as `expectedDrawing`; the plugin checks that identity immediately before Civil API access. Set `saveDrawing: true` when the completed change should also be saved. The plugin saves only after the script transaction and document lock are closed; scripts must not call `Database.SaveAs` or queue `QSAVE` themselves. The save request uses a separate 10-minute default timeout and is never retried automatically. A drawing that is open read-only is refused with `CIVIL3D.DRAWING_READ_ONLY` (`outcome: "not_started"`) before the script runs, instead of committing the change in memory and failing only at the save.
+Committing the `civil3d_execute` transaction changes the open drawing but does not by itself write the DWG file to disk. A write must name its target as `expectedDrawing` (full `Database.Filename` and `FingerprintGuid`); the plugin checks that identity immediately before Civil API access. `saveDrawing: true` also saves the completed change. How the target is identified and in which order a write is sent is in the [usage guide](docs/USAGE.md). The plugin saves only after the script transaction and document lock are closed; scripts must not call `Database.SaveAs` or queue `QSAVE` themselves. The save request uses a separate 10-minute default timeout and is never retried automatically. A drawing that is open read-only is refused with `CIVIL3D.DRAWING_READ_ONLY` (`outcome: "not_started"`) before the script runs, instead of committing the change in memory and failing only at the save.
 
 ### Safety switches, receipt and journal for writes
 
-`civil3d_execute` can do the checks around a write itself, so the assistant does not need separate calls for them:
+`civil3d_execute` can do the checks around a write itself, so the assistant does not need separate calls for them. This section says what each input does; when to use them, and what to do with the receipt and the journal after an error, is in the [usage guide](docs/USAGE.md) (topics `writing` and `errors`).
 
 | Input | Effect |
 |-------|--------|
@@ -153,7 +166,7 @@ A script may run for 120 seconds. `timeoutSeconds` (1–1800) on `civil3d_query`
 
 The MCP server waits longer than the plugin's limit, so that this definite answer arrives instead of an uncertain one: at least 30 seconds beyond the script limit, and `CIVIL3D_COMMAND_TIMEOUT` (or `CIVIL3D_SAVE_TIMEOUT` when the drawing is saved) extended by whatever `timeoutSeconds` adds to the default 120 seconds. The MCP client's own tool-call timeout is separate and must also allow the time.
 
-When the client cancels a tool call (for example the user presses Stop), the server closes its connection to the plugin. A request that has not started is dropped; a running script stops at its next loop iteration, or has its result discarded when it returns, and is rolled back. The call reports `CIVIL3D.CANCELLED`: `not_started` if it was never sent, otherwise `unknown`, because a write that had already reached commit stays committed. Check the drawing before repeating a write.
+When the client cancels a tool call (for example the user presses Stop), the server closes its connection to the plugin. A request that has not started is dropped; a running script stops at its next loop iteration, or has its result discarded when it returns, and is rolled back. The call reports `CIVIL3D.CANCELLED`: `not_started` if it was never sent, otherwise `unknown`, because a write that had already reached commit stays committed. What the assistant does after a time limit or an unknown outcome is in the [usage guide](docs/USAGE.md) (topic `errors`).
 
 ## Setup
 
