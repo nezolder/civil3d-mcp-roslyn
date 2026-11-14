@@ -96,6 +96,9 @@ Details: `civil3d_skills` with `action: "guide"` and a `topic`:
 - To see the drawing, run the skill `plot_view_image`: it returns a picture of the extents or of
   a window, drawn by the plot engine. A picture shows the look; read sizes and coordinates with
   a query. `plot_layouts_to_pdf` checks the page setup of sheets and plots them to PDF files.
+  A plot can mark the drawing as modified without writing an object (`dbmodAfter` in the
+  result), and `requireClean` then refuses the next write: take pictures after the writes they
+  check.
 
 <!-- topic: writing -->
 ## Writing

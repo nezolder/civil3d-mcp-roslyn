@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["lapok PDF-be nyomtatása", "nyomtatási beállítások ellenőrzése", "plot layouts to PDF with their page setups", "check page setup device paper size and CTB", "PDF készítése a lapokból"]
 workflow_tags: ["drawing_view", "quality_control"]
 tested_civil_version: "2025"
-validation_summary: "Live (Civil 3D 2025): page setup check of 16 template sheets; three sheets plotted to PDF, one a custom size; refusal of existing files and overwrite. Missing devices, paper sizes and plot style tables were not produced live. Can raise DBMOD."
+validation_summary: "Live (Civil 3D 2025): page setup check of 16 template sheets; four sheets plotted to PDF, two custom sizes, one with its device stored as a full path; existing files refused, overwrite. Missing devices, sizes and tables not produced live. Can raise DBMOD."
 parameters:
   - name: outputDirectory
     type: string

@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["kép a rajz egy részéről", "lap képe ellenőrzéshez", "picture of the model space or a layout", "plot a window to a PNG image", "nézetkép készítése"]
 workflow_tags: ["drawing_view", "quality_control"]
 tested_civil_version: "2025"
-validation_summary: "Live (Civil 3D 2025): window and extents of the model space, PNG and JPEG, a plot style table, a sheet that was not current, the refusals. Twisted views and the size choice for extents are unverified. Can raise DBMOD."
+validation_summary: "Live (Civil 3D 2025): model space window and extents, wide and tall, PNG and JPEG, a plot style table, sheets current and not current, the refusals. A window on a sheet and twisted views are unverified. A plot can raise DBMOD."
 parameters:
   - name: layoutName
     type: string
@@ -119,15 +119,25 @@ using (var settings = new PlotSettings(layout.ModelType))
     {
         try
         {
-            var lowCorner = layout.ModelType ? Database.Extmin : layout.Extents.MinPoint;
-            var highCorner = layout.ModelType ? Database.Extmax : layout.Extents.MaxPoint;
-            var spanX = highCorner.X - lowCorner.X;
-            var spanY = highCorner.Y - lowCorner.Y;
+            double spanX, spanY;
+            if (layout.ModelType)
+            {
+                spanX = Database.Extmax.X - Database.Extmin.X;
+                spanY = Database.Extmax.Y - Database.Extmin.Y;
+            }
+            else
+            {
+                // A sheet lies like its paper. The stored extents of a layout are not kept up to date.
+                var paperSize = layout.PlotPaperSize;
+                var turned = layout.PlotRotation == PlotRotation.Degrees090 || layout.PlotRotation == PlotRotation.Degrees270;
+                spanX = turned ? paperSize.Y : paperSize.X;
+                spanY = turned ? paperSize.X : paperSize.Y;
+            }
             if (spanX > 0 && spanY > 0 && spanX < 1e19 && spanY < 1e19) wantLandscape = spanX >= spanY;
         }
         catch (System.Exception)
         {
-            // Extents that cannot be read keep the wide size.
+            // A size that cannot be read keeps the wide picture.
         }
     }
     string media = null;
@@ -269,9 +279,9 @@ using (var settings = new PlotSettings(layout.ModelType))
 ## Usage Notes
 
 - This is a read-only template: run it with `civil3d_query`. It writes no object; it plots to a picture file and returns that picture next to the JSON result, where `picture` holds its number, type and pixel size.
-- Civil 3D can still mark the drawing as modified by the plot: `dbmodBefore` and `dbmodAfter` show it. In a live session a picture of the current sheet left `DBMOD` at 0, making another layout current for the plot raised it, and so did pictures of the model space of a Civil drawing. A write with `requireClean` is refused after that until the drawing is saved, so take pictures after the writes they are meant to check, or expect to save in between.
+- Civil 3D can mark the drawing as modified by the plot although no object is written: `dbmodBefore` and `dbmodAfter` show it. In live sessions a picture of the current sheet left `DBMOD` at 0; a picture of the model space raised it (the graphics generation of a model space page does that, with or without Civil objects in the window, and an extents picture also recomputes the drawing extents); making another layout current for the plot raised it further. A write with `requireClean` is refused after that until the drawing is saved, so take pictures after the writes they are meant to check, or expect to save in between.
 - The picture comes from the plot engine, not from the screen. It shows what a plot would show: plot style table, lineweights and paper space included, and it does not depend on the zoom or the size of the Civil 3D window.
-- Without a window the extents of the layout are pictured. One far-away object, such as a block left at the origin, stretches the extents until the picture looks empty; give a window then. For a detail, give `xmin`, `ymin`, `xmax` and `ymax`: world coordinates in the model space, paper units on a sheet. Of the device's sizes the largest one within `maxPixels` that lies like the area (wide or tall) is used; the picture keeps that size's proportions, so a long narrow window leaves empty margins. Picture such an area in several windows.
+- Without a window the extents of the layout are pictured: the drawn objects, not the paper. On a sheet that is the content without the empty paper around it, and a sheet whose only content is a missing reference shows just the placeholder text. In the model space one far-away object, such as a block left at the origin, stretches the extents until the picture looks empty; give a window then. For a detail, give `xmin`, `ymin`, `xmax` and `ymax`: world coordinates in the model space, paper units on a sheet. Of the device's sizes the largest one within `maxPixels` that lies like the area (wide or tall; for a sheet like its paper) is used; the picture keeps that size's proportions, so a long narrow window leaves empty margins. Picture such an area in several windows.
 - In the model space the lines keep their screen colours unless a plot style table is given. On a white picture, light colours are hard to see; a monochrome table (for example `monochrome.ctb`, when installed) gives black lines.
 - `layoutName` other than the current layout makes that layout current for the plot and restores the previous one afterwards (`switchedLayout: true`). On a large drawing this regenerates the view twice.
 - The picture files are kept in the plugin's image folder (`file` gives the path) and are removed by the plugin after a day.
@@ -279,4 +289,5 @@ using (var settings = new PlotSettings(layout.ModelType))
 - Limits:
   - A window in the model space needs a plan view (seen from above). A twisted plan view is supported by picturing the box around the turned window.
   - The pixel sizes are read from the names of the device's paper sizes ("... 1600.00 x 1280.00 Pixels"); a device that names them differently is refused with the list of its sizes.
+  - A picture of a whole sheet with its paper edge is not offered: plotting the layout area with fit-to-size came out small in a corner in a live session. A window on a sheet was not run live.
   - Nothing here measures: read coordinates and sizes with a query, and use the picture to judge the look.
