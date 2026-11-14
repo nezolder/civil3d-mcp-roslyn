@@ -146,6 +146,7 @@ Fields: `drawing` (`databaseFilename`, `fingerprintGuid`), `dbmodBefore`, `dbmod
   receipt, not from a separate `DBMOD` query.
 - After a failed save the receipt shows `committed: true`, `saved: false`: the change is in the
   open drawing and not in the file.
+- In Civil 3D each write is one Undo step; a query adds none.
 - The receipt, a file size and a clean state do not prove that the geometry is right. Read the
   result back independently with a targeted query: the requested objects, counts, extents, and
   that objects outside the scope are unchanged. If that is not possible, report the check as
@@ -184,9 +185,9 @@ server never repeats a call by itself.
   `CIVIL3D.CANCELLED` after sending are `unknown`: the operation may still be running or may have
   committed. The MCP client's own tool-call timeout gives no error object at all; treat it the
   same way.
-- `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` means Civil 3D did not start the command within 15 seconds,
-  for example because a dialog is open or a command is active. Nothing ran. Ask the user to
-  bring Civil 3D to an idle state.
+- `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` means Civil 3D did not start the command within 15 seconds.
+  Nothing ran. The message says why; ask the user to finish the open command or dialog, or to
+  click once into the Civil 3D window.
 
 ### Uncertain outcome
 
@@ -195,7 +196,9 @@ server never repeats a call by itself.
 2. Call `civil3d_skills` with `action: "status"`. It works outside the drawing execution queue
    and shows whether an operation is still running (`operationInProgress`, `queueDepth`). Do not
    queue drawing calls behind it. If the action is unavailable, say so; do not replace it with a
-   new C# call.
+   new C# call. If it keeps showing a running operation while Civil 3D is idle, the user can
+   type `C3DMCPRESET` there. It releases an operation whose script has ended, never a running
+   one; that call ends with `CIVIL3D.COMMAND_FAILED` (`reported_error`).
 3. Once the operation has ended, the write journal on the computer that runs Civil 3D
    (`%LOCALAPPDATA%\Civil3dMcpRoslyn\journal\<year>-<month>.jsonl`) has one line per write
    request with `timeUtc`, `description`, `ok`, `errorCode`, `committed`, `saved` and
@@ -231,9 +234,9 @@ has reopened the drawing (or the recovered file), with a fresh `status`, path, f
 | `CIVIL3D.BACKUP_FAILED` | `not_started` | The copy could not be made or verified. Fix the folder; do not write without the copy. |
 | `CIVIL3D.PLUGIN_UPDATE_REQUIRED` | `not_started` | Older plugin; see the `writing` topic. |
 | `CIVIL3D.COMPILATION_ERROR` | `reported_error` | The script did not start. Fix it from the diagnostics; see the `csharp` topic. |
-| `CIVIL3D.SANDBOX_VIOLATION` | `reported_error` | The script uses a type or member the plugin refuses; the message names it and its line. Nothing ran. See the `csharp` topic. |
+| `CIVIL3D.SANDBOX_VIOLATION` | `reported_error` | The script uses a refused type or member; the message names it and its line. Nothing ran. See the `csharp` topic. |
 | `CIVIL3D.TRANSACTION_FAILED` | `reported_error` | The script threw or the commit failed; the change was rolled back (`committed: false` in the receipt). |
-| `CIVIL3D.RESULT_SERIALIZATION_FAILED` | `reported_error` | The return value could not be turned into JSON. This happens before the commit; confirm with `committed` in the receipt, then return simpler values. |
+| `CIVIL3D.RESULT_SERIALIZATION_FAILED` | `reported_error` | The return value could not be turned into JSON. This happens before the commit (`committed: false`); return simpler values. |
 | `CIVIL3D.SAVE_FAILED` | `reported_error` | Committed in the open drawing, not saved. Do not repeat the change; resolve the save with the user. |
 
 For a fix, change one thing with a stated reason and a checkable result. Do not send the same

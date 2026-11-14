@@ -198,11 +198,14 @@ function installServer(options) {
 
 function readPluginStamp(outputDirectory) {
   try {
-    // bin/<configuration>/<framework> -> obj/<configuration>/<framework>
+    // bin/<configuration>/<framework> -> obj/<configuration>/<framework>, next
+    // to the build output that is being installed (it may come from another
+    // source tree through --from).
     const framework = path.basename(outputDirectory);
     const configuration = path.basename(path.dirname(outputDirectory));
+    const projectDirectory = path.resolve(outputDirectory, "..", "..", "..");
     const stamp = fs.readFileSync(
-      path.join(root, "plugin", "Civil3dMcpPlugin", "obj", configuration, framework, "Civil3dMcpBuildStamp.g.cs"),
+      path.join(projectDirectory, "obj", configuration, framework, "Civil3dMcpBuildStamp.g.cs"),
       "utf8"
     );
     return stamp.match(/"Civil3dMcpCommit", "([^"]+)"/)?.[1] ?? null;

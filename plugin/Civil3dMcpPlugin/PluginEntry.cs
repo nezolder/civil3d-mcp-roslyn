@@ -65,11 +65,52 @@ public sealed class PluginEntry : IExtensionApplication
     );
   }
 
-  // Internal native command, not an additional public MCP tool. Only an opaque
+  /// <summary>
+  /// Release an operation that is stuck although Civil 3D is idle. Meant to
+  /// be typed by the person at the computer; it cannot interrupt a script
+  /// that is still running, because no command starts while one runs.
+  /// </summary>
+  [CommandMethod("C3DMCPRESET")]
+  public void ResetCommand()
+  {
+    var report = ModalCommandAdmission.ReleaseByOperator();
+    var released = report.NotStarted + report.Finished;
+    if (released == 0 && report.StillRunning == 0)
+    {
+      var status = PluginRuntime.GetStatus();
+      WriteMessage(status.OperationInProgress
+        ? "Civil3D MCP: an operation is marked active, but it is not one this command can release. " +
+          "Restart Civil 3D if it does not finish."
+        : "Civil3D MCP: nothing is stuck; nothing was released.");
+      return;
+    }
+    if (report.NotStarted > 0)
+    {
+      WriteMessage($"Civil3D MCP: released {report.NotStarted} waiting request(s) that had not started; nothing ran.");
+    }
+    if (report.Finished > 0)
+    {
+      WriteMessage($"Civil3D MCP: released {report.Finished} operation(s) whose script had finished. " +
+        "Check the drawing before repeating anything.");
+    }
+    if (report.StillRunning > 0)
+    {
+      WriteMessage($"Civil3D MCP: {report.StillRunning} operation(s) are still running and were left alone.");
+    }
+  }
+
+  // Internal native commands, not additional public MCP tools. Only an opaque
   // one-use request token enters AutoCAD's command input.
   [CommandMethod(ModalCommandAdmission.CommandName,
     CommandFlags.Modal | CommandFlags.NoHistory | CommandFlags.UsePickSet | CommandFlags.Redraw)]
   public void RunModalCommand() => ModalCommandAdmission.RunCommand();
+
+  // The same body for reads, registered without an Undo marker: a query
+  // commits nothing, so it must not add a step to the user's Undo list.
+  [CommandMethod(ModalCommandAdmission.ReadCommandName,
+    CommandFlags.Modal | CommandFlags.NoHistory | CommandFlags.NoUndoMarker
+      | CommandFlags.UsePickSet | CommandFlags.Redraw)]
+  public void RunModalReadCommand() => ModalCommandAdmission.RunReadCommand();
 
   private static void WriteMessage(string message)
   {
