@@ -75,6 +75,10 @@ if (singleCodePath is not null)
 
     public static class SingleCivilCodeProbe
     {
+      // Stand-ins for the script helpers of the plugin (ScriptContext).
+      static object ImageFile(string path) => path;
+      static string NewImagePath(string extension = "png") => extension;
+
       public static object Run(
         Document Document,
         CivilDocument CivilDoc,
@@ -132,6 +136,23 @@ foreach (var skillPath in Directory.EnumerateFiles(
   {
     blockCount++;
     var code = matches[index].Groups[1].Value;
+
+    // The plugin compiles a template as a script, where a few statements that are
+    // fine inside a method are refused (a top-level "using var", for one).
+    var scriptErrors = CSharpSyntaxTree.ParseText(
+        code,
+        new CSharpParseOptions(LanguageVersion.Latest, kind: SourceCodeKind.Script),
+        $"{relativePath}#csharp-{index + 1}"
+      ).GetDiagnostics()
+      .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+      .ToArray();
+    if (scriptErrors.Length > 0)
+    {
+      Console.Error.WriteLine("A skill template is not valid as a script:");
+      Console.Error.WriteLine(string.Join(Environment.NewLine, scriptErrors.Select(error => error.ToString())));
+      Environment.ExitCode = 1;
+      return;
+    }
     var className = $"SkillTemplate{blockCount}";
     var source = $$"""
       #nullable disable
@@ -151,6 +172,10 @@ foreach (var skillPath in Directory.EnumerateFiles(
 
       public static class {{className}}
       {
+        // Stand-ins for the script helpers of the plugin (ScriptContext).
+        static object ImageFile(string path) => path;
+        static string NewImagePath(string extension = "png") => extension;
+
         public static object Run(
           Document Document,
           CivilDocument CivilDoc,

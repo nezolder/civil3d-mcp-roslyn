@@ -61,11 +61,19 @@ internal static class ResultSerializer
   /// <summary>A text is never cut below this many characters.</summary>
   internal const int MinKeptTextCharacters = 200;
 
-  public static JsonNode? Serialize(object? value)
+  public static JsonNode? Serialize(object? value) => Serialize(value, null);
+
+  /// <summary>
+  /// As <see cref="Serialize(object?)"/>; image files the script returned with
+  /// <c>ImageFile(path)</c> are read into <paramref name="images"/> and leave
+  /// only a small reference in the JSON. Without a list to put them in, a
+  /// result that holds an image is refused.
+  /// </summary>
+  internal static JsonNode? Serialize(object? value, List<ScriptImagePayload>? images)
   {
     try
     {
-      var state = new SerializationState();
+      var state = new SerializationState(images);
       var result = state.Convert(value, depth: 0, path: "$");
       result = ResultSizeBudget.Fit(result, state.Truncations);
       if (state.Truncations.Count == 0 && state.NonFiniteCount == 0) return result;
@@ -126,7 +134,11 @@ internal static class ResultSerializer
   private sealed class SerializationState
   {
     private readonly HashSet<object> _activeReferences = new(ReferenceEqualityComparer.Instance);
+    private readonly List<ScriptImagePayload>? _images;
+    private long _imageBytes;
     private int _totalNodes;
+
+    public SerializationState(List<ScriptImagePayload>? images = null) => _images = images;
 
     /// <summary>One entry per list that was cut to <see cref="MaxCollectionItems"/>.</summary>
     public List<JsonNode> Truncations { get; } = new();
@@ -176,6 +188,7 @@ internal static class ResultSerializer
         DBObject => throw SerializationError(
           "Returning AutoCAD DBObject instances is not supported; return explicit scalar values or ObjectId instead."
         ),
+        ScriptImage image => ConvertImage(image),
         IDictionary dictionary => ConvertDictionary(dictionary, depth, path),
         IList list => ConvertList(list, depth, path),
         ITuple tuple => ConvertTuple(tuple, depth, path),
@@ -186,6 +199,73 @@ internal static class ResultSerializer
           $"Result type '{GetTypeName(value)}' is not supported."
         ),
       };
+    }
+
+    /// <summary>
+    /// Reads the file now, while the script's work is still open, and keeps
+    /// only a reference in the JSON. Every refusal names the file and the
+    /// limit, because the script can usually plot a smaller picture.
+    /// </summary>
+    private JsonNode ConvertImage(ScriptImage image)
+    {
+      if (_images == null)
+      {
+        throw SerializationError("An image can only be returned as part of a script result.");
+      }
+      if (_images.Count >= ScriptImages.MaxImagesPerResult)
+      {
+        throw SerializationError(
+          $"A result can hold at most {ScriptImages.MaxImagesPerResult} images; return the others in further calls.");
+      }
+      var path = image.Path;
+      if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+      {
+        throw SerializationError("ImageFile needs the full path of a PNG or JPEG file.");
+      }
+
+      byte[] data;
+      try
+      {
+        var file = new FileInfo(path);
+        if (!file.Exists) throw SerializationError($"Image file not found: {path}");
+        if (file.Length > ScriptImages.MaxImageBytes)
+        {
+          throw SerializationError(
+            $"Image file '{path}' has {file.Length} bytes; the limit is {ScriptImages.MaxImageBytes}. Plot a smaller picture.");
+        }
+        data = File.ReadAllBytes(path);
+      }
+      catch (JsonRpcDispatchException)
+      {
+        throw;
+      }
+      catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+      {
+        throw SerializationError($"Image file '{path}' could not be read: {ex.Message}");
+      }
+
+      var info = ScriptImages.Inspect(data)
+        ?? throw SerializationError($"Image file '{path}' is neither a PNG nor a JPEG file.");
+      if (_imageBytes + data.Length > ScriptImages.MaxTotalImageBytes)
+      {
+        throw SerializationError(
+          $"The images of one result may hold {ScriptImages.MaxTotalImageBytes} bytes together; return fewer or smaller pictures.");
+      }
+      _imageBytes += data.Length;
+      _images.Add(new ScriptImagePayload(info.MimeType, data));
+
+      var reference = new JsonObject
+      {
+        ["image"] = _images.Count,
+        ["mimeType"] = info.MimeType,
+        ["bytes"] = data.Length,
+      };
+      if (info.Width is int width && info.Height is int height)
+      {
+        reference["width"] = width;
+        reference["height"] = height;
+      }
+      return reference;
     }
 
     private JsonNode? ConvertJsonNode(JsonNode node, int depth, string path)

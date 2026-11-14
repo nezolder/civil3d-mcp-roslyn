@@ -79,6 +79,7 @@ internal static class PluginCoreTests
       ("cancellation and execution errors release gate and counters", CancellationAndErrorCleanupAsync),
       ("serialized gate wait contributes to commandContextWaitMs", GateWaitMeasurementAsync),
       ("execute results use bounded serialization and structured failures", ExecuteResultSerializationAsync),
+      ("an image file returned by a script travels next to the result", ScriptImageReplyAsync),
       ("idempotency completes only after a successful committed write", IdempotencyFirstSuccessAndCompletedDuplicateAsync),
       ("idempotency rejects an in-progress duplicate before Civil execution", IdempotencyInProgressDuplicateAsync),
       ("idempotency rejects conflicting bindings before Civil execution", IdempotencyConflictAsync),
@@ -98,7 +99,7 @@ internal static class PluginCoreTests
       CancellationAndErrorCleanupAsync, GateWaitMeasurementAsync, ExecuteResultSerializationAsync,
       IdempotencyFirstSuccessAndCompletedDuplicateAsync, IdempotencyInProgressDuplicateAsync,
       IdempotencyConflictAsync, IdempotencyFailureReleasesKeyAsync, IdempotencyCapacityEvictionAsync,
-      IdempotencyInvalidKeyAsync,
+      IdempotencyInvalidKeyAsync, ScriptImageReplyAsync,
     };
 
     // Optional: run only the cases whose name contains this text. Useful on a
@@ -454,6 +455,56 @@ internal static class PluginCoreTests
       "private identity must use one read transaction");
     Assert(CurrentDatabase.TransactionManager.CommittedCount == 0,
       "private identity must not commit a transaction");
+  }
+
+  private static async Task ScriptImageReplyAsync()
+  {
+    ResetEnvironment();
+    var folder = Path.Combine(Path.GetTempPath(), "civil3d-mcp-image-test-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(folder);
+    try
+    {
+      var file = Path.Combine(folder, "view.png");
+      var bytes = ResultSerializerTests.PngBytes(1600, 1280, 500);
+      File.WriteAllBytes(file, bytes);
+      RoslynExecutor.Handler = (_, context) => Task.FromResult<object?>(
+        new { Sheet = "KSZ-01", Picture = context.ImageFile(file) });
+
+      var response = JsonNode.Parse(await SendAsync(CreateRequest("image-read", readOnly: true)))!.AsObject();
+      var picture = response["result"]?["picture"]?.AsObject();
+      Assert(response["result"]?["sheet"]?.GetValue<string>() == "KSZ-01"
+        && picture?["image"]?.GetValue<int>() == 1
+        && picture["mimeType"]?.GetValue<string>() == "image/png"
+        && picture["bytes"]?.GetValue<int>() == bytes.Length
+        && picture["width"]?.GetValue<int>() == 1600 && picture["height"]?.GetValue<int>() == 1280,
+        "the result keeps a numbered reference with type, size and pixel dimensions");
+      var images = response[PluginRuntime.ImagesPropertyName]?.AsArray();
+      Assert(images?.Count == 1
+        && images[0]?["mimeType"]?.GetValue<string>() == "image/png"
+        && Convert.FromBase64String(images[0]!["data"]!.GetValue<string>()).SequenceEqual(bytes),
+        "the image travels next to the result, byte for byte");
+      Assert(!response["result"]!.ToJsonString().Contains(Convert.ToBase64String(bytes)[..40]),
+        "the image data never sits inside the JSON result");
+
+      // A reply without an image has no images field at all.
+      RoslynExecutor.Handler = (_, _) => Task.FromResult<object?>("ok");
+      var plain = JsonNode.Parse(await SendAsync(CreateRequest("image-none", readOnly: true)))!.AsObject();
+      Assert(!plain.ContainsKey(PluginRuntime.ImagesPropertyName), "no image, no images field");
+
+      // A file that is not an image fails the result and sends nothing.
+      var notImage = Path.Combine(folder, "notes.png");
+      File.WriteAllText(notImage, "not an image");
+      RoslynExecutor.Handler = (_, context) => Task.FromResult<object?>(new { Picture = context.ImageFile(notImage) });
+      var refused = JsonNode.Parse(await SendAsync(CreateRequest("image-refused", readOnly: true)))!.AsObject();
+      Assert(refused["error"]?["code"]?.GetValue<string>() == "CIVIL3D.RESULT_SERIALIZATION_FAILED"
+        && !refused.ContainsKey(PluginRuntime.ImagesPropertyName),
+        "a refused image is a serialization error without image data");
+    }
+    finally
+    {
+      RoslynExecutor.Handler = (_, _) => Task.FromResult<object?>("ok");
+      Directory.Delete(folder, recursive: true);
+    }
   }
 
   private static async Task ExecuteResultSerializationAsync()
@@ -2046,7 +2097,7 @@ internal static class PluginCoreTests
       && unknown["build"]?.AsObject().ContainsKey("dirty") == true,
       "a build without a stamp says so instead of inventing a commit");
     Assert(unknown["features"]?.AsArray().Select(item => item?.GetValue<string>()).SequenceEqual(
-      new[] { "activeDrawing", "writeSafety" }) == true,
+      new[] { "activeDrawing", "writeSafety", "images" }) == true,
       "health lists what this plugin build can do");
 
     // The identity is picked up when the application is idle.

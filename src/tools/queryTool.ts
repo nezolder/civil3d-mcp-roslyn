@@ -32,6 +32,7 @@ import {
   logOperationFailure,
   logOperationSuccess,
 } from "../utils/operationAudit.js";
+import { imageContentBlocks, readResultImages, type ResultImage } from "./resultImages.js";
 
 const log = createLogger("QueryTool");
 
@@ -124,6 +125,7 @@ export function registerQueryTool(server: McpServer, options: ScriptSourceOption
         return createStructuredToolErrorResult(error, "Query failed: ");
       }
       const audit = createOperationAuditContext("civil3d_query", code, performance.now());
+      let images: ResultImage[] = [];
       try {
         const commandResult = await withApplicationConnection(
           async (client) =>
@@ -137,7 +139,10 @@ export function registerQueryTool(server: McpServer, options: ScriptSourceOption
               },
               benchmarkTrace,
               commandWaitMs(COMMAND_TIMEOUT_MS, args.timeoutSeconds),
-              extra.signal
+              extra.signal,
+              (response) => {
+                images = readResultImages(response);
+              }
             ),
           {
             expectedDrawing: args.expectedDrawing,
@@ -152,12 +157,14 @@ export function registerQueryTool(server: McpServer, options: ScriptSourceOption
           ? (commandResult as MeasuredCommandResult).benchmarkEvent
           : undefined;
 
+        // Pictures follow the text, in the order of their references in it.
         const normalResult = {
           content: [
             {
               type: "text" as const,
               text: JSON.stringify(result) ?? "null",
             },
+            ...imageContentBlocks(images),
           ],
         };
         logOperationSuccess(log, audit, performance.now());

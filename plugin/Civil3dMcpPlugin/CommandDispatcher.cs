@@ -79,7 +79,7 @@ public static class CommandDispatcher
       progress?.SetStage(OperationStage.SerializingResult);
       // A lazy result runs caller code while it is serialized; keep it stoppable.
       return RoslynExecutor.RunWithScriptCancellation(
-        () => ResultSerializer.Serialize(rawResult), cancellationToken, timeLimit);
+        () => ResultSerializer.Serialize(rawResult, record?.Images), cancellationToken, timeLimit);
     }, write: !readOnly, expectedDrawing, benchmarkMeasurement, saveDrawing, progress, cancellationToken, record);
   }
 
@@ -212,7 +212,7 @@ public static class CommandDispatcher
   /// it relies on one, so that an older plugin cannot silently ignore a
   /// safety switch.
   /// </summary>
-  internal static readonly string[] Features = { "activeDrawing", "writeSafety" };
+  internal static readonly string[] Features = { "activeDrawing", "writeSafety", "images" };
 
   /// <summary>
   /// Returns the active drawing identity without compiling or running caller

@@ -334,8 +334,30 @@ public static class PluginRuntime
         benchmarkMeasurement.ToJsonObject();
     }
     AddReceipt(response, record);
+    AddImages(response, record);
     return response.ToJsonString(JsonSerializerOptions);
   }
+
+  /// <summary>
+  /// Image files the script returned travel next to the result, like the
+  /// receipt; the result itself holds only a numbered reference to each.
+  /// </summary>
+  private static void AddImages(JsonObject response, ExecutionRecord? record)
+  {
+    if (record == null || record.Images.Count == 0) return;
+    var images = new JsonArray();
+    foreach (var image in record.Images)
+    {
+      images.Add(new JsonObject
+      {
+        ["mimeType"] = image.MimeType,
+        ["data"] = Convert.ToBase64String(image.Data),
+      });
+    }
+    response[ImagesPropertyName] = images;
+  }
+
+  internal const string ImagesPropertyName = "images";
 
   /// <summary>
   /// A write that reached the drawing reports what happened to it next to the
