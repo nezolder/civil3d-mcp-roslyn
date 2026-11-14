@@ -146,6 +146,7 @@ Fields: `drawing` (`databaseFilename`, `fingerprintGuid`), `dbmodBefore`, `dbmod
   receipt, not from a separate `DBMOD` query.
 - After a failed save the receipt shows `committed: true`, `saved: false`: the change is in the
   open drawing and not in the file.
+- In Civil 3D each write is one Undo step; a query adds none.
 - The receipt, a file size and a clean state do not prove that the geometry is right. Read the
   result back independently with a targeted query: the requested objects, counts, extents, and
   that objects outside the scope are unchanged. If that is not possible, report the check as

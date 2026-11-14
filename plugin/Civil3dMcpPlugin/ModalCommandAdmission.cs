@@ -141,9 +141,15 @@ internal static class ModalCommandAdmission
         {
           return "The command was handed to Civil 3D but did not begin: another command or prompt may be holding its command line.";
         }
-        return _hostWasBusy
-          ? "A command or dialog was active in Civil 3D the whole time: finish it there, then try again."
-          : "Civil 3D reported no idle moment in that time: click once into its window, then try again.";
+        // Idle moments were seen, but a command or prompt held the command line.
+        if (_hostWasBusy)
+        {
+          return "A command or prompt was waiting for input in Civil 3D: finish it there, then try again.";
+        }
+        // No idle moment at all. A running command gives none either (seen
+        // live with DELAY), so this side cannot tell the two cases apart.
+        return "Civil 3D did not become idle in that time. If a command is running there, let it finish; " +
+          "if nothing is running, click once into its window. Then try again.";
       }
     }
 

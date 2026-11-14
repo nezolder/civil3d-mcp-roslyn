@@ -8,6 +8,22 @@ This repository contains the accepted runtime, six focused engineering recipes w
 
 The catalogue contains **39 skills** with **40 C# templates**; **38** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
 
+## Queries without an Undo step, and a manual way out of a stuck operation (2026-11-14)
+
+The rest of the third review round.
+
+- **Undo.** A query (`civil3d_query`, the drawing identity) runs through its own internal command `C3DMCPREAD`, registered without an Undo marker. A write keeps `C3DMCPRUN` and stays one Undo step. A request runs only under the command it was queued for.
+- **Manual release.** `C3DMCPRESET`, typed by the person at the computer, releases an operation that is stuck although Civil 3D is idle: a request that never started (nothing ran), or one whose script finished but whose command end the host never reported (`CIVIL3D.COMMAND_FAILED`, with the commit fact). It cannot interrupt a running script.
+- **Start timeout.** `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` says what is known about the cause: a prompt waiting for input, a command handed over but not begun, or no idle moment at all.
+
+Evidence boundaries:
+
+- **Proven offline:** the core tests for command registration and flags, read and write command separation, manual release in all three states and the three timeout messages; the shared dispatch contracts still pass under both routes on Windows CI.
+- **Proven in a Civil 3D 2025 session on a throwaway drawing copy (2026-11-14, candidate build):** one `U` sent after a write followed by queries (three trivial ones and two recipes by name) removed that write; with two writes one `U` removed only the second; a query that changed an entity inside its own transaction left the entity unchanged, and the next `U` removed the write before it. `C3DMCPRESET` with nothing stuck ran and ended, and later calls worked. A request sent while `DELAY` was running ended after 15 s with `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` and `not_started`, and the next request ran normally.
+- **Probable:** on the previous build one `U` after a write and one query left the written line in place, which fits the query having left its own Undo step; that the `U` itself ran there was not observed directly.
+- **Observed, not compared with the previous build:** a query that opened an object for write moved `DBMOD` from 0 to 1 although the change was rolled back. A plain query left `DBMOD` at 0.
+- **Unverified:** a real stuck operation was not produced live, so `C3DMCPRESET` releasing one is proven only in the core tests; its command-line text was not captured live. The wording of the "no idle moment" message was changed after the live session (during a running command there is no idle moment either) and has only the offline test. The report that a freshly started Civil 3D needed one click before the first request was not reproduced in two fresh starts; no wake-up timer was added.
+
 ## Smaller replies and fewer rounds from the architecture review (2026-11-14)
 
 The third round of the review is about what an assistant pays per call: the size of a reply, and the extra calls caused by a refused script, a missing name or a template sent back and forth.
@@ -21,8 +37,9 @@ The third round of the review is about what an assistant pays per call: the size
 Evidence boundaries:
 
 - **Proven offline:** the serializer, guard and lookup tests (rounding, name of an enum, each kind of cut and its report, 18 refused and 6 allowed script forms, ranking); all 40 templates and the twelve changed recipes bound with sample values compile against the Civil 3D 2025 assemblies; no shipped template is one the guard refuses.
-- **Unverified:** everything in a running Civil 3D. The twelve changed recipes were not run live; the three write recipes among them (`create_polyline`, `create_cogo_points`, `create_tin_surface`) were rewritten and need a live check on a throwaway drawing before use on project work. Whether Civil 3D has the pressure-pipe and data-shortcut assemblies loaded under the names in the list was not checked live.
-- **Not changed:** `replace_alignment_with_fixed_primitives` still takes its table as adapted code. Making it bindable changes the input of a live-validated write recipe and belongs with a new live validation. The manual unlock command and the undo steps left by queries (G4, G5 of the review) need a live session and are not part of this change.
+- **Proven in a Civil 3D 2025 session on a throwaway drawing copy (2026-11-14, merged build):** rounding, enum names, the cut of a long list and of a 100000-character text with its report, the guard refusing `Process.Start` and `File.Delete` and allowing a look-alike, the lookup ranking and both added assemblies being read, the parameter card and the missing-parameter line; by name `surface_definition_summary`, `station_offset` in both directions, `surface_elevation`, `earthwork_report`, and the three rewritten write recipes (`create_polyline` in 2D and 3D, `create_cogo_points`, `create_tin_surface`), each written once and read back independently.
+- **Unverified:** `corridor_summary`, `pipe_network_qc`, `list_profiles`, `section_inventory` and `surface_volume` ran but returned empty results, because the test drawing has no such objects.
+- **Not changed:** `replace_alignment_with_fixed_primitives` still takes its table as adapted code. Making it bindable changes the input of a live-validated write recipe and belongs with a new live validation. The manual unlock command and the undo steps left by queries (G4, G5 of the review) followed separately; see the section above.
 
 ## The server hands over its own working order (2026-11-13)
 

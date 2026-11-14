@@ -279,8 +279,9 @@ internal static class PluginCoreTests
       try { await noIdle; throw new Exception("Expected a start timeout"); }
       catch (JsonRpcDispatchException ex)
       {
-        Assert(ex.Code == "CIVIL3D.COMMAND_CONTEXT_TIMEOUT" && ex.Message.Contains("no idle moment"),
-          "without an idle event the message asks for a click into the window");
+        Assert(ex.Code == "CIVIL3D.COMMAND_CONTEXT_TIMEOUT" && ex.Message.Contains("did not become idle")
+          && ex.Message.Contains("let it finish") && ex.Message.Contains("click once into its window"),
+          "without an idle event the message names both possible causes");
       }
       document.Editor.IsQuiescent = false;
       var busy = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => false);
@@ -288,7 +289,7 @@ internal static class PluginCoreTests
       try { await busy; throw new Exception("Expected a start timeout"); }
       catch (JsonRpcDispatchException ex)
       {
-        Assert(ex.Message.Contains("A command or dialog was active"),
+        Assert(ex.Message.Contains("A command or prompt was waiting for input"),
           "a busy command line is named as the reason");
       }
       document.Editor.IsQuiescent = true;

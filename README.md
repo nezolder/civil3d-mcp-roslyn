@@ -271,9 +271,9 @@ The phase 2A host-independent recorder, the phase 2A.1 opt-in internal live trac
 
 An operation whose Civil command has not started within 15 seconds returns `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` with `outcome: "not_started"` and `retryable: false`. A subsequently arriving abandoned token performs no drawing work. This deadline limits admission, not execution: started work retains the serialized gate until the selected backend's host completion, and an uncertain write must still be reconciled rather than repeated. The targeted completion checks do not establish that every possible hang is eliminated.
 
-The timeout message says what Civil 3D was doing: a command or dialog was active, the command was handed over but did not begin, or the application reported no idle moment (click once into its window).
+The timeout message says what is known about the cause: a command or prompt was waiting for input, the command was handed over but did not begin, or Civil 3D did not become idle at all (a command is still running, or its window needs one click).
 
-A query runs through its own internal command (`C3DMCPREAD`), registered without an Undo marker, so that queries do not pile up in the user's Undo list; a write runs through `C3DMCPRUN` and stays one Undo step.
+A query runs through its own internal command (`C3DMCPREAD`), registered without an Undo marker, so that queries do not pile up in the user's Undo list; a write runs through `C3DMCPRUN` and stays one Undo step. A query that opens an object for write can still mark the drawing as modified (`DBMOD`), although its change is rolled back; queries should only read.
 
 If an operation stays marked as running although Civil 3D sits idle at its command line, the person at the computer can type `C3DMCPRESET` in Civil 3D. It releases a request that never started (nothing ran) or one whose script had finished but whose command end Civil 3D never reported (`CIVIL3D.COMMAND_FAILED`; `committed` in the receipt says whether the change went in). It cannot interrupt a running script, because no command starts while one runs.
 
