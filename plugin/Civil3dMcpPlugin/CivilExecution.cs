@@ -221,7 +221,7 @@ public static class CivilExecution
     else
     {
       await ModalCommandAdmission.ExecuteAsync(
-        ExecuteBody, commandContextStartCancellationToken, () => operationCommitted);
+        ExecuteBody, commandContextStartCancellationToken, () => operationCommitted, readOnly: !write);
     }
 
     progress?.SetStage(OperationStage.ReturningResult);

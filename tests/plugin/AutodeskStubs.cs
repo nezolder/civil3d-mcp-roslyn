@@ -171,9 +171,13 @@ namespace Autodesk.AutoCAD.ApplicationServices
     public int CommandHandlerCount => (CommandEnded?.GetInvocationList().Length ?? 0)
       + (CommandCancelled?.GetInvocationList().Length ?? 0) + (CommandFailed?.GetInvocationList().Length ?? 0);
     public Action<Document, string>? CommandQueued { get; set; }
+    /// <summary>The command name of the last string sent to the command line.</summary>
+    public string LastQueuedCommand { get; private set; } = string.Empty;
     public void SendStringToExecute(string command, bool activate, bool wrapUpInactiveDoc, bool echo)
     {
-      Editor.CommandToken = command.Trim().Split(' ')[1];
+      var parts = command.Trim().Split(' ');
+      LastQueuedCommand = parts[0];
+      Editor.CommandToken = parts[1];
       CommandQueued?.Invoke(this, Editor.CommandToken);
     }
     public void EndCommand(string name) => CommandEnded?.Invoke(this, new(name));

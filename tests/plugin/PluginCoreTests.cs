@@ -43,6 +43,7 @@ internal static class PluginCoreTests
       ("direct execute guard is required and malformed guards fail closed", DirectGuardContractAsync),
       ("modal dispatch preserves transaction, save, and gate through own host end", ModalDispatchAsync),
       ("modal admission rejects stale tokens, wrong documents, and unstarted work", ModalAdmissionSafetyAsync),
+      ("reads run under their own command without an Undo step; a stuck operation can be released by hand", ModalReadCommandAndManualReleaseAsync),
       ("drawing identity is checked before lock, transaction, and Roslyn", DrawingIdentityOrderingAsync),
       ("private drawing identity is read without Roslyn or a commit", PrivateDrawingIdentityAsync),
       ("save runs after commit and releases transaction resources", SaveAfterCommitOrderingAsync),
@@ -99,6 +100,15 @@ internal static class PluginCoreTests
       IdempotencyConflictAsync, IdempotencyFailureReleasesKeyAsync, IdempotencyCapacityEvictionAsync,
       IdempotencyInvalidKeyAsync,
     };
+
+    // Optional: run only the cases whose name contains this text. Useful on a
+    // machine where some cases cannot run (several need Windows paths).
+    var filter = Environment.GetEnvironmentVariable("CIVIL3D_MCP_TEST_FILTER");
+    if (!string.IsNullOrWhiteSpace(filter))
+    {
+      tests = tests.Where(test => test.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToArray();
+      Console.WriteLine($"Filter '{filter}': {tests.Length} case(s); the serializer, lookup and cache suites still run.");
+    }
 
     try
     {
@@ -163,7 +173,142 @@ internal static class PluginCoreTests
       "the modal command must preserve implied selection and remain outside repeat history");
     Assert((registration.Flags & forbidden) == 0,
       "the shared writer must stay modal, document-scoped, and preserve normal Undo behavior");
+
+    // Reads have their own command: the same flags plus "no Undo marker".
+    var read = typeof(PluginEntry).GetMethod(nameof(PluginEntry.RunModalReadCommand))!
+      .GetCustomAttribute<Autodesk.AutoCAD.Runtime.CommandMethodAttribute>();
+    Assert(read?.GlobalName == ModalCommandAdmission.ReadCommandName
+      && read.GlobalName != ModalCommandAdmission.CommandName,
+      "reads must register their own internal command name");
+    Assert((read!.Flags & (required | Autodesk.AutoCAD.Runtime.CommandFlags.NoUndoMarker))
+      == (required | Autodesk.AutoCAD.Runtime.CommandFlags.NoUndoMarker),
+      "the read command keeps the selection flags and leaves no Undo marker");
+    Assert((read.Flags & (Autodesk.AutoCAD.Runtime.CommandFlags.Transparent
+      | Autodesk.AutoCAD.Runtime.CommandFlags.Session)) == 0,
+      "the read command stays modal and document-scoped");
+    Assert(typeof(PluginEntry).GetMethod(nameof(PluginEntry.ResetCommand))!
+      .GetCustomAttribute<Autodesk.AutoCAD.Runtime.CommandMethodAttribute>()?.GlobalName == "C3DMCPRESET",
+      "the manual release command must be registered");
     return Task.CompletedTask;
+  }
+
+  private static async Task ModalReadCommandAndManualReleaseAsync()
+  {
+    ResetEnvironment();
+    ModalCommandAdmission.Initialize();
+    var document = CurrentDocument;
+    var calls = 0;
+
+    // A write token given to the read command does nothing, and the reverse.
+    var write = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => true);
+    Application.RaiseIdle();
+    Assert(document.LastQueuedCommand == ModalCommandAdmission.CommandName, "a write is queued under the write command");
+    ModalCommandAdmission.RunReadCommand();
+    document.EndCommand(ModalCommandAdmission.ReadCommandName);
+    Assert(calls == 0 && !write.IsCompleted, "a write must never run inside the command without an Undo step");
+    ModalCommandAdmission.RunCommand();
+    document.EndCommand(ModalCommandAdmission.ReadCommandName);
+    Assert(calls == 1 && !write.IsCompleted, "only the end of its own command finishes a request");
+    document.EndCommand(ModalCommandAdmission.CommandName);
+    await write.WaitAsync(TimeSpan.FromSeconds(2));
+
+    var read = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => false, readOnly: true);
+    Application.RaiseIdle();
+    Assert(document.LastQueuedCommand == ModalCommandAdmission.ReadCommandName, "a read is queued under the read command");
+    ModalCommandAdmission.RunCommand();
+    Assert(calls == 1, "a read token does not run under the write command");
+    ModalCommandAdmission.RunReadCommand();
+    document.EndCommand(ModalCommandAdmission.ReadCommandName);
+    await read.WaitAsync(TimeSpan.FromSeconds(2));
+    Assert(calls == 2, "the read ran once under its own command");
+
+    // Nothing stuck: the manual release reports nothing and changes nothing.
+    var idle = ModalCommandAdmission.ReleaseByOperator();
+    Assert(idle is { NotStarted: 0, Finished: 0, StillRunning: 0 }, "nothing to release when nothing waits");
+
+    // A body that finished without the host ever reporting the command end:
+    // the manual release completes it with an error that keeps the commit fact.
+    var stuck = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => true);
+    Application.RaiseIdle();
+    ModalCommandAdmission.RunCommand();
+    Assert(calls == 3 && !stuck.IsCompleted, "without the command end the operation stays held");
+    var released = ModalCommandAdmission.ReleaseByOperator();
+    Assert(released is { NotStarted: 0, Finished: 1, StillRunning: 0 }, "the finished body is released");
+    try { await stuck.WaitAsync(TimeSpan.FromSeconds(2)); throw new Exception("Expected a released operation to fail"); }
+    catch (JsonRpcDispatchException ex)
+    {
+      Assert(ex.Code == "CIVIL3D.COMMAND_FAILED" && ex.OperationCommitted && ex.Message.Contains("C3DMCPRESET"),
+        "a released operation reports that it ran, that it committed, and how it was released");
+    }
+    Application.RaiseIdle();
+    Assert(document.CommandHandlerCount == 0, "a released operation detaches its handlers");
+    document.EndCommand(ModalCommandAdmission.CommandName);
+
+    // A body that failed keeps its own error.
+    var failed = ModalCommandAdmission.ExecuteAsync(
+      () => throw new InvalidOperationException("body"), CancellationToken.None, () => false);
+    Application.RaiseIdle();
+    ModalCommandAdmission.RunCommand();
+    Assert(ModalCommandAdmission.ReleaseByOperator().Finished == 1, "a failed body is released too");
+    try { await failed.WaitAsync(TimeSpan.FromSeconds(2)); throw new Exception("Expected the body error"); }
+    catch (InvalidOperationException) { }
+    Application.RaiseIdle();
+
+    // A request that never started is released as "did not run", and its
+    // token is dead afterwards.
+    var waiting = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => false);
+    Application.RaiseIdle();
+    var waitingRelease = ModalCommandAdmission.ReleaseByOperator();
+    Assert(waitingRelease is { NotStarted: 1, Finished: 0, StillRunning: 0 }, "a waiting request is released as not started");
+    try { await waiting.WaitAsync(TimeSpan.FromSeconds(2)); throw new Exception("Expected a not-started error"); }
+    catch (JsonRpcDispatchException ex)
+    {
+      Assert(ex.Code == "CIVIL3D.COMMAND_CONTEXT_TIMEOUT" && !ex.OperationCommitted && ex.Message.Contains("did not run"),
+        "a released waiting request says that nothing ran");
+    }
+    ModalCommandAdmission.RunCommand();
+    Assert(calls == 3, "a released token can never run later");
+    Application.RaiseIdle();
+    Assert(document.CommandHandlerCount == 0, "released requests leave no handlers");
+
+    // The start timeout says what the host was doing.
+    ModalCommandAdmission.StartDeadlineOverrideForTests = TimeSpan.FromMilliseconds(30);
+    try
+    {
+      var noIdle = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => false);
+      try { await noIdle; throw new Exception("Expected a start timeout"); }
+      catch (JsonRpcDispatchException ex)
+      {
+        Assert(ex.Code == "CIVIL3D.COMMAND_CONTEXT_TIMEOUT" && ex.Message.Contains("no idle moment"),
+          "without an idle event the message asks for a click into the window");
+      }
+      document.Editor.IsQuiescent = false;
+      var busy = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => false);
+      Application.RaiseIdle();
+      try { await busy; throw new Exception("Expected a start timeout"); }
+      catch (JsonRpcDispatchException ex)
+      {
+        Assert(ex.Message.Contains("A command or dialog was active"),
+          "a busy command line is named as the reason");
+      }
+      document.Editor.IsQuiescent = true;
+      var handed = ModalCommandAdmission.ExecuteAsync(() => calls++, CancellationToken.None, () => false);
+      Application.RaiseIdle();
+      try { await handed; throw new Exception("Expected a start timeout"); }
+      catch (JsonRpcDispatchException ex)
+      {
+        Assert(ex.Message.Contains("was handed to Civil 3D but did not begin"),
+          "a queued command that never began is named as such");
+      }
+    }
+    finally
+    {
+      document.Editor.IsQuiescent = true;
+      ModalCommandAdmission.StartDeadlineOverrideForTests = null;
+    }
+    Application.RaiseIdle();
+    Assert(calls == 3 && document.CommandHandlerCount == 0, "timeouts leave no work and no handlers");
+    ModalCommandAdmission.Terminate();
   }
 
   private static async Task ModalDispatchAsync()
@@ -190,14 +335,28 @@ internal static class PluginCoreTests
     CurrentDocument.EndCommand(ModalCommandAdmission.CommandName);
     AssertResult(await write.WaitAsync(TimeSpan.FromSeconds(2)), "ok");
     // The gate continuation queues the next request asynchronously.
+    var readRan = false;
     for (var i = 0; i < 100 && !read.IsCompleted; i++)
     {
       Application.RaiseIdle();
+      // The write command must not run a read request, whatever token it is given.
       ModalCommandAdmission.RunCommand();
       CurrentDocument.EndCommand(ModalCommandAdmission.CommandName);
+      if (!readRan)
+      {
+        Assert(RoslynExecutor.CallCount == 1, "a read request must not run under the write command");
+        if (CurrentDocument.LastQueuedCommand == ModalCommandAdmission.ReadCommandName)
+        {
+          ModalCommandAdmission.RunReadCommand();
+          CurrentDocument.EndCommand(ModalCommandAdmission.ReadCommandName);
+          readRan = true;
+        }
+      }
       await Task.Delay(1);
     }
     AssertResult(await read.WaitAsync(TimeSpan.FromSeconds(2)), "ok");
+    Assert(CurrentDocument.LastQueuedCommand == ModalCommandAdmission.ReadCommandName,
+      "a read is queued under the command that leaves no Undo step");
     Application.RaiseIdle();
     Assert(Application.DocumentManager.CommandContextCallCount == nativeCalls,
       "modal dispatch must never call ExecuteInCommandContextAsync");
