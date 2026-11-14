@@ -20,6 +20,10 @@ internal static class ApiLookup
     "Acmgd",
     "AecBaseMgd",
     "AeccDbMgd",
+    // Pressure networks and data shortcuts live in their own assemblies. Like
+    // the others they are only read when Civil 3D has already loaded them.
+    "AeccPressurePipesMgd",
+    "AeccDataShortcutMgd",
   };
 
   // Test-only seam. Production always snapshots AppDomain.CurrentDomain.
@@ -57,7 +61,7 @@ internal static class ApiLookup
       );
     }
 
-    var results = new List<ApiLookupItem>();
+    var results = new List<RankedItem>();
     foreach (var assembly in matchingAssemblies)
     {
       var assemblyName = assembly.GetName().Name!;
@@ -67,9 +71,12 @@ internal static class ApiLookup
         var typeNamespace = type.Namespace ?? string.Empty;
         if (request.Namespace != null && !NamespaceMatches(typeNamespace, request.Namespace)) continue;
 
+        var simpleTypeName = SimpleTypeName(type);
         if (MatchesAllTokens(typeName, request.QueryTokens))
         {
-          results.Add(new ApiLookupItem(assemblyName, typeName, null));
+          results.Add(new RankedItem(
+            new ApiLookupItem(assemblyName, typeName, null),
+            Rank(simpleTypeName, null, request.QueryTokens)));
         }
 
         foreach (var member in GetPublicDeclaredMembers(type))
@@ -87,20 +94,59 @@ internal static class ApiLookup
           if (signature == null) continue;
           if (MatchesAllTokens($"{typeName} {signature}", request.QueryTokens))
           {
-            results.Add(new ApiLookupItem(assemblyName, typeName, signature));
+            results.Add(new RankedItem(
+              new ApiLookupItem(assemblyName, typeName, signature),
+              Rank(simpleTypeName, member is ConstructorInfo ? null : member.Name, request.QueryTokens)));
           }
         }
       }
     }
 
+    // Best match first; equal matches keep the fixed alphabetical order, so
+    // the same query always returns the same page.
     var ordered = results
-      .OrderBy(item => item.Assembly, ApiStringComparer.Instance)
-      .ThenBy(item => item.Type, ApiStringComparer.Instance)
-      .ThenBy(item => item.Member ?? string.Empty, ApiStringComparer.Instance)
+      .OrderBy(ranked => ranked.Rank)
+      .ThenBy(ranked => ranked.Item.Assembly, ApiStringComparer.Instance)
+      .ThenBy(ranked => ranked.Item.Type, ApiStringComparer.Instance)
+      .ThenBy(ranked => ranked.Item.Member ?? string.Empty, ApiStringComparer.Instance)
+      .Select(ranked => ranked.Item)
       .ToArray();
 
     var returned = ordered.Take(request.Limit).ToArray();
     return new ApiLookupResponse(ordered.Length, returned.Length, ordered.Length > returned.Length, returned);
+  }
+
+  /// <summary>
+  /// How well an item answers the query; lower is better. A query is usually
+  /// a type name, a member name, or both, so the item that is named exactly
+  /// so comes before those that merely contain the word:
+  /// 0 the type named by a query word; 1 a member named by one query word of
+  /// a type named by another; 2 a member named by a query word; 3 a type whose
+  /// name starts with a query word; 4 the other members of an exactly named
+  /// type; 5 a member whose name starts with a query word; 6 everything else.
+  /// </summary>
+  internal static int Rank(string simpleTypeName, string? memberName, IReadOnlyList<string> tokens)
+  {
+    var typeExact = tokens.Any(token => string.Equals(token, simpleTypeName, StringComparison.OrdinalIgnoreCase));
+    if (memberName is null)
+    {
+      // A type, or a constructor, which carries the name of its type.
+      if (typeExact) return 0;
+      return tokens.Any(token => simpleTypeName.StartsWith(token, StringComparison.OrdinalIgnoreCase)) ? 3 : 6;
+    }
+
+    var memberExact = tokens.Any(token => string.Equals(token, memberName, StringComparison.OrdinalIgnoreCase));
+    if (memberExact) return typeExact ? 1 : 2;
+    if (typeExact) return 4;
+    return tokens.Any(token => memberName.StartsWith(token, StringComparison.OrdinalIgnoreCase)) ? 5 : 6;
+  }
+
+  /// <summary>The name as written in code: no namespace, no outer type, no generic arity.</summary>
+  private static string SimpleTypeName(Type type)
+  {
+    var name = type.Name;
+    var tick = name.IndexOf('`');
+    return tick >= 0 ? name[..tick] : name;
   }
 
   private static IReadOnlyList<Assembly> SnapshotAllowedAssemblies()
@@ -298,6 +344,7 @@ internal static class ApiLookup
 
   private sealed record ApiLookupRequest(string[] QueryTokens, string? Assembly, string? Namespace, int Limit);
   private sealed record ApiLookupItem(string Assembly, string Type, string? Member);
+  private sealed record RankedItem(ApiLookupItem Item, int Rank);
   private sealed record ApiLookupResponse(int Total, int Returned, bool Truncated, IReadOnlyList<ApiLookupItem> Results);
 
   private static readonly IReadOnlyDictionary<Type, string> CSharpAliases = new Dictionary<Type, string>

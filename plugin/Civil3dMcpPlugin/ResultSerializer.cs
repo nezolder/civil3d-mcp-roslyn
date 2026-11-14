@@ -16,16 +16,50 @@ namespace Civil3DMcpPlugin;
 /// Only explicitly supported Autodesk value types and ordinary JSON shapes are allowed.
 /// A list longer than <see cref="MaxCollectionItems"/> keeps its first items, and the
 /// whole result is then wrapped as <c>{"result": ..., "truncated": [...]}</c> so the
-/// cut is never silent. NaN and Infinity have no JSON form: each becomes null and the
+/// cut is never silent. Lists also stop once <see cref="MaxTotalNodes"/> values were converted. NaN and Infinity have no JSON form: each becomes null and the
 /// wrapper lists where, as <c>"nonFinite": {"count": n, "paths": [...]}</c>, so one bad
 /// number does not discard an otherwise useful result.
+/// Replies are also kept small for the reader: a double is rounded to
+/// <see cref="SignificantDigits"/> significant digits (its whole part is never
+/// touched), an enum is returned by name, and a result longer than
+/// <see cref="MaxResultCharacters"/> characters is shortened from the end of its
+/// largest lists and texts, each cut listed under <c>truncated</c> with
+/// <c>"reason": "size"</c>.
 /// </summary>
 internal static class ResultSerializer
 {
   internal const int MaxDepth = 8;
   internal const int MaxCollectionItems = 1_000;
+  /// <summary>
+  /// Values converted before lists stop taking further items. A list that
+  /// stops here is reported like any other cut, so a wide table returns its
+  /// first rows instead of failing as a whole.
+  /// </summary>
   internal const int MaxTotalNodes = 10_000;
+
+  /// <summary>
+  /// Hard stop for a result that keeps growing without lists (nested objects
+  /// and dictionaries only); such a result is refused.
+  /// </summary>
+  internal const int MaxTotalNodesHard = 2 * MaxTotalNodes;
   internal const int MaxNonFinitePaths = 20;
+
+  /// <summary>
+  /// Longest result, in characters of JSON text. About 10 000 to 16 000 tokens
+  /// of number-heavy JSON: enough for a few hundred table rows, and below the
+  /// size at which clients start to drop or refuse a tool reply.
+  /// </summary>
+  internal const int MaxResultCharacters = 40_000;
+
+  /// <summary>
+  /// Digits kept in a double. Ten digits are a tenth of a millimetre on a
+  /// seven-digit coordinate and far finer than any angle or slope a drawing
+  /// holds; the seventeen digits of a raw double are noise that costs tokens.
+  /// </summary>
+  internal const int SignificantDigits = 10;
+
+  /// <summary>A text is never cut below this many characters.</summary>
+  internal const int MinKeptTextCharacters = 200;
 
   public static JsonNode? Serialize(object? value)
   {
@@ -33,6 +67,7 @@ internal static class ResultSerializer
     {
       var state = new SerializationState();
       var result = state.Convert(value, depth: 0, path: "$");
+      result = ResultSizeBudget.Fit(result, state.Truncations);
       if (state.Truncations.Count == 0 && state.NonFiniteCount == 0) return result;
       var wrapped = new JsonObject { ["result"] = result };
       if (state.Truncations.Count > 0)
@@ -66,8 +101,27 @@ internal static class ResultSerializer
   private static string GetTypeName(object? value)
     => value?.GetType().FullName ?? "null";
 
-  private static JsonRpcDispatchException SerializationError(string message)
+  internal static JsonRpcDispatchException SerializationError(string message)
     => new("CIVIL3D.RESULT_SERIALIZATION_FAILED", message);
+
+  /// <summary>
+  /// Rounds to <see cref="SignificantDigits"/> significant digits without ever
+  /// changing the whole part: 650123.456789012 becomes 650123.4568,
+  /// 0.30000000000000004 becomes 0.3, 12345678901.37 becomes 12345678901.
+  /// A script that needs every digit returns the number as text.
+  /// </summary>
+  internal static double RoundNumber(double value)
+  {
+    if (value == 0 || !double.IsFinite(value)) return value;
+    var magnitude = Math.Abs(value);
+    // From ten whole digits on there is no room left for decimals.
+    if (magnitude >= 1e9) return magnitude >= 1e15 ? value : Math.Round(value);
+    var rounded = double.Parse(
+      value.ToString("G" + SignificantDigits.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture),
+      NumberStyles.Float,
+      CultureInfo.InvariantCulture);
+    return rounded;
+  }
 
   private sealed class SerializationState
   {
@@ -292,6 +346,19 @@ internal static class ResultSerializer
             });
             break;
           }
+          if (_totalNodes >= MaxTotalNodes)
+          {
+            // The result as a whole is full: this list, and every list around
+            // it, ends here. Items already started are completed.
+            Truncations.Add(new JsonObject
+            {
+              ["path"] = path,
+              ["returned"] = result.Count,
+              ["total"] = total,
+              ["reason"] = "size",
+            });
+            break;
+          }
           result.Add(Convert(item, depth + 1, $"{path}[{result.Count}]"));
         }
       }
@@ -347,23 +414,13 @@ internal static class ResultSerializer
 
     private static string PropertyPath(string path, string name) => $"{path}.{name}";
 
+    /// <summary>
+    /// The name, as written in code: "Tangent" says more than 1 and saves the
+    /// second run that a number without its name used to cost. Combined flags
+    /// read "A, B"; a value without a name stays its number, as text.
+    /// </summary>
     private static JsonNode ConvertEnum(Enum value)
-    {
-      return Type.GetTypeCode(Enum.GetUnderlyingType(value.GetType())) switch
-      {
-        TypeCode.SByte => JsonValue.Create(System.Convert.ToSByte(value, CultureInfo.InvariantCulture))!,
-        TypeCode.Byte => JsonValue.Create(System.Convert.ToByte(value, CultureInfo.InvariantCulture))!,
-        TypeCode.Int16 => JsonValue.Create(System.Convert.ToInt16(value, CultureInfo.InvariantCulture))!,
-        TypeCode.UInt16 => JsonValue.Create(System.Convert.ToUInt16(value, CultureInfo.InvariantCulture))!,
-        TypeCode.Int32 => JsonValue.Create(System.Convert.ToInt32(value, CultureInfo.InvariantCulture))!,
-        TypeCode.UInt32 => JsonValue.Create(System.Convert.ToUInt32(value, CultureInfo.InvariantCulture))!,
-        TypeCode.Int64 => JsonValue.Create(System.Convert.ToInt64(value, CultureInfo.InvariantCulture))!,
-        TypeCode.UInt64 => JsonValue.Create(System.Convert.ToUInt64(value, CultureInfo.InvariantCulture))!,
-        _ => throw SerializationError(
-          $"Enum result type '{value.GetType().FullName}' has an unsupported underlying type."
-        ),
-      };
-    }
+      => JsonValue.Create(value.ToString())!;
 
     private static JsonNode ConvertObjectId(ObjectId value)
     {
@@ -399,7 +456,7 @@ internal static class ResultSerializer
       => float.IsFinite(value) ? JsonValue.Create(value) : RecordNonFinite(path);
 
     private JsonNode? CreateFiniteNumber(double value, string path)
-      => double.IsFinite(value) ? JsonValue.Create(value) : RecordNonFinite(path);
+      => double.IsFinite(value) ? JsonValue.Create(RoundNumber(value)) : RecordNonFinite(path);
 
     private JsonNode? RecordNonFinite(string path)
     {
@@ -467,12 +524,220 @@ internal static class ResultSerializer
     private void ConsumeNode()
     {
       _totalNodes++;
-      if (_totalNodes > MaxTotalNodes)
+      if (_totalNodes > MaxTotalNodesHard)
       {
         throw SerializationError(
-          $"Result exceeded the maximum object graph size of {MaxTotalNodes} nodes."
+          $"Result exceeded the maximum object graph size of {MaxTotalNodesHard} nodes."
         );
       }
     }
+  }
+
+  /// <summary>
+  /// Shortens a converted result that is longer than
+  /// <see cref="MaxResultCharacters"/>. The largest list loses items from its
+  /// end first, then the longest text its tail, and only when neither is left
+  /// the object with the most properties its last ones. Every cut is added to
+  /// the truncation list, so the reader knows what is missing and can ask for
+  /// the rest with a narrower script.
+  /// </summary>
+  private static class ResultSizeBudget
+  {
+    private sealed record Candidate(
+      JsonNode Node, string Path, int Size, JsonNode? Parent, string? Key, int Index);
+
+    public static JsonNode? Fit(JsonNode? result, List<JsonNode> truncations)
+    {
+      if (result is null) return null;
+      var length = result.ToJsonString().Length;
+      // Each round removes at least one item, property or character.
+      for (var round = 0; length > MaxResultCharacters && round < 100_000; round++)
+      {
+        var candidates = new List<Candidate>();
+        Measure(result, "$", parent: null, key: null, index: -1, candidates);
+        var target = Choose(candidates);
+        if (target is null) break;
+
+        var excess = length - MaxResultCharacters;
+        switch (target.Node)
+        {
+          case JsonArray array:
+            CutArray(array, target.Path, excess, truncations);
+            break;
+          case JsonObject properties:
+            CutObject(properties, target.Path, excess, truncations);
+            break;
+          default:
+            var shortened = CutText(target, excess, truncations);
+            if (target.Parent is JsonObject parentObject) parentObject[target.Key!] = shortened;
+            else if (target.Parent is JsonArray parentArray) parentArray[target.Index] = shortened;
+            else result = shortened;
+            break;
+        }
+        length = result.ToJsonString().Length;
+      }
+
+      if (length > MaxResultCharacters)
+      {
+        throw SerializationError(
+          $"The result is {length} characters long, over the limit of {MaxResultCharacters}, " +
+          "and has no list, text or object left to shorten. Return fewer values."
+        );
+      }
+      return result;
+    }
+
+    /// <summary>
+    /// Lists first, because the end of a list is the least surprising thing to
+    /// lose; then texts; an object is cut only when nothing else is left, and
+    /// then the one with the most properties, which is a table keyed by name
+    /// rather than a record.
+    /// </summary>
+    private static Candidate? Choose(List<Candidate> candidates)
+    {
+      var lists = candidates.Where(candidate => candidate.Node is JsonArray).ToList();
+      if (lists.Count > 0) return lists.MaxBy(candidate => candidate.Size);
+      var texts = candidates.Where(candidate => candidate.Node is JsonValue).ToList();
+      if (texts.Count > 0) return texts.MaxBy(candidate => candidate.Size);
+      return candidates
+        .OrderByDescending(candidate => ((JsonObject)candidate.Node).Count)
+        .ThenByDescending(candidate => candidate.Size)
+        .FirstOrDefault();
+    }
+
+    /// <summary>Approximate JSON length of a node; collects what could be cut.</summary>
+    private static int Measure(
+      JsonNode? node, string path, JsonNode? parent, string? key, int index, List<Candidate> candidates)
+    {
+      switch (node)
+      {
+        case null:
+          return 4;
+        case JsonArray array:
+        {
+          var size = 2 + Math.Max(0, array.Count - 1);
+          for (var position = 0; position < array.Count; position++)
+          {
+            size += Measure(array[position], $"{path}[{position}]", array, null, position, candidates);
+          }
+          if (array.Count > 1) candidates.Add(new Candidate(array, path, size, parent, key, index));
+          return size;
+        }
+        case JsonObject properties:
+        {
+          var size = 2 + Math.Max(0, properties.Count - 1);
+          foreach (var property in properties)
+          {
+            size += property.Key.Length + 3
+              + Measure(property.Value, $"{path}.{property.Key}", properties, property.Key, -1, candidates);
+          }
+          if (properties.Count > 1) candidates.Add(new Candidate(properties, path, size, parent, key, index));
+          return size;
+        }
+        default:
+        {
+          var size = node.ToJsonString().Length;
+          if (node is JsonValue value && value.TryGetValue<string>(out var text)
+            && text.Length > MinKeptTextCharacters)
+          {
+            candidates.Add(new Candidate(node, path, size, parent, key, index));
+          }
+          return size;
+        }
+      }
+    }
+
+    private static void CutArray(JsonArray array, string path, int excess, List<JsonNode> truncations)
+    {
+      var total = array.Count;
+      var keep = total;
+      var removed = 0;
+      while (keep > 1 && removed < excess)
+      {
+        keep--;
+        removed += (array[keep]?.ToJsonString().Length ?? 4) + 1;
+      }
+      for (var position = total - 1; position >= keep; position--) array.RemoveAt(position);
+      RecordCut(truncations, path, keep, total, "returned", "total");
+      DropEntriesInside(truncations, path, keep);
+    }
+
+    private static void CutObject(JsonObject properties, string path, int excess, List<JsonNode> truncations)
+    {
+      var names = properties.Select(property => property.Key).ToList();
+      var keep = names.Count;
+      var removed = 0;
+      while (keep > 1 && removed < excess)
+      {
+        keep--;
+        removed += names[keep].Length + 4 + (properties[names[keep]]?.ToJsonString().Length ?? 4);
+      }
+      foreach (var name in names.Skip(keep))
+      {
+        properties.Remove(name);
+        truncations.RemoveAll(entry => IsAtOrBelow(PathOf(entry), $"{path}.{name}"));
+      }
+      RecordCut(truncations, path, keep, names.Count, "returned", "total");
+    }
+
+    private static JsonNode CutText(Candidate target, int excess, List<JsonNode> truncations)
+    {
+      var text = target.Node.GetValue<string>();
+      // Escaped characters make the JSON text longer than the string itself.
+      var share = Math.Max(0, target.Size - excess) / (double)target.Size;
+      var keep = Math.Clamp((int)(text.Length * share), MinKeptTextCharacters, text.Length - 1);
+      if (char.IsHighSurrogate(text[keep - 1])) keep--;
+      RecordCut(truncations, target.Path, keep, text.Length, "returnedCharacters", "totalCharacters");
+      return JsonValue.Create(text[..keep])!;
+    }
+
+    /// <summary>
+    /// One entry per path. A list that was already cut to the item limit keeps
+    /// the total recorded then, which is the real one.
+    /// </summary>
+    private static void RecordCut(
+      List<JsonNode> truncations, string path, int returned, int total, string returnedName, string totalName)
+    {
+      var existing = truncations.OfType<JsonObject>().FirstOrDefault(entry => PathOf(entry) == path);
+      if (existing is null)
+      {
+        truncations.Add(new JsonObject
+        {
+          ["path"] = path,
+          [returnedName] = returned,
+          [totalName] = total,
+          ["reason"] = "size",
+        });
+        return;
+      }
+      existing[returnedName] = returned;
+      existing["reason"] = "size";
+    }
+
+    /// <summary>Entries about lists inside items that are no longer returned.</summary>
+    private static void DropEntriesInside(List<JsonNode> truncations, string path, int keep)
+    {
+      truncations.RemoveAll(entry =>
+      {
+        var entryPath = PathOf(entry);
+        if (entryPath is null || !entryPath.StartsWith(path + "[", StringComparison.Ordinal)) return false;
+        var close = entryPath.IndexOf(']', path.Length + 1);
+        return close > 0
+          && int.TryParse(entryPath.AsSpan(path.Length + 1, close - path.Length - 1), NumberStyles.None,
+            CultureInfo.InvariantCulture, out var position)
+          && position >= keep;
+      });
+    }
+
+    private static bool IsAtOrBelow(string? entryPath, string path)
+      => entryPath is not null
+        && (entryPath == path
+          || entryPath.StartsWith(path + ".", StringComparison.Ordinal)
+          || entryPath.StartsWith(path + "[", StringComparison.Ordinal));
+
+    private static string? PathOf(JsonNode entry)
+      => entry is JsonObject fields && fields["path"] is JsonValue value && value.TryGetValue<string>(out var path)
+        ? path
+        : null;
   }
 }

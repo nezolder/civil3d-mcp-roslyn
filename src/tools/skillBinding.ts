@@ -9,7 +9,9 @@
  *   var name = 100;                  int / long name = 100;   (integer)
  *   var name = 0.0;  / double.NaN    double name = 0.0;       (double)
  *   var name = true;                 bool name = true;        (boolean)
- *   var name = new (double x, double y)[] { };                (tuple array)
+ *   var name = new (double x, double y)[] { };                (rows: tuple array)
+ *   var name = new double[] { };     string[] name = new string[] { "a" };
+ *                                                             (plain list)
  *
  * Only the initialiser is replaced, and every value becomes a C# literal, so
  * caller input can never add code. Templates in any other form stay
@@ -31,11 +33,32 @@ interface TupleElement {
 }
 
 interface Declaration {
-  kind: ScalarKind | "tuple-array";
+  kind: ScalarKind | "tuple-array" | "scalar-array";
+  /** Fields of one row of a tuple array. */
   elements?: TupleElement[];
+  /** Item type of a plain list. */
+  itemKind?: ScalarKind;
   /** Start and end of the initialiser expression within the template code. */
   start: number;
   end: number;
+  /** The initialiser as written in the template: the default value. */
+  initializer: string;
+}
+
+/**
+ * What a caller needs to know to fill one parameter: the compact form of a
+ * skill's documentation, also used to explain a missing or wrong value.
+ */
+export interface ParameterCard {
+  name: string;
+  /** string, int, long, double, bool, a plain list such as "double[]", or "rows". */
+  type: string;
+  required: boolean;
+  /** Value used when an optional parameter is omitted; absent when there is none to show. */
+  default?: string | number | boolean | Array<string | number | boolean>;
+  /** For "rows": the fields of one row, in positional order. */
+  fields?: Array<{ name: string; type: string }>;
+  description?: string;
 }
 
 export class SkillBindingError extends Error {}
@@ -43,6 +66,8 @@ export class SkillBindingError extends Error {}
 const CODE_BLOCK = /```csharp\r?\n([\s\S]*?)```/;
 const SCALAR_TYPES = new Set<ScalarKind>(["string", "int", "long", "double", "bool"]);
 const TUPLE_ARRAY = /^new \(([^()]+)\)\[\] \{\s*\}$/;
+const SCALAR_ARRAY = /^new (string|int|long|double|bool)\[\] \{(.*)\}$/;
+const STRING_LITERAL = /^"(?:[^"\\\r\n]|\\.)*"/;
 
 /** The first C# block of a skill body: its code template. */
 export function extractCodeTemplate(content: string): string | null {
@@ -98,15 +123,22 @@ export function bindSkillCode(
     return declaration;
   });
 
+  const missing = parameters.filter(
+    (parameter) => parameter.required && !Object.prototype.hasOwnProperty.call(values, parameter.name)
+  );
+  if (missing.length > 0) {
+    // Name every parameter at once, so one more call is enough to get it right.
+    const names = missing.map((parameter) => `'${parameter.name}'`).join(", ");
+    throw new SkillBindingError(
+      `Skill '${skillName}' requires parameter${missing.length > 1 ? "s" : ""} ${names}. ` +
+        `Parameters: ${summarizeParameters(content, parameters)}.`
+    );
+  }
+
   const replacements: Array<{ start: number; end: number; literal: string }> = [];
   for (const [index, parameter] of parameters.entries()) {
     const declaration = declarations[index];
-    if (!Object.prototype.hasOwnProperty.call(values, parameter.name)) {
-      if (parameter.required) {
-        throw new SkillBindingError(`Skill '${skillName}' requires parameter '${parameter.name}'.`);
-      }
-      continue;
-    }
+    if (!Object.prototype.hasOwnProperty.call(values, parameter.name)) continue;
     replacements.push({
       start: declaration.start,
       end: declaration.end,
@@ -121,9 +153,115 @@ export function bindSkillCode(
   return bound;
 }
 
+/**
+ * The parameter cards of a skill: type, default and row fields are read from
+ * the template itself where the parameter is bindable, so the card cannot
+ * disagree with what a run by name accepts.
+ */
+export function describeParameters(content: string, parameters: SkillParameter[]): ParameterCard[] {
+  const code = extractCodeTemplate(content);
+  return parameters.map((parameter) => {
+    const declaration = code === null ? null : findDeclaration(code, parameter.name);
+    const card: ParameterCard = {
+      name: parameter.name,
+      type: declaration === null ? parameter.type : declarationType(declaration),
+      required: parameter.required,
+    };
+    if (declaration?.kind === "tuple-array") {
+      card.fields = declaration.elements!.map((element) => ({ name: element.name, type: element.kind }));
+    }
+    // The default of a required parameter is only a placeholder in the template.
+    const defaultValue = declaration === null || parameter.required ? undefined : defaultOf(declaration);
+    if (defaultValue !== undefined) card.default = defaultValue;
+    if (parameter.description) card.description = parameter.description;
+    return card;
+  });
+}
+
+/** One line naming every parameter with its type, for error messages. */
+function summarizeParameters(content: string, parameters: SkillParameter[]): string {
+  return describeParameters(content, parameters)
+    .map((card) => {
+      const type = card.fields
+        ? `rows of {${card.fields.map((field) => `${field.name}: ${field.type}`).join(", ")}}`
+        : card.type;
+      const state = card.required
+        ? "required"
+        : card.default === undefined ? "optional" : `optional, default ${JSON.stringify(card.default)}`;
+      return `${card.name} (${type}, ${state})`;
+    })
+    .join("; ");
+}
+
+function declarationType(declaration: Declaration): string {
+  if (declaration.kind === "tuple-array") return "rows";
+  if (declaration.kind === "scalar-array") return `${declaration.itemKind}[]`;
+  return declaration.kind;
+}
+
+/** The template default as a JSON value, or undefined when it says "not set". */
+function defaultOf(declaration: Declaration): ParameterCard["default"] | undefined {
+  if (declaration.kind === "tuple-array") return undefined;
+  if (declaration.kind === "scalar-array") {
+    const items = splitLiterals(declaration.initializer.match(SCALAR_ARRAY)![2], declaration.itemKind!);
+    const values = items!.map((item) => literalValue(item, declaration.itemKind!));
+    return values.length === 0 || values.some((value) => value === undefined)
+      ? undefined
+      : (values as Array<string | number | boolean>);
+  }
+  const value = literalValue(declaration.initializer, declaration.kind);
+  // An empty text or NaN is the template's way of saying that nothing is set.
+  return value === "" ? undefined : value;
+}
+
+function literalValue(literal: string, kind: ScalarKind): string | number | boolean | undefined {
+  switch (kind) {
+    case "string":
+      try {
+        // A C# regular string literal without unusual escapes is also valid JSON.
+        return JSON.parse(literal) as string;
+      } catch {
+        return literal.slice(1, -1);
+      }
+    case "bool":
+      return literal === "true";
+    default: {
+      const value = Number(literal);
+      return Number.isFinite(value) ? value : undefined;
+    }
+  }
+}
+
+/** The literals of a plain list initialiser, or null when anything else is in it. */
+function splitLiterals(text: string, kind: ScalarKind): string[] | null {
+  const items: string[] = [];
+  let rest = text.trim();
+  while (rest.length > 0) {
+    let literal: string;
+    if (kind === "string") {
+      const match = rest.match(STRING_LITERAL);
+      if (!match) return null;
+      literal = match[0];
+    } else {
+      literal = rest.split(",")[0].trim();
+      const literalKind = inferScalarKind(literal);
+      const compatible = literalKind === kind
+        || ((kind === "long" || kind === "double") && literalKind === "int");
+      if (!compatible) return null;
+    }
+    items.push(literal);
+    rest = rest.slice(rest.indexOf(literal) + literal.length).trim();
+    if (rest.length === 0) break;
+    if (!rest.startsWith(",")) return null;
+    rest = rest.slice(1).trim();
+    if (rest.length === 0) return null;
+  }
+  return items;
+}
+
 function findDeclaration(code: string, name: string): Declaration | null {
   const pattern = new RegExp(
-    `^(var|string|int|long|double|bool)[ \\t]+${escapeRegExp(name)}[ \\t]*=[ \\t]*(.+?)[ \\t]*;[ \\t]*(?://.*)?$`,
+    `^(var|(?:string|int|long|double|bool)(?:\\[\\])?)[ \\t]+${escapeRegExp(name)}[ \\t]*=[ \\t]*(.+?)[ \\t]*;[ \\t]*(?://.*)?$`,
     "gm"
   );
   const matches = [...code.matchAll(pattern)];
@@ -133,6 +271,16 @@ function findDeclaration(code: string, name: string): Declaration | null {
   const start = matches[0].index! + line.indexOf(initializer, line.indexOf("=") + 1);
   const end = start + initializer.length;
 
+  const list = initializer.match(SCALAR_ARRAY);
+  if (list) {
+    // "double[] name = new double[] { ... }" must name the same item type twice.
+    const itemKind = list[1] as ScalarKind;
+    if (declaredType !== "var" && declaredType !== `${itemKind}[]`) return null;
+    if (splitLiterals(list[2], itemKind) === null) return null;
+    return { kind: "scalar-array", itemKind, start, end, initializer };
+  }
+  if (declaredType.endsWith("[]")) return null;
+
   if (declaredType !== "var") {
     // The default must be a single literal of that type, so replacing it
     // cannot drop another declarator such as "double x = 0, y = 0".
@@ -141,7 +289,7 @@ function findDeclaration(code: string, name: string): Declaration | null {
     const compatible = literalKind === kind
       || (kind === "long" && literalKind === "int")
       || (kind === "double" && literalKind === "int");
-    return compatible ? { kind, start, end } : null;
+    return compatible ? { kind, start, end, initializer } : null;
   }
 
   const tuple = initializer.match(TUPLE_ARRAY);
@@ -153,11 +301,11 @@ function findDeclaration(code: string, name: string): Declaration | null {
         : null;
     });
     if (elements.length < 2 || elements.some((element) => element === null)) return null;
-    return { kind: "tuple-array", elements: elements as TupleElement[], start, end };
+    return { kind: "tuple-array", elements: elements as TupleElement[], start, end, initializer };
   }
 
   const kind = inferScalarKind(initializer);
-  return kind === null ? null : { kind, start, end };
+  return kind === null ? null : { kind, start, end, initializer };
 }
 
 function inferScalarKind(initializer: string): ScalarKind | null {
@@ -169,6 +317,13 @@ function inferScalarKind(initializer: string): ScalarKind | null {
 }
 
 function toLiteral(name: string, declaration: Declaration, value: unknown): string {
+  if (declaration.kind === "scalar-array") {
+    if (!Array.isArray(value)) {
+      throw new SkillBindingError(`Parameter '${name}' must be an array of ${declaration.itemKind} values.`);
+    }
+    const items = value.map((item, index) => scalarLiteral(`${name}[${index}]`, declaration.itemKind!, item));
+    return `new ${declaration.itemKind}[] { ${items.join(", ")} }`;
+  }
   if (declaration.kind !== "tuple-array") return scalarLiteral(name, declaration.kind, value);
 
   const elements = declaration.elements!;

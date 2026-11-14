@@ -32,6 +32,9 @@ var tests = new (string Name, Func<Task> Run)[]
   ("a declaration as loop body stays a compile error", DeclarationLoopBodyAsync),
   ("await is refused with its position before compiling", AwaitIsRefusedAsync),
   ("an identifier named await in a synchronous method is allowed", AwaitIdentifierAllowedAsync),
+  ("the guard refuses blocked types and members by what the compiler resolved", SandboxRefusesBlockedSymbolsAsync),
+  ("the guard lets look-alike names, comments and strings through", SandboxAllowsLookAlikesAsync),
+  ("a refused script runs nothing and is not cached", SandboxRefusalRunsNothingAsync),
   ("LINQ results serialize without ToList", LinqResultsAsync),
   ("dates and times serialize as ISO 8601 text", DateResultsAsync),
   ("tuples serialize as arrays", TupleResultsAsync),
@@ -445,6 +448,113 @@ static async Task AwaitIdentifierAllowedAsync()
 {
   var result = await RoslynExecutor.ExecuteAsync("int F() { var @await = 3; return @await; }\nreturn F();", Context());
   Assert(Equals(result, 3), $"unexpected result: {result}");
+}
+
+static async Task SandboxRefusesBlockedSymbolsAsync()
+{
+  // Scripts can only name types from assemblies that are loaded, as in Civil 3D.
+  foreach (var type in new[]
+  {
+    typeof(System.Diagnostics.Process), typeof(System.Net.Http.HttpClient), typeof(System.Net.Sockets.TcpClient),
+    typeof(System.Net.WebClient), typeof(Microsoft.Win32.Registry), typeof(System.Runtime.Loader.AssemblyLoadContext),
+  })
+  {
+    Assert(type.Assembly.Location.Length > 0, $"{type.FullName} must come from a file");
+  }
+
+  var cases = new (string Code, string Name, int Line, string Reason)[]
+  {
+    ("using System.IO;\nFile.Delete(\"x\");", "System.IO.File.Delete", 2, "Deleting files or folders"),
+    ("System.IO.Directory.Delete(\"x\", true);", "System.IO.Directory.Delete", 1, "Deleting files or folders"),
+    ("var info = new System.IO.FileInfo(\"x\");\ninfo.Delete();", "System.IO.FileInfo.Delete", 2, "Deleting files or folders"),
+    ("using System.Diagnostics;\nvar p = new Process();\nreturn 1;", "System.Diagnostics.Process", 2, "processes"),
+    ("System.Diagnostics.Process.Start(\"notepad.exe\");", "System.Diagnostics.Process", 1, "processes"),
+    ("using System.Diagnostics;\n\nProcessStartInfo info = new();", "System.Diagnostics.ProcessStartInfo", 3, "processes"),
+    ("using P = System.Diagnostics.Process;\nreturn P.GetCurrentProcess().Id;", "System.Diagnostics.Process", 1, "processes"),
+    ("return typeof(System.Diagnostics.Process).Name;", "System.Diagnostics.Process", 1, "processes"),
+    ("var client = new System.Net.Http.HttpClient();", "System.Net.Http.HttpClient", 1, "HTTP"),
+    ("var client = new System.Net.WebClient();", "System.Net.WebClient", 1, "HTTP"),
+    ("using System.Net.Sockets;\nvar client = new TcpClient();", "System.Net.Sockets.TcpClient", 2, "Socket"),
+    ("System.Reflection.Assembly.LoadFrom(\"x.dll\");", "System.Reflection.Assembly.LoadFrom", 1, "Loading assemblies"),
+    ("Environment.Exit(0);", "System.Environment.Exit", 1, "Ending the Civil 3D process"),
+    ("return Microsoft.Win32.Registry.CurrentUser.Name;", "Microsoft.Win32.Registry", 1, "Registry"),
+    ("AppDomain.CreateDomain(\"x\");", "System.AppDomain.CreateDomain", 1, "AppDomains"),
+    ("using System.Runtime.InteropServices;\n[DllImport(\"user32.dll\")] static extern bool MessageBeep(uint type);\nreturn 1;",
+      "System.Runtime.InteropServices.DllImportAttribute", 2, "native code"),
+    ("return System.Runtime.InteropServices.Marshal.SizeOf<int>();", "System.Runtime.InteropServices.Marshal", 1, "native code"),
+    // Inside a loop the script is compiled with a checkpoint; the line is still the caller's.
+    ("for (var i = 0; i < 1; i++)\n{\n  System.IO.File.Delete(\"x\");\n}", "System.IO.File.Delete", 3, "Deleting files or folders"),
+  };
+
+  foreach (var (code, name, line, reason) in cases)
+  {
+    var error = await FailAsync(code);
+    Assert(error.Code == "CIVIL3D.SANDBOX_VIOLATION", $"{code}: unexpected code {error.Code}: {error.Message}");
+    Assert(error.Message.Contains($"'{name}' at script line {line}.", StringComparison.Ordinal)
+      && error.Message.Contains(reason, StringComparison.Ordinal)
+      && error.Message.EndsWith("Nothing was run.", StringComparison.Ordinal),
+      $"{code}: unexpected message: {error.Message}");
+  }
+}
+
+static async Task SandboxAllowsLookAlikesAsync()
+{
+  // Each of these was refused when the guard matched text patterns.
+  var result = await RoslynExecutor.ExecuteAsync(
+    "class Region { public double StartStation = 5; }\n" +
+    "var process = new Region();\n" +
+    "var styleRegistry = new List<int>();\n" +
+    "styleRegistry.Add(1);\n" +
+    "// Process.Start(\"x\") and System.Net.Http are only mentioned here\n" +
+    "var note = \"System.IO.File.Delete, Environment.Exit, AppDomain.CreateDomain\";\n" +
+    "return process.StartStation + styleRegistry.Count + (note.Length > 0 ? 0 : 1);",
+    Context());
+  Assert(Equals(result, 6.0), $"unexpected result: {result}");
+
+  // Neighbours of blocked names that scripts legitimately use.
+  foreach (var code in new[]
+  {
+    "using System.Diagnostics;\nvar watch = Stopwatch.StartNew();\nreturn watch.ElapsedTicks >= 0;",
+    "using System.IO;\nreturn File.Exists(Path.Combine(Path.GetTempPath(), \"no-such-file\")) == false;",
+    "using System.Runtime.InteropServices;\ntry { return true; } catch (COMException) { return false; }",
+    "return Environment.NewLine.Length > 0 && typeof(string).Assembly.GetName().Name != null;",
+    "using System.Net;\nreturn IPAddress.Loopback.ToString() == \"127.0.0.1\";",
+  })
+  {
+    Assert(Equals(await RoslynExecutor.ExecuteAsync(code, Context()), true), $"must run: {code}");
+  }
+}
+
+static async Task SandboxRefusalRunsNothingAsync()
+{
+  RoslynExecutor.ClearCache();
+  var context = Context();
+  const string code = "Value = 99;\nSystem.IO.File.Delete(\"civil3d-mcp-no-such-file\");\nreturn Value;";
+  for (var attempt = 0; attempt < 2; attempt++)
+  {
+    try
+    {
+      await RoslynExecutor.ExecuteAsync(code, context);
+      throw new InvalidOperationException("the script was expected to be refused");
+    }
+    catch (JsonRpcDispatchException error)
+    {
+      Assert(error.Code == "CIVIL3D.SANDBOX_VIOLATION", $"unexpected code: {error.Code}");
+    }
+  }
+  Assert(context.Value == 41, "no statement of a refused script may run");
+  Assert(RoslynExecutor.CachedScriptCount == 0, "a refused script must not be cached");
+
+  // An empty script is still refused before anything is compiled.
+  try
+  {
+    await RoslynExecutor.ExecuteAsync("  ", context);
+    throw new InvalidOperationException("empty code was expected to be refused");
+  }
+  catch (JsonRpcDispatchException error)
+  {
+    Assert(error.Code == "CIVIL3D.INVALID_INPUT", $"unexpected code: {error.Code}");
+  }
 }
 
 static async Task<string> ResultJsonAsync(string code)

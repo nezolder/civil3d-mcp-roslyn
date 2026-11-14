@@ -1,12 +1,28 @@
 # Published development status
 
-Updated: 2026-11-13
+Updated: 2026-11-14
 
 This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
 
 ## Current catalogue
 
-The catalogue contains **39 skills** with **42 C# templates**; **26** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+The catalogue contains **39 skills** with **40 C# templates**; **38** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+
+## Smaller replies and fewer rounds from the architecture review (2026-11-14)
+
+The third round of the review is about what an assistant pays per call: the size of a reply, and the extra calls caused by a refused script, a missing name or a template sent back and forth.
+
+- **Reply size.** A result is limited to 40000 characters. A longer one is shortened from the end of its largest lists (then long texts, then a table keyed by name) and every cut is listed under `truncated` with `reason: "size"`; before, 1000 items and 10000 nodes allowed replies of more than 100000 tokens, and a result over the node limit failed as a whole. A `double` is rounded to 10 significant digits with its whole part untouched. Enums return as their names.
+- **Running by name.** 38 of the 39 recipes run by name (26 before). Twelve older recipes were given bindable parameters; `station_offset` and `create_polyline` became one template each. Plain lists (`double[]`, `string[]`, `int[]`, `long[]`, `bool[]`) can be bound besides rows. A missing required parameter is answered with a line that names every parameter with type and default.
+- **Parameter card.** `civil3d_skills` `get` with `view: "card"` returns only the parameters of a recipe (type, default, row fields, one-line description), read from the template itself. Over the whole catalogue the cards are about 58000 characters, the texts without code 115000 and the full recipes 377000.
+- **API lookup.** The exactly named type or member comes first instead of alphabetical order, and the pressure-pipe and data-shortcut assemblies are read when loaded.
+- **Script guard.** The guard compares the types and members the compiler resolved with its list, instead of matching text patterns. It no longer refuses `process.StartStation`, `styleRegistry.Add` or a comment, and it does refuse `File.Delete` behind a `using` line, `new Process()`, `FileInfo.Delete`, `WebClient` and `Environment.FailFast`. It stays a guard rail, not a security boundary.
+
+Evidence boundaries:
+
+- **Proven offline:** the serializer, guard and lookup tests (rounding, name of an enum, each kind of cut and its report, 18 refused and 6 allowed script forms, ranking); all 40 templates and the twelve changed recipes bound with sample values compile against the Civil 3D 2025 assemblies; no shipped template is one the guard refuses.
+- **Unverified:** everything in a running Civil 3D. The twelve changed recipes were not run live; the three write recipes among them (`create_polyline`, `create_cogo_points`, `create_tin_surface`) were rewritten and need a live check on a throwaway drawing before use on project work. Whether Civil 3D has the pressure-pipe and data-shortcut assemblies loaded under the names in the list was not checked live.
+- **Not changed:** `replace_alignment_with_fixed_primitives` still takes its table as adapted code. Making it bindable changes the input of a live-validated write recipe and belongs with a new live validation. The manual unlock command and the undo steps left by queries (G4, G5 of the review) need a live session and are not part of this change.
 
 ## The server hands over its own working order (2026-11-13)
 

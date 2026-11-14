@@ -21,7 +21,7 @@ parameters:
 ## Code Template
 
 ```csharp
-var surfaceNameFilter = "";
+var surfaceName = "";
 var limit = 50;
 if (limit < 1) return new { error = "limit must be at least 1" };
 
@@ -32,8 +32,8 @@ foreach (ObjectId surfaceId in CivilDoc.GetSurfaceIds())
 {
     var surface = Transaction.GetObject(surfaceId, OpenMode.ForRead) as Autodesk.Civil.DatabaseServices.Surface;
     if (surface == null) continue;
-    if (!string.IsNullOrWhiteSpace(surfaceNameFilter)
-        && !surface.Name.Equals(surfaceNameFilter, StringComparison.OrdinalIgnoreCase))
+    if (!string.IsNullOrWhiteSpace(surfaceName)
+        && !surface.Name.Equals(surfaceName, StringComparison.OrdinalIgnoreCase))
         continue;
 
     total++;
@@ -79,7 +79,7 @@ return new {
     returned = surfaces.Count,
     truncated = total > surfaces.Count,
     limit,
-    surfaceNameFilter = string.IsNullOrWhiteSpace(surfaceNameFilter) ? null : surfaceNameFilter,
+    surfaceNameFilter = string.IsNullOrWhiteSpace(surfaceName) ? null : surfaceName,
     surfaces
 };
 ```

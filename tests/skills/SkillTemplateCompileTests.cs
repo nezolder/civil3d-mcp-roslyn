@@ -192,6 +192,16 @@ if (errors.Length > 0)
 }
 
 Console.WriteLine($"Civil 3D 2025 metadata compilation passed for {blockCount} C# skill templates.");
+
+// A recipe the plugin's guard refuses could never run; catch that here, not in Civil 3D.
+if (Civil3DMcpPlugin.ScriptSandbox.FindViolation(compilation) is { } violation)
+{
+  Console.Error.WriteLine(
+    $"A skill template uses '{violation.Name}', which the script guard refuses: {violation.Reason}.");
+  Environment.ExitCode = 1;
+  return;
+}
+Console.WriteLine("No skill template uses a type or member the script guard refuses.");
 try
 {
   FixedPrimitiveInputTests.Run(repositoryRoot,
@@ -217,4 +227,14 @@ static string FindRepositoryRoot(string startPath)
   }
 
   throw new DirectoryNotFoundException("Could not locate the repository root.");
+}
+
+namespace Civil3DMcpPlugin
+{
+  /// <summary>Same shape as the plugin's exception in PluginRuntime.cs; ScriptSandbox.cs needs it to compile.</summary>
+  public sealed class JsonRpcDispatchException : Exception
+  {
+    public JsonRpcDispatchException(string code, string message) : base(message) => Code = code;
+    public string Code { get; }
+  }
 }

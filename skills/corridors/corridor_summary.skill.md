@@ -25,7 +25,7 @@ parameters:
 ## Code Template
 
 ```csharp
-var corridorNameFilter = "";
+var corridorName = "";
 var limit = 20;
 var baselineLimit = 20;
 if (limit < 1 || baselineLimit < 1) return new { error = "limits must be at least 1" };
@@ -37,8 +37,8 @@ foreach (ObjectId corridorId in CivilDoc.CorridorCollection)
 {
     var corridor = Transaction.GetObject(corridorId, OpenMode.ForRead) as Corridor;
     if (corridor == null) continue;
-    if (!string.IsNullOrWhiteSpace(corridorNameFilter)
-        && !corridor.Name.Equals(corridorNameFilter, StringComparison.OrdinalIgnoreCase))
+    if (!string.IsNullOrWhiteSpace(corridorName)
+        && !corridor.Name.Equals(corridorName, StringComparison.OrdinalIgnoreCase))
         continue;
 
     total++;
@@ -119,7 +119,7 @@ return new {
     truncated = total > corridors.Count,
     limit,
     baselineLimit,
-    corridorNameFilter = string.IsNullOrWhiteSpace(corridorNameFilter) ? null : corridorNameFilter,
+    corridorNameFilter = string.IsNullOrWhiteSpace(corridorName) ? null : corridorName,
     corridors
 };
 ```

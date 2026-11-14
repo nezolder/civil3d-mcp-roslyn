@@ -17,12 +17,15 @@ parameters:
 ## Code Template
 
 ```csharp
+var surfaceName = "";
+if (string.IsNullOrWhiteSpace(surfaceName)) return new { error = "surfaceName is required" };
+
 // Find the EG surface
 TinSurface egSurface = null;
 foreach (ObjectId id in CivilDoc.GetSurfaceIds())
 {
     var s = Transaction.GetObject(id, OpenMode.ForRead) as TinSurface;
-    if (s != null && s.Name.Equals("SURFACE_NAME", StringComparison.OrdinalIgnoreCase))
+    if (s != null && s.Name.Equals(surfaceName, StringComparison.OrdinalIgnoreCase))
     { egSurface = s; break; }
 }
 if (egSurface == null) return new { error = "Surface not found" };
@@ -73,5 +76,5 @@ return new {
 
 ## Usage Notes
 - This is an inventory report; it does not create profiles or compute cut/fill volumes
-- Adapt the selected surface name and returned fields to the specific use case
+- The report lists every alignment of the drawing; adapt the returned fields in adapted code when a narrower report is needed
 - Combine with station_offset skill for detailed station-by-station analysis

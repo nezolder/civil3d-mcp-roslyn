@@ -28,8 +28,8 @@ attempts are allowed, how results are reported) are not part of it.
    every later call. A window title or "the one I opened" is not an identification.
 3. Read with `civil3d_query`. Reading needs no save and no backup. Keep queries bounded and say so
    when a result was truncated.
-4. Prefer a catalog skill: `civil3d_skills` `search`, then `get`. When `run_by_name` is true, run it
-   with `skill` and `params` instead of sending code.
+4. Prefer a catalog skill: `civil3d_skills` `search`, then `get` with `view: "card"`. When
+   `run_by_name` is true, run it with `skill` and `params` instead of sending code.
 5. Write with one `civil3d_execute` call that carries its own checks: `expectedDrawing`,
    `requireClean: true`, `backup: true`, `saveDrawing: true` when the change should reach the file,
    and a one-line `description`. The script must not save by itself (`Database.SaveAs`, `QSAVE`).
@@ -78,10 +78,16 @@ Details: `civil3d_skills` with `action: "guide"` and a `topic`:
   committed. `civil3d_query` still runs the code it is given, so send only code meant to read.
 - Bound each query: name the objects or the area, the fields, and a maximum count; page through
   long lists. Process large geometry inside the script and return the summary.
-- A collection of more than 1000 items is cut to its first 1000 and the reply is wrapped as
-  `{result, truncated: [{path, returned, total}]}`. NaN and Infinity come back as `null` with
+- A result is kept below 40000 characters. A collection keeps at most 1000 items, and a result
+  that is still too long loses the end of its largest lists, then of long texts. The reply is
+  then wrapped as `{result, truncated: [{path, returned, total}]}`, with `reason: "size"` on a
+  cut made for size. NaN and Infinity come back as `null` with
   `{result, nonFinite: {count, paths}}`. Say so when you report such a result; a capped list was
-  not fully checked.
+  not fully checked. Ask for the rest with a narrower query: a name, a station range, or
+  `Skip` and `Take`.
+- Numbers are rounded to 10 significant digits; the whole part is never rounded. That keeps a
+  tenth of a millimetre on a seven-digit coordinate. Return a number as text when every digit
+  matters.
 - Do not create temporary objects in a query. The rollback removes them, but Civil 3D can
   still mark the drawing as modified, and `requireClean` then refuses the next write.
 - A query reads the open drawing as it is in memory, including unsaved changes. Say whether a
@@ -225,7 +231,7 @@ has reopened the drawing (or the recovered file), with a fresh `status`, path, f
 | `CIVIL3D.BACKUP_FAILED` | `not_started` | The copy could not be made or verified. Fix the folder; do not write without the copy. |
 | `CIVIL3D.PLUGIN_UPDATE_REQUIRED` | `not_started` | Older plugin; see the `writing` topic. |
 | `CIVIL3D.COMPILATION_ERROR` | `reported_error` | The script did not start. Fix it from the diagnostics; see the `csharp` topic. |
-| `CIVIL3D.SANDBOX_VIOLATION` | `reported_error` | The script text contains something the plugin blocks; it was refused before compiling. |
+| `CIVIL3D.SANDBOX_VIOLATION` | `reported_error` | The script uses a type or member the plugin refuses; the message names it and its line. Nothing ran. See the `csharp` topic. |
 | `CIVIL3D.TRANSACTION_FAILED` | `reported_error` | The script threw or the commit failed; the change was rolled back (`committed: false` in the receipt). |
 | `CIVIL3D.RESULT_SERIALIZATION_FAILED` | `reported_error` | The return value could not be turned into JSON. This happens before the commit; confirm with `committed` in the receipt, then return simpler values. |
 | `CIVIL3D.SAVE_FAILED` | `reported_error` | Committed in the open drawing, not saved. Do not repeat the change; resolve the save with the user. |
@@ -245,10 +251,15 @@ are imported. Keep it synchronous: a script that uses `await` is rejected.
 - Returnable: primitives, strings, `Guid`, dates and times, anonymous objects and classes or
   records declared in the script, arrays, lists and other sequences (LINQ included), tuples,
   `Dictionary<string, ...>`, `ObjectId`, `Handle`, `Point2d/3d`, `Vector2d/3d`. Enums come back
-  as numbers; use `.ToString()` for names.
+  as their names.
 - Not returnable: `DBObject` instances (entities, Civil objects). Return their fields.
-- Limits: 1000 items per collection, depth 8, 10000 nodes in total. Do not work around them;
-  summarize or page instead.
+- Limits: 1000 items per collection, depth 8, 40000 characters and about 10000 values in total.
+  Past them lists are cut and reported under `truncated`. Do not work around them; summarize or
+  page instead.
+- Refused before the script runs (`CIVIL3D.SANDBOX_VIOLATION`): starting processes, deleting
+  files or folders, HTTP and sockets, loading assemblies, native calls, the registry, ending the
+  process. The check reads what the compiler resolved, so a comment or a similar name is not
+  refused. It is a guard rail against accidents, not a security boundary.
 - Names that exist twice have a default: `DBObject`, `Entity` and `ErrorStatus` are the AutoCAD
   types, `Surface` and `Section` the Civil 3D ones, `Exception` is `System.Exception`. Write the
   full name for the other one, and for other duplicated names such as `Table`.
@@ -257,7 +268,8 @@ are imported. Keep it synchronous: a script that uses `await` is rejected.
 
 ### Before sending new code
 
-- Prefer a catalog skill to new code. An unchanged skill needs no extra check.
+- Prefer a catalog skill to new code. An unchanged skill needs no extra check; `get` with
+  `view: "card"` lists its parameters with type, default and row fields.
 - For an API member you are not sure of, use `civil3d_skills` with `action: "api_lookup"`. It
   searches the public metadata of the loaded Civil 3D assemblies and runs nothing. Do not dump
   whole assemblies or objects.
