@@ -11,23 +11,34 @@ parameters:
   - name: surfaceName
     type: string
     required: true
+    description: Exact surface name
   - name: x
     type: double
     required: true
+    description: X of the point in drawing coordinates
   - name: y
     type: double
     required: true
+    description: Y of the point in drawing coordinates
 ---
 
 ## Code Template
 
 ```csharp
+var surfaceName = "";
+var x = double.NaN;
+var y = double.NaN;
+
+if (string.IsNullOrWhiteSpace(surfaceName)) return new { error = "surfaceName is required" };
+if (double.IsNaN(x) || double.IsInfinity(x) || double.IsNaN(y) || double.IsInfinity(y))
+    return new { error = "x and y must be finite numbers" };
+
 // Find the surface by name
 Autodesk.Civil.DatabaseServices.Surface targetSurface = null;
 foreach (ObjectId id in CivilDoc.GetSurfaceIds())
 {
     var s = Transaction.GetObject(id, OpenMode.ForRead) as Autodesk.Civil.DatabaseServices.Surface;
-    if (s != null && s.Name.Equals("SURFACE_NAME", StringComparison.OrdinalIgnoreCase))
+    if (s != null && s.Name.Equals(surfaceName, StringComparison.OrdinalIgnoreCase))
     {
         targetSurface = s;
         break;
@@ -37,8 +48,6 @@ foreach (ObjectId id in CivilDoc.GetSurfaceIds())
 if (targetSurface == null)
     return new { error = "Surface not found" };
 
-double x = 1000.0;  // Replace with actual X
-double y = 2000.0;  // Replace with actual Y
 double elevation = targetSurface.FindElevationAtXY(x, y);
 
 return new {
@@ -51,3 +60,4 @@ return new {
 - Throws exception if the point is outside the surface boundary
 - Coordinates must be in the drawing's coordinate system
 - Works with both TIN and Grid surfaces
+- For many points at once, or to compare two surfaces, use `compare_surface_elevations`

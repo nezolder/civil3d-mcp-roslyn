@@ -34,6 +34,7 @@
     <Compile Include="PluginTestDoubles.cs" />
     <Compile Include="PluginCoreTests.cs" />
     <Compile Include="ResultSerializerTests.cs" />
+    <Compile Include="ApiLookupRankingTests.cs" />
     <Compile Include="ScriptCacheTests.cs" />
     <Compile Include="ModalTestHost.cs" />
   </ItemGroup>

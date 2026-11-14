@@ -8,7 +8,7 @@ import { InstanceStatus, listInstances, withApplicationConnection } from "../uti
 import { SERVER_BUILD, SERVER_VERSION, UNKNOWN_COMMIT } from "../buildInfo.js";
 import { Civil3dMcpError, createStructuredToolErrorResult } from "../errors/structuredError.js";
 import { instanceIdSchema } from "./instanceSelection.js";
-import { isRunnableByName, omitCodeTemplate } from "./skillBinding.js";
+import { describeParameters, isRunnableByName, omitCodeTemplate } from "./skillBinding.js";
 import { GUIDE_POINTER, GUIDE_TOPICS, GUIDE_UNAVAILABLE_TEXT, usageGuideText } from "../usageGuide.js";
 
 const log = createLogger("SkillsTool");
@@ -158,6 +158,28 @@ function discoverySummary(skill: SkillFile) {
     workflow_tags: metadata.workflow_tags,
     tested_civil_version: metadata.tested_civil_version,
     validation_summary: metadata.validation_summary,
+  };
+}
+
+/**
+ * The compact form of a skill: enough to run it by name, a fraction of the
+ * full text. Types, defaults and row fields come from the template, so the
+ * card states what a run by name accepts.
+ */
+function parameterCard(skill: SkillFile) {
+  const metadata = skill.metadata;
+  const runByName = isRunnableByName(skill.content, metadata.parameters);
+  return {
+    name: metadata.name,
+    description: metadata.description,
+    requires_write: metadata.requires_write,
+    run_by_name: runByName,
+    parameters: describeParameters(skill.content, metadata.parameters),
+    next: runByName
+      ? `Pass skill and params to ${metadata.requires_write ? "civil3d_execute" : "civil3d_query"}. ` +
+        "Scope, limits and result notes: get with includeCode=false" +
+        (metadata.requires_write ? "; read them before the first write with this skill." : ".")
+      : "This skill does not run by name: read it with get and adapt its code.",
   };
 }
 
@@ -457,8 +479,9 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
       "when no skill has every word it returns the closest ones with partial=true. " +
       "List/search include write scope, tested Civil version and a scoped validation summary; missing evidence stays null. " +
       "Skills are pre-built C# patterns you can adapt and execute via civil3d_execute or civil3d_query. " +
-      "When run_by_name is true, read it with get and includeCode=false, then pass skill and params to " +
-      "civil3d_query (read skills) or civil3d_execute (write skills) instead of sending the code.",
+      "When run_by_name is true, read its parameter card with get and view='card' (type, default and row fields " +
+      "of every parameter), then pass skill and params to civil3d_query (read skills) or civil3d_execute " +
+      "(write skills) instead of sending the code; get with includeCode=false adds the usage notes without the code.",
     {
       action: z
         .enum(["list", "search", "get", "api_lookup", "status", "guide"])
@@ -482,6 +505,13 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
         .boolean()
         .optional()
         .describe("For 'get': false omits the code template (default true). Use it for skills you run by name."),
+      view: z
+        .enum(["card", "full"])
+        .optional()
+        .describe(
+          "For 'get': card = only what is needed to run the skill by name (each parameter's type, default, " +
+            "row fields and one-line description); full = the whole skill (default)."
+        ),
       assembly: z.string().optional().describe("Allowlisted loaded host assembly filter for api_lookup"),
       namespace: z.string().optional().describe("Namespace prefix filter for api_lookup"),
       instanceId: instanceIdSchema,
@@ -610,6 +640,10 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
                 ],
                 isError: true,
               };
+            }
+
+            if (args.view === "card") {
+              return { content: [{ type: "text" as const, text: JSON.stringify(parameterCard(skill)) }] };
             }
 
             return {

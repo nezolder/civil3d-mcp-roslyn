@@ -8,4 +8,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.12.0" />
   </ItemGroup>
+  <!-- The plugin's own script guard, so that no shipped recipe is one it would refuse. -->
+  <ItemGroup>
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptSandbox.cs" Link="ScriptSandbox.cs" />
+  </ItemGroup>
 </Project>

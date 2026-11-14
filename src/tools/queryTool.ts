@@ -43,10 +43,13 @@ export const SCRIPT_RULES =
   "Script rules: keep code synchronous; a script that uses await is rejected because it could deadlock Civil 3D. " +
   "Return primitives, strings, Guid, dates/times (ISO 8601 text), anonymous objects or your own classes/records " +
   "(public properties and fields), arrays, lists, LINQ or other sequences, tuples (as arrays), Dictionary<string,...>, " +
-  "ObjectId, Handle, Point2d/3d, Vector2d/3d; enums return as numbers, so use .ToString() for names. " +
-  "Not returnable: DBObject instances. A collection over 1000 items keeps its first 1000 and the reply " +
-  "becomes {result, truncated: [{path, returned, total}]}; NaN/Infinity become null and the reply becomes " +
-  "{result, nonFinite: {count, paths}}; depth 8 and 10000 total result nodes. " +
+  "ObjectId, Handle, Point2d/3d, Vector2d/3d; enums return as their names. " +
+  "Not returnable: DBObject instances. Doubles are rounded to 10 significant digits (whole part untouched); " +
+  "return a number as text when every digit matters. A result is kept below 40000 characters: a collection " +
+  "keeps at most 1000 items, a longer result loses the end of its largest lists, and the reply becomes " +
+  "{result, truncated: [{path, returned, total}]} (reason 'size' on a cut made for size), so narrow or page " +
+  "the query for the rest; NaN/Infinity become null and the reply becomes " +
+  "{result, nonFinite: {count, paths}}; depth 8. " +
   "Other namespaces (e.g. Autodesk.Civil.DatabaseServices.Styles, Autodesk.AutoCAD.Colors, System.IO) need a using line or a full name. " +
   "Names that exist twice have a default: DBObject, Entity and ErrorStatus are the AutoCAD types, Surface and Section " +
   "the Civil 3D ones, Exception is System.Exception; write the full name for the other one. " +

@@ -29,7 +29,7 @@ parameters:
 ## Code Template
 
 ```csharp
-var networkNameFilter = "";
+var networkName = "";
 var limit = 25;
 var partLimit = 1000;
 var issueLimit = 25;
@@ -43,8 +43,8 @@ foreach (ObjectId networkId in CivilDoc.GetPipeNetworkIds())
 {
     var network = Transaction.GetObject(networkId, OpenMode.ForRead) as Network;
     if (network == null) continue;
-    if (!string.IsNullOrWhiteSpace(networkNameFilter)
-        && !network.Name.Equals(networkNameFilter, StringComparison.OrdinalIgnoreCase))
+    if (!string.IsNullOrWhiteSpace(networkName)
+        && !network.Name.Equals(networkName, StringComparison.OrdinalIgnoreCase))
         continue;
 
     total++;
@@ -115,7 +115,7 @@ return new {
     limit,
     partLimit,
     issueLimit,
-    networkNameFilter = string.IsNullOrWhiteSpace(networkNameFilter) ? null : networkNameFilter,
+    networkNameFilter = string.IsNullOrWhiteSpace(networkName) ? null : networkName,
     networks
 };
 ```

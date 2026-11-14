@@ -4,12 +4,15 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import fs from "node:fs";
+import path from "node:path";
 import {
   SkillBindingError,
   bindSkillCode,
+  describeParameters,
   isRunnableByName,
 } from "../../build/tools/skillBinding.js";
-import { findSkill } from "../../build/tools/skillsTool.js";
+import { SKILLS_DIR, findSkill } from "../../build/tools/skillsTool.js";
 
 const TEMPLATE = [
   "## Code Template",
@@ -83,6 +86,106 @@ test("binds tuple arrays from objects or positional arrays", () => {
     "var points = new (double x, double y)[] {  };");
 });
 
+const LIST_TEMPLATE = [
+  "```csharp",
+  "var stations = new double[] { };",
+  'var layers = new string[] { "0", "C-ROAD, edge" };',
+  "int[] counts = new int[] { 1, 2 };",
+  "var flags = new bool[] { true };",
+  "return new { stations, layers, counts, flags };",
+  "```",
+].join("\n");
+
+const LIST_PARAMETERS = [
+  { name: "stations", type: "array", required: true, description: "Stations to sample" },
+  { name: "layers", type: "array", required: false },
+  { name: "counts", type: "array", required: false },
+  { name: "flags", type: "array", required: false },
+];
+
+test("binds plain lists of numbers, texts and booleans", () => {
+  const code = bindSkillCode("lists", LIST_TEMPLATE, LIST_PARAMETERS, {
+    stations: [0, 12.5, -3],
+    layers: ['a"b', "ő"],
+    counts: [],
+    flags: [false, true],
+  });
+  assert.equal(line(code, "var stations ="), "var stations = new double[] { 0d, 12.5d, -3d };");
+  assert.equal(line(code, "var layers ="), 'var layers = new string[] { "a\\"b", "\\u0151" };');
+  assert.equal(line(code, "int[] counts ="), "int[] counts = new int[] {  };");
+  assert.equal(line(code, "var flags ="), "var flags = new bool[] { false, true };");
+
+  const defaults = bindSkillCode("lists", LIST_TEMPLATE, LIST_PARAMETERS, { stations: [1] });
+  assert.equal(line(defaults, "var layers ="), 'var layers = new string[] { "0", "C-ROAD, edge" };',
+    "an omitted list keeps its default, commas inside texts included");
+
+  for (const [values, message] of [
+    [{ stations: 5 }, /'stations' must be an array of double values/],
+    [{ stations: [1, "2"] }, /'stations\[1\]' must be a finite number/],
+    [{ stations: [1], layers: [1] }, /'layers\[0\]' must be a string/],
+    [{ stations: [1], counts: [1.5] }, /'counts\[0\]' must be a 32-bit integer/],
+    [{ stations: [[1, 2]] }, /'stations\[0\]' must be a finite number/],
+  ]) {
+    assert.throws(() => bindSkillCode("lists", LIST_TEMPLATE, LIST_PARAMETERS, values),
+      (error) => error instanceof SkillBindingError && message.test(error.message));
+  }
+
+  // A list whose default is not made of plain literals of its own type cannot be bound.
+  for (const declaration of [
+    "var stations = new double[] { Math.PI };",
+    'var stations = new double[] { "1" };',
+    "double[] stations = new int[] { 1 };",
+    "var stations = new double[] { 1, };",
+    "var stations = new double[] { 1 2 };",
+  ]) {
+    const template = LIST_TEMPLATE.replace("var stations = new double[] { };", declaration);
+    assert.equal(isRunnableByName(template, LIST_PARAMETERS), false, declaration);
+  }
+});
+
+test("a missing parameter is reported together with every parameter of the skill", () => {
+  assert.throws(() => bind({ limit: 3 }), (error) => {
+    assert.ok(error instanceof SkillBindingError);
+    assert.match(error.message, /^Skill 'fixture' requires parameters 'handle', 'tolerance'\. Parameters: /);
+    for (const part of [
+      "handle (string, required)",
+      "limit (int, optional, default 100)",
+      "tolerance (double, required)",
+      "station (double, optional, default 0)",
+      "onlyReferences (bool, optional, default true)",
+      "filter (string, optional)",
+      "points (rows of {x: double, y: double}, optional)",
+    ]) {
+      assert.ok(error.message.includes(part), `${part} in: ${error.message}`);
+    }
+    return true;
+  });
+  assert.throws(() => bindSkillCode("lists", LIST_TEMPLATE, LIST_PARAMETERS, {}),
+    /requires parameter 'stations'\. Parameters: stations \(double\[\], required\); layers \(string\[\], optional, default \["0","C-ROAD, edge"\]\)/);
+});
+
+test("parameter cards state type, default and row fields as the template has them", () => {
+  assert.deepEqual(describeParameters(TEMPLATE, PARAMETERS), [
+    { name: "handle", type: "string", required: true },
+    { name: "limit", type: "int", required: false, default: 100 },
+    { name: "tolerance", type: "double", required: true },
+    { name: "station", type: "double", required: false, default: 0 },
+    { name: "onlyReferences", type: "bool", required: false, default: true },
+    { name: "filter", type: "string", required: false },
+    { name: "points", type: "rows", required: false,
+      fields: [{ name: "x", type: "double" }, { name: "y", type: "double" }] },
+  ]);
+  assert.deepEqual(describeParameters(LIST_TEMPLATE, LIST_PARAMETERS), [
+    { name: "stations", type: "double[]", required: true, description: "Stations to sample" },
+    { name: "layers", type: "string[]", required: false, default: ["0", "C-ROAD, edge"] },
+    { name: "counts", type: "int[]", required: false, default: [1, 2] },
+    { name: "flags", type: "bool[]", required: false, default: [true] },
+  ]);
+  // A parameter the template does not declare keeps the type of the skill's own metadata.
+  assert.deepEqual(describeParameters("no code block", [{ name: "baseline", type: "object", required: true }]),
+    [{ name: "baseline", type: "object", required: true }]);
+});
+
 test("rejects unknown, missing and mistyped values before any code is produced", () => {
   const cases = [
     [{ tolerance: 1 }, /requires parameter 'handle'/],
@@ -114,24 +217,65 @@ test("templates with ambiguous or unsupported declarations are not runnable", ()
   assert.equal(isRunnableByName(TEMPLATE, PARAMETERS), true);
 });
 
-test("engineering recipes run by name; the free-form replacement recipe does not", () => {
-  for (const name of [
-    "drawing_info",
-    "alignment_geometry_audit",
-    "create_design_profile_from_pvis",
-    "create_section_views",
-    "material_quantity_report",
-    "compare_surface_elevations",
-    "data_reference_audit",
-    "corridor_target_audit",
-    "create_surface_profile_view",
-  ]) {
+function skillNames(directory = SKILLS_DIR) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory()
+      ? skillNames(path.join(directory, entry.name))
+      : entry.name.endsWith(".skill.md") ? [entry.name.slice(0, -".skill.md".length)] : []
+  );
+}
+
+test("every recipe runs by name except the free-form replacement recipe", () => {
+  const names = skillNames();
+  assert.ok(names.length >= 39);
+  for (const name of names) {
     const skill = findSkill(name);
     assert.ok(skill, name);
-    assert.equal(isRunnableByName(skill.content, skill.metadata.parameters), true, name);
+    // Its input is a table of anonymous records with points and infinite radii;
+    // changing that shape would void the live validation of a write recipe.
+    const expected = name !== "replace_alignment_with_fixed_primitives";
+    assert.equal(isRunnableByName(skill.content, skill.metadata.parameters), expected, name);
   }
-  const replacement = findSkill("replace_alignment_with_fixed_primitives");
-  assert.equal(isRunnableByName(replacement.content, replacement.metadata.parameters), false);
+});
+
+test("the recipes that became runnable by name bind their documented parameters", () => {
+  const cases = {
+    station_offset: [{ alignmentName: "Axis 1", station: 125.5, offset: -3 },
+      ['var alignmentName = "Axis 1";', "var station = 125.5d;", "var offset = -3d;", "var x = double.NaN;"]],
+    surface_elevation: [{ surfaceName: "EG", x: 650000.5, y: 237000.25 },
+      ['var surfaceName = "EG";', "var x = 650000.5d;", "var y = 237000.25d;"]],
+    surface_volume: [{ surfaceName: "Volume" }, ['var surfaceName = "Volume";']],
+    earthwork_report: [{ surfaceName: "EG" }, ['var surfaceName = "EG";']],
+    list_profiles: [{ alignmentName: "Axis 1", limit: 10 }, ['var alignmentName = "Axis 1";', "var limit = 10;"]],
+    section_inventory: [{ limit: 5 }, ['var alignmentName = "";', "var limit = 5;"]],
+    corridor_summary: [{ corridorName: "C1", baselineLimit: 2 },
+      ['var corridorName = "C1";', "var limit = 20;", "var baselineLimit = 2;"]],
+    pipe_network_qc: [{ networkName: "Storm", partLimit: 10 }, ['var networkName = "Storm";', "var partLimit = 10;"]],
+    surface_definition_summary: [{ surfaceName: "EG" }, ['var surfaceName = "EG";', "var limit = 50;"]],
+    create_polyline: [{ vertices: [[0, 0, 0], { x: 10, y: 0, z: 0 }], layer: "0" },
+      ["var vertices = new (double x, double y, double z)[] { (0d, 0d, 0d), (10d, 0d, 0d) };",
+        "var polyline3d = false;", 'var layer = "0";']],
+    create_cogo_points: [{ points: [[650000.12, 237000.5, 101.25, "TOPO"]] },
+      ["var points = new (double easting, double northing, double elevation, string description)[] " +
+        '{ (650000.12d, 237000.5d, 101.25d, "TOPO") };']],
+    create_tin_surface: [{ surfaceName: "New", points: [[0, 0, 1], [10, 0, 2], [0, 10, 3]] },
+      ['var surfaceName = "New";',
+        "var points = new (double x, double y, double z)[] { (0d, 0d, 1d), (10d, 0d, 2d), (0d, 10d, 3d) };",
+        'var description = "";']],
+  };
+  for (const [name, [params, lines]] of Object.entries(cases)) {
+    const skill = findSkill(name);
+    const code = bindSkillCode(name, skill.content, skill.metadata.parameters, params).replace(/\r\n/g, "\n");
+    for (const expected of lines) {
+      assert.ok(code.split("\n").includes(expected), `${name}: ${expected}`);
+    }
+    // No placeholder of the old copy-and-edit templates is left behind.
+    assert.doesNotMatch(code, /"[A-Z_]+_NAME(?:_HERE)?"|\/\/ Replace/, name);
+  }
+  // Read recipes refuse a write through civil3d_query by their metadata, not by their text.
+  for (const name of ["create_polyline", "create_cogo_points", "create_tin_surface"]) {
+    assert.equal(findSkill(name).metadata.requires_write, true, name);
+  }
 });
 
 async function startMockPlugin() {
@@ -227,7 +371,7 @@ test("query and execute send the bound template; invalid sources never reach the
       ["civil3d_query", { code: "return 1;", params: {} }, /only valid together with 'skill'/],
       ["civil3d_query", { skill: "no_such_skill" }, /Skill 'no_such_skill' not found/],
       ["civil3d_query", { skill: "compare_surface_elevations", params: { surfaceAHandle: "1A" } },
-        /requires parameter 'surfaceBHandle'/],
+        /requires parameters 'surfaceBHandle', 'samplePoints', 'tolerance'\. Parameters: surfaceAHandle \(string, required\); /],
       ["civil3d_execute", { skill: "replace_alignment_with_fixed_primitives", params: {}, expectedDrawing },
         /cannot run by name/],
     ]) {
@@ -252,6 +396,48 @@ test("query and execute send the bound template; invalid sources never reach the
       arguments: { action: "get", skillName: "compare_surface_elevations" },
     })).content[0].text);
     assert.ok(full.content.includes("```csharp"), "get keeps the code by default");
+
+    // The card is what a run by name needs, and a fraction of the full text.
+    const cardReply = await client.callTool({
+      name: "civil3d_skills",
+      arguments: { action: "get", skillName: "compare_surface_elevations", view: "card" },
+    });
+    const card = JSON.parse(cardReply.content[0].text);
+    assert.deepEqual(Object.keys(card), ["name", "description", "requires_write", "run_by_name", "parameters", "next"]);
+    assert.equal(card.run_by_name, true);
+    assert.deepEqual(card.parameters.map((parameter) => [parameter.name, parameter.type, parameter.required]), [
+      ["surfaceAHandle", "string", true],
+      ["surfaceBHandle", "string", true],
+      ["samplePoints", "rows", true],
+      ["tolerance", "double", true],
+      ["detailLimit", "int", false],
+    ]);
+    assert.deepEqual(card.parameters[2].fields, [{ name: "x", type: "double" }, { name: "y", type: "double" }]);
+    assert.equal(card.parameters[4].default, 50);
+    assert.ok(card.parameters.every((parameter) => typeof parameter.description === "string"));
+    assert.match(card.next, /^Pass skill and params to civil3d_query\. .*get with includeCode=false\.$/);
+    const cardLength = cardReply.content[0].text.length;
+    assert.ok(cardLength * 2 < metadataOnly.content[0].text.length && cardLength * 5 < JSON.stringify(full).length,
+      "the card is less than half of the text without code and a fifth of the full skill");
+
+    const writeCard = JSON.parse((await client.callTool({
+      name: "civil3d_skills",
+      arguments: { action: "get", skillName: "create_polyline", view: "card" },
+    })).content[0].text);
+    assert.match(writeCard.next, /^Pass skill and params to civil3d_execute\. .*before the first write/);
+
+    const freeForm = JSON.parse((await client.callTool({
+      name: "civil3d_skills",
+      arguments: { action: "get", skillName: "replace_alignment_with_fixed_primitives", view: "card" },
+    })).content[0].text);
+    assert.equal(freeForm.run_by_name, false);
+    assert.match(freeForm.next, /does not run by name/);
+    assert.equal(freeForm.parameters.find((parameter) => parameter.name === "expectedBaseline").type, "object");
+
+    const { tools: listed } = await client.listTools();
+    const skillsTool = listed.find((tool) => tool.name === "civil3d_skills");
+    assert.deepEqual(skillsTool.inputSchema.properties.view.enum, ["card", "full"]);
+    assert.match(skillsTool.description, /get and view='card'/);
   } finally {
     await client.close();
     await server.close();

@@ -172,7 +172,6 @@ public static class RoslynExecutor
     TimeSpan? timeLimit = null)
   {
     progress?.SetStage(OperationStage.PreparingScript);
-    // Validate with sandbox
     ScriptSandbox.Validate(code);
 
     // Try cache first
@@ -203,7 +202,13 @@ public static class RoslynExecutor
         throw;
       }
       // A failed script still reaches RunAsync below, which reports its errors.
-      if (!failed) _scriptCache.Add(code, script);
+      if (!failed)
+      {
+        // The guard reads what the compiler resolved, so it runs after a
+        // successful compile and before the script can run or be cached.
+        ScriptSandbox.Validate(script.GetCompilation());
+        _scriptCache.Add(code, script);
+      }
     }
 
     // Execute with a time limit. Loop checkpoints also observe the caller's

@@ -223,6 +223,45 @@ test("the inputs, receipt, journal and status fields in the guide are the real o
   assert.match(guideSource, new RegExp(`1 to ${MAX_SCRIPT_TIMEOUT_SECONDS} seconds`));
 });
 
+test("the result limits and the refused operations in the guide are the plugin's own", async () => {
+  const serializer = pluginFile("ResultSerializer.cs");
+  const constant = (name) => Number(serializer.match(new RegExp(`const int ${name} = ([\\d_]+);`))[1].replaceAll("_", ""));
+  const [characters, items, depth, values, digits] =
+    ["MaxResultCharacters", "MaxCollectionItems", "MaxDepth", "MaxTotalNodes", "SignificantDigits"].map(constant);
+
+  for (const text of [guideSource, read("README.md")]) {
+    assert.ok(text.includes(`${characters} characters`), "the character limit");
+    assert.ok(text.includes(`${digits} significant digits`), "the rounding");
+    assert.match(text, new RegExp(`\\b${items} items\\b`), "the item limit");
+    assert.match(text, new RegExp(`\\babout ${values} values\\b`), "the value limit");
+    assert.match(text, new RegExp(`[Dd]epth (?:stays limited to )?${depth}\\b`), "the depth limit");
+    assert.doesNotMatch(text, /[Ee]nums? (?:return|come back) as numbers/);
+  }
+  assert.match(serializer, /\["reason"\] = "size"/);
+  assert.match(guideSource, /`reason: "size"`/);
+
+  // The tool description states the same numbers; it is the text every client shows.
+  await withClient(async (client) => {
+    const { tools } = await client.listTools();
+    const description = tools.find((tool) => tool.name === "civil3d_query").description;
+    assert.ok(description.includes(`${characters} characters`) && description.includes(`${digits} significant digits`));
+    assert.ok(description.includes(`${items} items`) && description.includes(`depth ${depth}`));
+    assert.match(description, /enums return as their names/);
+  });
+
+  // Every kind of operation the guide says is refused has an entry in the guard.
+  const guard = pluginFile("ScriptSandbox.cs");
+  for (const name of [
+    "System.Diagnostics.Process", "System.IO.File", "System.Net.Http", "System.Net.Sockets",
+    "System.Reflection.Assembly", "System.Runtime.InteropServices.Marshal", "Microsoft.Win32.Registry",
+    "System.Environment",
+  ]) {
+    assert.ok(guard.includes(`"${name}"`), `${name} is on the guard's list`);
+  }
+  assert.match(guideSource, /not a security boundary/);
+  assert.doesNotMatch(guard, /Regex/, "the guard reads resolved symbols, not text patterns");
+});
+
 test("the README and the recipe guide refer to the working order instead of restating it", () => {
   const readme = read("README.md");
   assert.match(readme, /\]\(docs\/USAGE\.md\)/);

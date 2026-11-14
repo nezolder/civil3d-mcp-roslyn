@@ -17,12 +17,15 @@ parameters:
 ## Code Template
 
 ```csharp
+var surfaceName = "";
+if (string.IsNullOrWhiteSpace(surfaceName)) return new { error = "surfaceName is required" };
+
 TinVolumeSurface volumeSurface = null;
 
 foreach (ObjectId id in CivilDoc.GetSurfaceIds())
 {
     var candidate = Transaction.GetObject(id, OpenMode.ForRead) as TinVolumeSurface;
-    if (candidate != null && candidate.Name.Equals("VOLUME_SURFACE_NAME", StringComparison.OrdinalIgnoreCase))
+    if (candidate != null && candidate.Name.Equals(surfaceName, StringComparison.OrdinalIgnoreCase))
     {
         volumeSurface = candidate;
         break;

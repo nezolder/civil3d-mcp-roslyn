@@ -13,39 +13,58 @@ parameters:
     required: true
     description: Name for the new surface
   - name: points
-    type: Point3d[]
+    type: array
     required: false
-    description: Array of {x, y, z} points to add
+    description: Up to 5000 (x, y, z) rows in drawing units to add as vertices (default none)
   - name: description
     type: string
     required: false
-    description: Surface description
+    description: Surface description; empty leaves it unset (default "")
 ---
 
 ## Code Template
 
 ```csharp
-// Create the TIN surface
-var surfaceId = TinSurface.Create(Database, "SURFACE_NAME_HERE");
-var surface = Transaction.GetObject(surfaceId, OpenMode.ForWrite) as TinSurface;
+var surfaceName = "";
+var points = new (double x, double y, double z)[] { };
+var description = "";
 
-// Optionally set description
-// surface.Description = "description here";
-
-// Optionally add points
-var pts = new Point3dCollection();
-// pts.Add(new Point3d(x, y, z));
-// pts.Add(new Point3d(x2, y2, z2));
-
-if (pts.Count > 0)
+if (string.IsNullOrWhiteSpace(surfaceName) || surfaceName != surfaceName.Trim() || surfaceName.Length > 255)
+    return new { success = false, error = "surfaceName must be a name without leading or trailing spaces." };
+if (points == null || points.Length > 5000)
+    return new { success = false, error = "points must hold at most 5000 rows." };
+for (var index = 0; index < points.Length; index++)
 {
-    surface.AddVertices(pts);
+    var point = points[index];
+    if (double.IsNaN(point.x) || double.IsInfinity(point.x)
+        || double.IsNaN(point.y) || double.IsInfinity(point.y)
+        || double.IsNaN(point.z) || double.IsInfinity(point.z))
+        return new { success = false, error = $"points[{index}] must have finite x, y and z." };
+}
+foreach (ObjectId existingId in CivilDoc.GetSurfaceIds())
+{
+    var existing = Transaction.GetObject(existingId, OpenMode.ForRead) as Autodesk.Civil.DatabaseServices.Surface;
+    if (existing != null && existing.Name.Equals(surfaceName, StringComparison.OrdinalIgnoreCase))
+        return new { success = false, error = "A surface with this name already exists." };
+}
+
+// Create the TIN surface
+var surfaceId = TinSurface.Create(Database, surfaceName);
+var surface = (TinSurface)Transaction.GetObject(surfaceId, OpenMode.ForWrite);
+if (!string.IsNullOrWhiteSpace(description)) surface.Description = description;
+
+if (points.Length > 0)
+{
+    var vertices = new Point3dCollection();
+    foreach (var point in points) vertices.Add(new Point3d(point.x, point.y, point.z));
+    surface.AddVertices(vertices);
 }
 
 return new {
     success = true,
     name = surface.Name,
     handle = surface.Handle.ToString(),
+    style = surface.StyleName,
     pointCount = surface.GetGeneralProperties().NumberOfPoints
 };
 ```
@@ -54,4 +73,4 @@ return new {
 - Surface name must be unique in the drawing
 - Points should be in the drawing's coordinate system
 - Minimum 3 non-collinear points needed for a valid TIN surface
-- Style can be set after creation via surface.StyleId
+- The surface gets the drawing's default surface style; another style can be set afterwards via surface.StyleId

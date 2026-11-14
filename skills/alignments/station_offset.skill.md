@@ -11,59 +11,75 @@ parameters:
   - name: alignmentName
     type: string
     required: true
+    description: Exact alignment name
   - name: station
     type: double
     required: false
-    description: Station value (for station-to-point conversion)
+    description: Station to convert to a point; leave out when x and y are given
   - name: offset
     type: double
     required: false
-    description: Offset from centerline (for station-to-point)
+    description: Offset from the centerline for the station-to-point conversion (default 0)
   - name: x
     type: double
     required: false
-    description: X coordinate (for point-to-station conversion)
+    description: X of the point to convert to station and offset; needs y
   - name: y
     type: double
     required: false
-    description: Y coordinate (for point-to-station conversion)
+    description: Y of the point to convert to station and offset; needs x
 ---
 
-## Code Template — Station to Point
+## Code Template
 
 ```csharp
+var alignmentName = "";
+var station = double.NaN;
+var offset = 0.0;
+var x = double.NaN;
+var y = double.NaN;
+
+if (string.IsNullOrWhiteSpace(alignmentName)) return new { error = "alignmentName is required" };
+var hasStation = !double.IsNaN(station);
+var hasPoint = !double.IsNaN(x) && !double.IsNaN(y);
+if (double.IsNaN(x) != double.IsNaN(y)) return new { error = "x and y must be given together" };
+if (hasStation == hasPoint)
+    return new { error = "Give either station (with optional offset) or x and y, not both and not neither" };
+if (double.IsInfinity(station) || double.IsNaN(offset) || double.IsInfinity(offset)
+    || double.IsInfinity(x) || double.IsInfinity(y))
+    return new { error = "station, offset, x and y must be finite numbers" };
+
 Alignment alignment = null;
 foreach (ObjectId id in CivilDoc.GetAlignmentIds())
 {
-    var a = Transaction.GetObject(id, OpenMode.ForRead) as Alignment;
-    if (a != null && a.Name.Equals("ALIGNMENT_NAME", StringComparison.OrdinalIgnoreCase))
-    { alignment = a; break; }
+    var candidate = Transaction.GetObject(id, OpenMode.ForRead) as Alignment;
+    if (candidate != null && candidate.Name.Equals(alignmentName, StringComparison.OrdinalIgnoreCase))
+    { alignment = candidate; break; }
 }
 if (alignment == null) return new { error = "Alignment not found" };
 
-double station = 100.0;  // Replace
-double offset = 0.0;     // Replace
-double x = 0, y = 0;
-alignment.PointLocation(station, offset, ref x, ref y);
-
-return new { alignmentName = alignment.Name, station, offset, x, y };
-```
-
-## Code Template — Point to Station
-
-```csharp
-Alignment alignment = null;
-foreach (ObjectId id in CivilDoc.GetAlignmentIds())
+if (hasStation)
 {
-    var a = Transaction.GetObject(id, OpenMode.ForRead) as Alignment;
-    if (a != null && a.Name.Equals("ALIGNMENT_NAME", StringComparison.OrdinalIgnoreCase))
-    { alignment = a; break; }
+    // Station and offset to a point.
+    double easting = 0, northing = 0;
+    alignment.PointLocation(station, offset, ref easting, ref northing);
+    return new {
+        alignmentName = alignment.Name, conversion = "stationToPoint",
+        station, offset, x = easting, y = northing
+    };
 }
-if (alignment == null) return new { error = "Alignment not found" };
 
-double x = 1000.0, y = 2000.0;  // Replace
-double station = 0, offset = 0;
-alignment.StationOffset(x, y, ref station, ref offset);
-
-return new { alignmentName = alignment.Name, x, y, station, offset };
+// A point to its station and offset.
+double foundStation = 0, foundOffset = 0;
+alignment.StationOffset(x, y, ref foundStation, ref foundOffset);
+return new {
+    alignmentName = alignment.Name, conversion = "pointToStation",
+    x, y, station = foundStation, offset = foundOffset
+};
 ```
+
+## Usage Notes
+- Give `station` (and optionally `offset`) to get a point, or `x` and `y` to get the station and offset; one call converts in one direction
+- Offset is negative to the left and positive to the right of the alignment
+- Coordinates are in the drawing's coordinate system, without conversion
+- A station outside the alignment, or a point that cannot be projected onto it, raises a Civil 3D exception that is reported as the error

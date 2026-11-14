@@ -20,8 +20,9 @@ export const skillParamsSchema = z
   .record(z.string(), z.unknown())
   .optional()
   .describe(
-    "Values for the skill's parameters by name, as listed by civil3d_skills get. " +
-      "Omitted optional parameters keep the template default. Tuple arrays take objects or positional arrays."
+    "Values for the skill's parameters by name, as listed by civil3d_skills get with view='card'. " +
+      "Omitted optional parameters keep the template default. A 'rows' parameter takes objects with exactly " +
+      "the listed fields or positional arrays; a plain list such as double[] takes an array of values."
   );
 
 interface ScriptSourceArgs {
