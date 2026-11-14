@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["kép a rajz egy részéről", "lap képe ellenőrzéshez", "picture of the model space or a layout", "plot a window to a PNG image", "nézetkép készítése"]
 workflow_tags: ["drawing_view", "quality_control"]
 tested_civil_version: "2025"
-validation_summary: "Offline: 2025 API compilation only. The plot itself, the pixel sizes of the image device, the window in a twisted view and the switch to another layout are unverified in a live Civil 3D."
+validation_summary: "Live (Civil 3D 2025): window and extents of the model space, PNG and JPEG, a plot style table, a sheet that was not current, the refusals. Twisted views and the size choice for extents are unverified. Can raise DBMOD."
 parameters:
   - name: layoutName
     type: string
@@ -109,7 +109,29 @@ using (var settings = new PlotSettings(layout.ModelType))
         @"(\d+(?:\.\d+)?)[_ ]x[_ ](\d+(?:\.\d+)?)[_ ]Pixels",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     var mediaNames = validator.GetCanonicalMediaNameList(settings).Cast<string>().ToList();
+    // A size that lies the way the pictured area does (wide or tall) leaves the least empty margin.
+    var wantLandscape = true;
+    if (hasWindow)
+    {
+        wantLandscape = (xmax - xmin) >= (ymax - ymin);
+    }
+    else
+    {
+        try
+        {
+            var lowCorner = layout.ModelType ? Database.Extmin : layout.Extents.MinPoint;
+            var highCorner = layout.ModelType ? Database.Extmax : layout.Extents.MaxPoint;
+            var spanX = highCorner.X - lowCorner.X;
+            var spanY = highCorner.Y - lowCorner.Y;
+            if (spanX > 0 && spanY > 0 && spanX < 1e19 && spanY < 1e19) wantLandscape = spanX >= spanY;
+        }
+        catch (System.Exception)
+        {
+            // Extents that cannot be read keep the wide size.
+        }
+    }
     string media = null;
+    var mediaFits = false;
     double mediaWidth = 0, mediaHeight = 0;
     foreach (var name in mediaNames)
     {
@@ -118,8 +140,10 @@ using (var settings = new PlotSettings(layout.ModelType))
         var width = double.Parse(match.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
         var height = double.Parse(match.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture);
         if (Math.Max(width, height) > maxPixels) continue;
-        if (media == null || width * height > mediaWidth * mediaHeight)
+        var fits = (width >= height) == wantLandscape;
+        if (media == null || (fits && !mediaFits) || (fits == mediaFits && width * height > mediaWidth * mediaHeight))
         {
+            mediaFits = fits;
             media = name;
             mediaWidth = width;
             mediaHeight = height;
@@ -154,6 +178,7 @@ using (var settings = new PlotSettings(layout.ModelType))
     var switched = !string.Equals(currentLayout, targetLayout, StringComparison.OrdinalIgnoreCase);
     var path = NewImagePath(deviceName.IndexOf("jpg", StringComparison.OrdinalIgnoreCase) >= 0 ? "jpg" : "png");
     var backgroundPlot = Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("BACKGROUNDPLOT");
+    var dbmodBefore = Convert.ToInt32(Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("DBMOD"));
     object plottedWindow = null;
     try
     {
@@ -233,6 +258,8 @@ using (var settings = new PlotSettings(layout.ModelType))
         size = media,
         plotStyleTable = settings.CurrentStyleSheet,
         switchedLayout = switched,
+        dbmodBefore,
+        dbmodAfter = Convert.ToInt32(Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("DBMOD")),
         file = path,
         picture = ImageFile(path),
     };
@@ -241,9 +268,10 @@ using (var settings = new PlotSettings(layout.ModelType))
 
 ## Usage Notes
 
-- This is a read-only template: run it with `civil3d_query`. It changes nothing in the drawing; it plots to a picture file and returns that picture next to the JSON result, where `picture` holds its number, type and pixel size.
+- This is a read-only template: run it with `civil3d_query`. It writes no object; it plots to a picture file and returns that picture next to the JSON result, where `picture` holds its number, type and pixel size.
+- Civil 3D can still mark the drawing as modified by the plot: `dbmodBefore` and `dbmodAfter` show it. In a live session a picture of the current sheet left `DBMOD` at 0, making another layout current for the plot raised it, and so did pictures of the model space of a Civil drawing. A write with `requireClean` is refused after that until the drawing is saved, so take pictures after the writes they are meant to check, or expect to save in between.
 - The picture comes from the plot engine, not from the screen. It shows what a plot would show: plot style table, lineweights and paper space included, and it does not depend on the zoom or the size of the Civil 3D window.
-- Without a window the extents of the layout are pictured. For a detail, give `xmin`, `ymin`, `xmax` and `ymax`: world coordinates in the model space, paper units on a sheet. The picture keeps the proportions of the device's size, so a long narrow window leaves empty margins; picture such an area in several windows.
+- Without a window the extents of the layout are pictured. One far-away object, such as a block left at the origin, stretches the extents until the picture looks empty; give a window then. For a detail, give `xmin`, `ymin`, `xmax` and `ymax`: world coordinates in the model space, paper units on a sheet. Of the device's sizes the largest one within `maxPixels` that lies like the area (wide or tall) is used; the picture keeps that size's proportions, so a long narrow window leaves empty margins. Picture such an area in several windows.
 - In the model space the lines keep their screen colours unless a plot style table is given. On a white picture, light colours are hard to see; a monochrome table (for example `monochrome.ctb`, when installed) gives black lines.
 - `layoutName` other than the current layout makes that layout current for the plot and restores the previous one afterwards (`switchedLayout: true`). On a large drawing this regenerates the view twice.
 - The picture files are kept in the plugin's image folder (`file` gives the path) and are removed by the plugin after a day.

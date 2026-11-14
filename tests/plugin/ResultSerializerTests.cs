@@ -89,6 +89,19 @@ internal static class ResultSerializerTests
         && images[1].MimeType == "image/jpeg" && images[1].Data.SequenceEqual(jpegBytes),
         "the image list holds the files in the order of their references, by content not by file name");
 
+      // A JPEG's pixel size is read from its frame header, past the segments before it.
+      var framed = new byte[]
+      {
+        0xFF, 0xD8,
+        0xFF, 0xE0, 0x00, 0x04, 0x4A, 0x46,
+        0xFF, 0xC4, 0x00, 0x03, 0x00,
+        0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x05, 0x00, 0x06, 0x40, 0x03, 0, 0, 0, 0,
+      };
+      Assert(ScriptImages.Inspect(framed) is { MimeType: "image/jpeg", Width: 1600, Height: 1280 },
+        "a JPEG reports the width and height of its frame");
+      Assert(ScriptImages.Inspect(jpegBytes) is { MimeType: "image/jpeg", Width: null, Height: null },
+        "a JPEG without a readable frame header is still a JPEG");
+
       // A picture near the size limit does not count against the text budget.
       var large = Path.Combine(folder, "large.png");
       File.WriteAllBytes(large, PngBytes(1600, 1280, ScriptImages.MaxImageBytes));

@@ -6,12 +6,12 @@ requires_write: false
 aliases: ["lapok PDF-be nyomtatása", "nyomtatási beállítások ellenőrzése", "plot layouts to PDF with their page setups", "check page setup device paper size and CTB", "PDF készítése a lapokból"]
 workflow_tags: ["drawing_view", "quality_control"]
 tested_civil_version: "2025"
-validation_summary: "Offline: 2025 API compilation only. Plotting, the page setup checks against real devices and the PDF files are unverified in a live Civil 3D."
+validation_summary: "Live (Civil 3D 2025): page setup check of 16 template sheets; three sheets plotted to PDF, one a custom size; refusal of existing files and overwrite. Missing devices, paper sizes and plot style tables were not produced live. Can raise DBMOD."
 parameters:
   - name: outputDirectory
     type: string
-    required: true
-    description: Existing folder that receives the PDF files, one per sheet, named after the drawing and the layout
+    required: false
+    description: Existing folder that receives the PDF files, one per sheet, named after the drawing and the layout; needed unless plot is false (default "")
   - name: layoutNames
     type: array
     required: false
@@ -47,7 +47,7 @@ var plotStyleTable = "";
 const int MaxLayouts = 30;
 var badText = new Func<string, bool>(value => value == null || value.Length > 255 || value.Any(char.IsControl));
 if (plot && (string.IsNullOrWhiteSpace(outputDirectory) || outputDirectory.Length > 240 || outputDirectory.Any(char.IsControl)))
-    return new { success = false, error = "outputDirectory is required." };
+    return new { success = false, error = "outputDirectory is required when plot is true." };
 if (layoutNames == null || layoutNames.Length > MaxLayouts || layoutNames.Any(name => badText(name) || name.Trim().Length == 0)
     || layoutNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() != layoutNames.Length)
     return new { success = false, error = "layoutNames must hold at most 30 different layout names." };
@@ -131,6 +131,7 @@ if (plotStyleTable.Length > 0 && !known(styleTables, plotStyleTable))
 var layoutManager = LayoutManager.Current;
 var currentLayout = layoutManager.CurrentLayout;
 var backgroundPlot = Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("BACKGROUNDPLOT");
+var dbmodBefore = Convert.ToInt32(Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("DBMOD"));
 var rows = new List<object>();
 var plottedCount = 0;
 var problemCount = 0;
@@ -145,6 +146,10 @@ try
 
         // The page setup as it is stored in the layout.
         var device = deviceName.Length > 0 ? deviceName : settings.PlotConfigurationName;
+        // A page setup can store the device with its full path; the device list holds file names.
+        if (!string.IsNullOrEmpty(device) && !known(devices, device) && System.IO.Path.IsPathRooted(device)
+            && known(devices, System.IO.Path.GetFileName(device)))
+            device = System.IO.Path.GetFileName(device);
         var paper = settings.CanonicalMediaName;
         var styleTable = plotStyleTable.Length > 0 ? plotStyleTable : settings.CurrentStyleSheet;
         var paperLocal = "";
@@ -274,13 +279,16 @@ return new
     layoutCount = rows.Count,
     plottedCount,
     problemCount,
+    dbmodBefore,
+    dbmodAfter = Convert.ToInt32(Autodesk.AutoCAD.ApplicationServices.Application.GetSystemVariable("DBMOD")),
     layouts = rows,
 };
 ```
 
 ## Usage Notes
 
-- This is a read-only template for the drawing: run it with `civil3d_query`. It changes nothing in the drawing, but with `plot: true` it writes PDF files into `outputDirectory`. A script cannot delete files, so wrong output has to be removed by a person.
+- This is a read-only template for the drawing: run it with `civil3d_query`. It writes no object, but with `plot: true` it writes PDF files into `outputDirectory`. A script cannot delete files, so wrong output has to be removed by a person.
+- The check alone (`plot: false`) left `DBMOD` unchanged in a live session. Plotting a sheet that is not current makes it current for the plot, and Civil 3D then marks the drawing as modified (`dbmodBefore`, `dbmodAfter`); a write with `requireClean` is refused after that until the drawing is saved.
 - Run it first with `plot: false`. That only reads each sheet's page setup and lists what would stop or spoil the plot under `problems`: no device in the page setup, a device that is not installed on this computer, a paper size the device does not offer (custom paper sizes live in the device's PMP file, so a missing or different PMP shows up here), or a plot style table that is not found.
 - With `plot: true` every sheet without a problem is plotted with its own page setup to `<drawing>-<layout>.pdf`. The report gives the file, its size, whether it starts as a PDF file, and the seconds the plot took. A sheet with a problem is skipped and the others are still plotted.
 - `deviceName` and `plotStyleTable` replace the page setups' own device and plot style table for this call only; the layouts keep their stored page setup. Leave them empty to prove that the sheets plot correctly as they are.

@@ -120,7 +120,45 @@ internal static class ScriptImages
     }
     if (data.Length >= 4 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)
     {
-      return new ScriptImageInfo("image/jpeg", null, null);
+      return JpegSize(data) is var (width, height)
+        ? new ScriptImageInfo("image/jpeg", width, height)
+        : new ScriptImageInfo("image/jpeg", null, null);
+    }
+    return null;
+  }
+
+  /// <summary>Pixel size from the frame header of a JPEG file, when one is found.</summary>
+  private static (int Width, int Height)? JpegSize(ReadOnlySpan<byte> data)
+  {
+    var position = 2;
+    while (position + 4 <= data.Length)
+    {
+      if (data[position] != 0xFF) return null;
+      var marker = data[position + 1];
+      if (marker == 0xFF)
+      {
+        // Fill byte before a marker.
+        position++;
+        continue;
+      }
+      if (marker == 0xD8 || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7))
+      {
+        // Markers without a length.
+        position += 2;
+        continue;
+      }
+      if (marker == 0xD9 || marker == 0xDA) return null;
+      var length = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(position + 2, 2));
+      if (length < 2) return null;
+      // Start-of-frame markers; C4, C8 and CC in that range are tables, not frames.
+      if (marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC)
+      {
+        if (position + 9 > data.Length) return null;
+        var height = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(position + 5, 2));
+        var width = BinaryPrimitives.ReadUInt16BigEndian(data.Slice(position + 7, 2));
+        return width > 0 && height > 0 ? (width, height) : null;
+      }
+      position += 2 + length;
     }
     return null;
   }
