@@ -212,6 +212,33 @@ internal static class EngineeringSkillInputTests
         Add(rowsFile,"too many attribute patterns refused",false,Change(rowValues,"attributeFilter",
             "string.Join(\"|\",Enumerable.Range(0,101).Select(i=>\"A\"+i))"));
         Add(rowsFile,"control characters in attribute filter refused",false,Change(rowValues,"attributeTags","\"Megj\\n\""));
+        Add(rowsFile,"control characters in elevation tag refused",false,Change(rowValues,"elevationAttributeTag","\"Mag\\n\""));
+        probes.Add(new("heights are read with a decimal point or comma, anything else is no height",rowsFile,true,rowValues,
+            "return new { success=ParseElevation(\"101.25\")==101.25 && ParseElevation(\" 101,25 \")==101.25 && ParseElevation(\"-0,5\")==-0.5"
+            +" && ParseElevation(\"98\")==98 && ParseElevation(\"\")==null && ParseElevation(null)==null && ParseElevation(\"1.234,5\")==null"
+            +" && ParseElevation(\"12 m\")==null && ParseElevation(\"NaN\")==null && ParseElevation(\"1e3\")==null && !withElevations };"));
+        probes.Add(new("naming a height attribute turns the elevations on",rowsFile,true,Change(rowValues,"elevationAttributeTag","\" Magasság \""),
+            "return new { success=withElevations && elevationTag==\"Magasság\" };"));
+        probes.Add(new("slope between neighbouring points across the road",rowsFile,true,Change(rowValues,"includeElevations","true"),
+            // 4 m apart rising 0.10 m, then 3 m east and 4 m north (5 m) falling 0.25 m, then a point without a height, then one on the same spot.
+            "var s=NeighbourSlopes(new (double x,double y,double? z)[]{(0,0,100.00),(4,0,100.10),(7,4,99.85),(9,4,null),(9,4,99.0)});"
+            +"return new { success=withElevations && s.Count==5"
+            +" && Math.Abs(s[0].distance.Value-4)<1e-12 && Math.Abs(s[0].height.Value-0.10)<1e-9 && Math.Abs(s[0].slopePercent.Value-2.5)<1e-7"
+            +" && Math.Abs(s[1].distance.Value-5)<1e-12 && Math.Abs(s[1].height.Value+0.25)<1e-9 && Math.Abs(s[1].slopePercent.Value+5.0)<1e-7"
+            +" && Math.Abs(s[2].distance.Value-2)<1e-12 && s[2].height==null && s[2].slopePercent==null"
+            +" && s[3].distance.Value==0 && s[3].height==null && s[3].slopePercent==null"
+            +" && s[4].distance==null && s[4].height==null && s[4].slopePercent==null };"));
+        probes.Add(new("two points on one spot give a height difference but no slope",rowsFile,true,rowValues,
+            "var s=NeighbourSlopes(new (double x,double y,double? z)[]{(5,5,10.0),(5,5,10.5)});"
+            +"return new { success=s[0].distance.Value==0 && Math.Abs(s[0].height.Value-0.5)<1e-12 && s[0].slopePercent==null };"));
+        probes.Add(new("on one spot a height beats none and a measured height beats a symbol's 0",rowsFile,true,rowValues,
+            "return new { success=MergeHeight(null,97.5)==97.5 && MergeHeight(97.5,null)==97.5 && MergeHeight(null,null)==null"
+            +" && MergeHeight(0.0,97.5)==97.5 && MergeHeight(97.5,0.0)==97.5 && MergeHeight(0.0,0.0)==0.0 && MergeHeight(null,0.0)==0.0"
+            +" && MergeHeight(0.0,null)==0.0 && MergeHeight(97.5,98.25)==97.5 && MergeHeight(-0.0,-1.5)==-1.5 };"));
+        probes.Add(new("two different heights on one spot disagree, a 0 or a missing height does not",rowsFile,true,rowValues,
+            "return new { success=HeightsDisagree(97.5,98.25) && HeightsDisagree(97.5,97.502) && !HeightsDisagree(97.5,97.5004)"
+            +" && !HeightsDisagree(97.5,0.0) && !HeightsDisagree(0.0,97.5) && !HeightsDisagree(null,97.5) && !HeightsDisagree(97.5,null)"
+            +" && !HeightsDisagree(null,null) && IsZeroHeight(0.0) && IsZeroHeight(-0.0) && !IsZeroHeight(null) && !IsZeroHeight(0.001) };"));
 
         var trees=new List<SyntaxTree>();
         for(var index=0;index<probes.Count;index++)
