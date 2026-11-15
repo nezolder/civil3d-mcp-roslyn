@@ -12,14 +12,23 @@ The catalogue contains **41 skills** with **42 C# templates**; **40** of the ski
 
 The last part of the fourth review round: the measured cross slope of an existing road, as far as it is reading the drawing.
 
-- **`survey_row_station_candidates`** has two new optional inputs. With `includeElevations` every listed point of a row carries its elevation, and the plan distance, height difference and slope in percent towards the next point across the road. The height is the geometry's Z (point, block insertion point, COGO elevation), or, with `elevationAttributeTag`, the number in that block attribute, for surveys drawn flat. Each row and the whole result count known, missing and zero heights, and the result warns when every height read from the geometry is 0 or the named attribute holds no number.
+- **`survey_row_station_candidates`** has two new optional inputs. With `includeElevations` every listed point of a row carries its elevation, and the plan distance, height difference and slope in percent towards the next point across the road. The height is the geometry's Z (point, block insertion point, COGO elevation), or, with `elevationAttributeTag`, the number in that block attribute, for surveys drawn flat.
+- Items on the same spot are one point: a height beats none and a height other than 0 beats 0, so a symbol drawn flat on top of a measured point does not hide the measured height. Each row and the whole result count known, missing, zero and conflicting heights of the candidate rows of the call, and the result warns when every height read from the geometry is 0, when only some are, when the named attribute holds no number and when one spot carries two different heights.
 - The row search itself is unchanged and stays in one place; without the new inputs the result differs only by an empty `elevations` entry at the top and in each listed row.
 - The recipe returns measured values only. Which points are pavement edges and which slope is acceptable is the caller's knowledge and is not part of this repository.
 
 Evidence boundaries:
 
-- **Proven offline:** the recipe compiles against the Civil 3D 2025 assemblies as a method and, bound by name with the new inputs, as a script; five new host-free cases (heights written with a decimal point or comma, refused texts, the slope between neighbours including a missing height and two points on one spot, the attribute tag turning the elevations on, a refused tag) next to the 84 earlier ones, which pass unchanged.
-- **Unverified:** everything that needs Civil 3D: the heights read from real points, blocks, attributes and xrefs, the COGO elevation, and the size of the result on a real survey.
+- **Proven offline:** the recipe compiles against the Civil 3D 2025 assemblies as a method and, bound by name with the new inputs, as a script; seven new host-free cases (heights written with a decimal point or comma, refused texts, the slope between neighbours including a missing height and two points on one spot, the attribute tag turning the elevations on, a refused tag, whose height counts on one spot, when two heights disagree) next to the 84 earlier ones, which pass unchanged.
+- **Proven live (Civil 3D 2025, read-only, on copies of a real drawing and of its survey xref, 2026-11-15, two sessions, the second on the fixed recipe):**
+  - The row search is unchanged: the same 24 candidates (the 14 hand-measured rows and 10 junction groups) with and without the new inputs, with heights from the geometry, from the attribute, and with the sources narrowed to the survey point block.
+  - Heights from a block attribute inside an xref: 316 of the 317 row points have a height, none is 0; the one without is a label block. Six heights were read back independently from the xref and four neighbour pairs were recomputed by hand (distance, height difference, slope); all equal.
+  - Heights from the geometry: all 317 row points have a height and 316 equal the attribute value within 1 mm. The first session found 41 heights of 0 because symbol blocks drawn flat sit on measured points and were read first, which gave slopes of thousands of percent in 13 rows; with the fix one 0 is left (the same label block, standing alone), the warning names it, and with the sources narrowed to the survey point block there is none. Three of the formerly hidden heights were read back from the xref next to the symbol's 0.
+  - The top-level counts follow the station range: six ranges add up to the counts of the whole alignment.
+  - Result size: with elevations the candidates list of the whole alignment is cut for size at 7 of 24 rows (12 without elevations) while `sampleLineStations` stays complete; six station ranges each came back whole.
+  - DBMOD stayed 0.
+- **Unverified:** the COGO elevation, a bare AutoCAD point next to a block with the attribute, a survey really drawn flat (the all-zero warning), and two different heights on one spot on a real drawing.
+- **Known limits seen live:** a symbol or label standing alone at height 0 in a row still gives a false slope (warned); two points a few millimetres apart gave 133 % from an 11 mm height difference; a merged point keeps the id and label of the item read first.
 
 ## Pictures in a reply, and a PDF check of sheets (2026-11-14)
 
