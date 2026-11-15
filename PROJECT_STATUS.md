@@ -1,12 +1,25 @@
 # Published development status
 
-Updated: 2026-11-14
+Updated: 2026-11-15
 
 This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
 
 ## Current catalogue
 
 The catalogue contains **41 skills** with **42 C# templates**; **40** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+
+## Measured heights and slopes of survey rows (2026-11-15)
+
+The last part of the fourth review round: the measured cross slope of an existing road, as far as it is reading the drawing.
+
+- **`survey_row_station_candidates`** has two new optional inputs. With `includeElevations` every listed point of a row carries its elevation, and the plan distance, height difference and slope in percent towards the next point across the road. The height is the geometry's Z (point, block insertion point, COGO elevation), or, with `elevationAttributeTag`, the number in that block attribute, for surveys drawn flat. Each row and the whole result count known, missing and zero heights, and the result warns when every height read from the geometry is 0 or the named attribute holds no number.
+- The row search itself is unchanged and stays in one place; without the new inputs the result differs only by an empty `elevations` entry at the top and in each listed row.
+- The recipe returns measured values only. Which points are pavement edges and which slope is acceptable is the caller's knowledge and is not part of this repository.
+
+Evidence boundaries:
+
+- **Proven offline:** the recipe compiles against the Civil 3D 2025 assemblies as a method and, bound by name with the new inputs, as a script; five new host-free cases (heights written with a decimal point or comma, refused texts, the slope between neighbours including a missing height and two points on one spot, the attribute tag turning the elevations on, a refused tag) next to the 84 earlier ones, which pass unchanged.
+- **Unverified:** everything that needs Civil 3D: the heights read from real points, blocks, attributes and xrefs, the COGO elevation, and the size of the result on a real survey.
 
 ## Pictures in a reply, and a PDF check of sheets (2026-11-14)
 

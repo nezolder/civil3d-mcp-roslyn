@@ -1,12 +1,12 @@
 ---
 name: survey_row_station_candidates
 category: sections
-description: Read-only list of candidate stations along an alignment from survey point rows measured across the road, read from AutoCAD points, survey blocks (also inside xrefs, filtered by their attribute codes) or COGO points, also in dense junctions, with review hints, ready for create_sample_lines
+description: Read-only list of candidate stations along an alignment from survey point rows measured across the road, read from AutoCAD points, survey blocks (also inside xrefs, filtered by their attribute codes) or COGO points, also in dense junctions, with review hints, ready for create_sample_lines; optionally with each point's elevation and the slope between neighbouring points of a row
 requires_write: false
-aliases: ["szelvényjelölt-lista geodéziai pontsorokból", "mintavonal szelvények a bemért keresztirányú pontsorokból", "candidate sample line stations from survey point rows", "geodéziai felmérés pontjai és blokkjai keresztszelvényekhez", "geodéziai sorok csomópontban, pontkód szerinti szűrés"]
+aliases: ["szelvényjelölt-lista geodéziai pontsorokból", "mintavonal szelvények a bemért keresztirányú pontsorokból", "candidate sample line stations from survey point rows", "geodéziai felmérés pontjai és blokkjai keresztszelvényekhez", "geodéziai sorok csomópontban, pontkód szerinti szűrés", "keresztesés a bemért pontsorok pontjai között", "cross slope between surveyed points of a row"]
 workflow_tags: ["source_state", "coordinate_conversion"]
 tested_civil_version: "2025"
-validation_summary: "Live (Civil 3D 2025, disposable copies of a real project, 13,843 xref points/blocks): with minPoints 6 and requireCrossing all 14 hand-measured rows found (before: 10), the 10 extra junction groups all flagged needsReview; attribute filter left 2 extras. COGO input unverified."
+validation_summary: "Live (Civil 3D 2025, copies of a real project, 13,843 xref points/blocks): with minPoints 6 and requireCrossing all 14 hand-measured rows found, the 10 extra junction groups all flagged needsReview; attribute filter left 2 extras. COGO input, elevations and slopes: offline only."
 parameters:
   - name: alignmentHandle
     type: string
@@ -60,6 +60,14 @@ parameters:
     type: string
     required: false
     description: Attribute tags checked by attributeFilter and excludeAttributes, separated by "|", with wildcards; empty checks every tag (default "")
+  - name: includeElevations
+    type: bool
+    required: false
+    description: Also report each point's elevation and, between neighbouring points of a row, the distance, height difference and slope (default false)
+  - name: elevationAttributeTag
+    type: string
+    required: false
+    description: Tag of the block attribute that holds the measured height, for surveys drawn flat; empty reads the height from the geometry (Z). Naming a tag turns the elevations on (default "")
   - name: maxOffset
     type: double
     required: false
@@ -130,6 +138,8 @@ var pointGroupNames = "";
 var attributeFilter = "";
 var excludeAttributes = "";
 var attributeTags = "";
+var includeElevations = false;
+var elevationAttributeTag = "";
 var maxOffset = 50.0;
 var rangeStart = double.NaN;
 var rangeEnd = double.NaN;
@@ -155,6 +165,8 @@ if (string.IsNullOrWhiteSpace(alignmentHandle) || alignmentHandle == "ALIGNMENT_
 var filterTexts = new[] { layerFilter, excludeLayers, blockNames, excludeBlockNames, pointGroupNames, attributeFilter, excludeAttributes, attributeTags };
 if (filterTexts.Any(text => text == null || text.Length > 4000 || text.Any(char.IsControl)))
     return new { success = false, error = "layerFilter, excludeLayers, blockNames, excludeBlockNames, pointGroupNames, attributeFilter, excludeAttributes and attributeTags must be texts of at most 4000 characters." };
+if (elevationAttributeTag == null || elevationAttributeTag.Length > 255 || elevationAttributeTag.Any(char.IsControl))
+    return new { success = false, error = "elevationAttributeTag must be an attribute tag of at most 255 characters, or empty." };
 if (!includePoints && !includeBlocks && !includeCogoPoints)
     return new { success = false, error = "Choose at least one source: includePoints, includeBlocks or includeCogoPoints." };
 if (!double.IsFinite(maxOffset) || maxOffset <= 0 || maxOffset > 1000)
@@ -362,6 +374,35 @@ double? MedianStation(IEnumerable<double> stations)
 
 double RoundStation(double station) => roundTo > 0 ? Math.Round(station / roundTo) * roundTo : station;
 
+// Elevations are optional. With a tag the height is the number in that block attribute, otherwise the geometry's Z.
+var elevationTag = elevationAttributeTag.Trim();
+var withElevations = includeElevations || elevationTag.Length > 0;
+
+// A height written as text, with a decimal point or a decimal comma; anything else is no height.
+double? ParseElevation(string text)
+{
+    var value = (text ?? "").Trim().Replace(',', '.');
+    if (value.Length == 0 || value.Count(character => character == '.') > 1) return null;
+    return double.TryParse(value, System.Globalization.NumberStyles.AllowLeadingSign | System.Globalization.NumberStyles.AllowDecimalPoint,
+            System.Globalization.CultureInfo.InvariantCulture, out var number) && double.IsFinite(number)
+        ? number : (double?)null;
+}
+
+// For points in their order across the road: plan distance, height difference and slope in percent to the next point.
+// The slope is positive where the next point is higher; it stays empty next to a point without a height or on the same spot.
+List<(double? distance, double? height, double? slopePercent)> NeighbourSlopes(IList<(double x, double y, double? z)> ordered)
+{
+    var result = new List<(double? distance, double? height, double? slopePercent)>();
+    for (var i = 0; i < ordered.Count; i++)
+    {
+        if (i == ordered.Count - 1) { result.Add((null, null, null)); break; }
+        var distance = Math.Sqrt(Math.Pow(ordered[i + 1].x - ordered[i].x, 2) + Math.Pow(ordered[i + 1].y - ordered[i].y, 2));
+        var height = ordered[i].z.HasValue && ordered[i + 1].z.HasValue ? ordered[i + 1].z.Value - ordered[i].z.Value : (double?)null;
+        result.Add((distance, height, height.HasValue && distance > 1e-6 ? height.Value / distance * 100 : (double?)null));
+    }
+    return result;
+}
+
 // Host access starts here.
 ObjectId? ResolveId(string handle)
 {
@@ -412,8 +453,8 @@ if (includeCogoPoints && groupNames.Count > 0)
 }
 
 // Survey points: AutoCAD points, block insertion points (also inside xrefs) and COGO points.
-var collected = new List<(double x, double y, string kind, string name, string layer, string id, bool fromXref, string label)>();
-var seenXy = new HashSet<(long, long)>();
+var collected = new List<(double x, double y, string kind, string name, string layer, string id, bool fromXref, string label, double? z)>();
+var seenXy = new Dictionary<(long, long), int>();
 var blockCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 var layerCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 // Attribute values seen, per tag, before filtering (at most 2000 distinct values kept per tag).
@@ -423,11 +464,23 @@ var unresolvedXrefs = new List<string>();
 int scanned = 0, filteredOut = 0, duplicates = 0;
 var scanTruncated = false;
 
-void Collect(double x, double y, string kind, string name, string layer, string id, bool fromXref, string label)
+void Collect(double x, double y, string kind, string name, string layer, string id, bool fromXref, string label, double? z)
 {
-    // A block and a point on the same spot are one measured point.
-    if (!seenXy.Add(((long)Math.Round(x / 1e-3), (long)Math.Round(y / 1e-3)))) { duplicates++; return; }
-    collected.Add((x, y, kind, name, layer, id, fromXref, label));
+    // A block and a point on the same spot are one measured point; a height the first one lacks is taken from the second.
+    var spot = ((long)Math.Round(x / 1e-3), (long)Math.Round(y / 1e-3));
+    if (seenXy.TryGetValue(spot, out var kept))
+    {
+        duplicates++;
+        if (z.HasValue && !collected[kept].z.HasValue)
+        {
+            var first = collected[kept];
+            first.z = z;
+            collected[kept] = first;
+        }
+        return;
+    }
+    seenXy[spot] = collected.Count;
+    collected.Add((x, y, kind, name, layer, id, fromXref, label, z));
 }
 
 void Tally(Dictionary<string, int> counts, string key) => counts[key] = counts.TryGetValue(key, out var count) ? count + 1 : 1;
@@ -471,7 +524,9 @@ void Walk(ObjectId ownerId, Matrix3d transform, int depth, string xrefName)
             if (!layerMatches(entity.Layer)) { filteredOut++; continue; }
             if (attributeIncludes.Count > 0) { filteredOut++; continue; }
             var position = point.Position.TransformBy(transform);
-            Collect(position.X, position.Y, "point", entity.Layer, entity.Layer, reference, xrefName != null, "");
+            // With a height attribute named, a bare point has no height of its own.
+            Collect(position.X, position.Y, "point", entity.Layer, entity.Layer, reference, xrefName != null, "",
+                withElevations && elevationTag.Length == 0 ? position.Z : (double?)null);
         }
         else if (entity is BlockReference block)
         {
@@ -500,7 +555,13 @@ void Walk(ObjectId ownerId, Matrix3d transform, int depth, string xrefName)
             TallyAttributes(attributes);
             if (!blockMatches(blockName) || !layerMatches(entity.Layer) || !attributesMatch(attributes)) { filteredOut++; continue; }
             var position = block.Position.TransformBy(transform);
-            Collect(position.X, position.Y, "block", blockName, entity.Layer, reference, xrefName != null, PointLabel(attributes));
+            double? blockHeight = null;
+            if (withElevations)
+                blockHeight = elevationTag.Length == 0
+                    ? position.Z
+                    : ParseElevation(attributes.Where(a => string.Equals((a.tag ?? "").Trim(), elevationTag, StringComparison.OrdinalIgnoreCase))
+                        .Select(a => a.value).FirstOrDefault());
+            Collect(position.X, position.Y, "block", blockName, entity.Layer, reference, xrefName != null, PointLabel(attributes), blockHeight);
         }
     }
 }
@@ -522,7 +583,8 @@ if (includeCogoPoints && !scanTruncated)
             filteredOut++;
             continue;
         }
-        Collect(cogo.Easting, cogo.Northing, "cogo", (cogo.RawDescription ?? "").Trim(), cogo.Layer, "#" + cogo.PointNumber, false, PointLabel(description));
+        Collect(cogo.Easting, cogo.Northing, "cogo", (cogo.RawDescription ?? "").Trim(), cogo.Layer, "#" + cogo.PointNumber, false, PointLabel(description),
+            withElevations ? cogo.Elevation : (double?)null);
     }
 }
 if (scanTruncated)
@@ -629,6 +691,30 @@ for (var c = 0; c < candidates.Count; c++)
     previous = candidate.station;
     if (details.Count >= detailLimit) continue;
     var info = candidate.info;
+    var across = candidate.row.OrderBy(p => p.offset).ToList();
+    object rowPoints;
+    object rowElevations = null;
+    if (withElevations)
+    {
+        var slopes = NeighbourSlopes(across.Select(p => (collected[p.index].x, collected[p.index].y, collected[p.index].z)).ToList());
+        rowPoints = across.Select((p, i) => new {
+            id = collected[p.index].id, offset = p.offset, station = p.station, label = collected[p.index].label,
+            elevation = collected[p.index].z,
+            distanceToNext = slopes[i].distance, heightToNext = slopes[i].height, slopeToNextPercent = slopes[i].slopePercent
+        }).Take(30).ToList();
+        var heights = across.Where(p => collected[p.index].z.HasValue).Select(p => collected[p.index].z.Value).ToList();
+        rowElevations = new {
+            known = heights.Count,
+            missing = across.Count - heights.Count,
+            min = heights.Count > 0 ? heights.Min() : (double?)null,
+            max = heights.Count > 0 ? heights.Max() : (double?)null
+        };
+    }
+    else
+    {
+        rowPoints = across
+            .Select(p => new { id = collected[p.index].id, offset = p.offset, station = p.station, label = collected[p.index].label }).Take(30).ToList();
+    }
     details.Add(new {
         station = candidate.station,
         needsReview = review.reasons.Count > 0,
@@ -654,9 +740,30 @@ for (var c = 0; c < candidates.Count; c++)
         names = candidate.row.GroupBy(p => collected[p.index].kind + ": " + collected[p.index].name)
             .OrderByDescending(g => g.Count()).Take(10)
             .Select(g => new { name = g.Key, count = g.Count() }).ToList(),
-        points = candidate.row.OrderBy(p => p.offset)
-            .Select(p => new { id = collected[p.index].id, offset = p.offset, station = p.station, label = collected[p.index].label }).Take(30).ToList()
+        elevations = rowElevations,
+        points = rowPoints
     });
+}
+
+object elevationSummary = null;
+if (withElevations)
+{
+    var used = projected.Select(p => collected[p.index].z).ToList();
+    var knownHeights = used.Count(z => z.HasValue);
+    var zeroHeights = used.Count(z => z.HasValue && z.Value == 0);
+    elevationSummary = new {
+        source = elevationTag.Length > 0 ? "attribute" : "geometry",
+        attributeTag = elevationTag.Length > 0 ? elevationTag : null,
+        known = knownHeights,
+        missing = used.Count - knownHeights,
+        zero = zeroHeights
+    };
+    if (elevationTag.Length > 0 && knownHeights == 0 && used.Count > 0)
+        warnings.Add($"No point had a readable number in the attribute '{elevationTag}'; sources.attributesSeen lists the tags that exist.");
+    else if (elevationTag.Length == 0 && knownHeights > 0 && zeroHeights == knownHeights)
+        warnings.Add("Every height read from the geometry is 0, so the survey seems to be drawn flat. If the heights are in a block attribute, name its tag in elevationAttributeTag (sources.attributesSeen lists the tags).");
+    else if (used.Count - knownHeights > 0)
+        warnings.Add($"{used.Count - knownHeights} of {used.Count} points have no height; the slopes next to them are left empty.");
 }
 
 return new {
@@ -685,6 +792,7 @@ return new {
         }).ToList()
     },
     projection = new { outsideAlignment, beyondMaxOffset, projectionMismatch, used = projected.Count },
+    elevations = elevationSummary,
     rows = new {
         found = rows.Count,
         candidates = candidates.Count,
@@ -724,5 +832,6 @@ return new {
 - Review hints: real cross rows repeat the same features, so their points sit at about the same offsets as in the neighbouring rows. `matchingPoints` counts a candidate's points whose offset (within 0.25 m) also occurs in at least 3 of its up to 20 nearest candidates. `needsReview` is true, with `reviewReasons`, when `matchingPoints` is below half of the upper quartile of all candidates (typically stray symbols in a junction), or when the median stations of the left and right halves (`leftStation`, `rightStation`, `halfShift`) are more than 2 × `rowGap` apart, because one perpendicular sample line then misses one half. Check these in plan; `rows.needsReview` counts them. The hints compare candidates with each other, so they need at least 4 candidates.
 - `rejectedRows` lists up to 50 groups that are not rows and why. A long group rejected for its station spread usually means a line measured along the road (such as a kerb line) or symbols between rows; lower `rowGap`, exclude those layers or blocks, or narrow the filters.
 - `sampleLineStations` is ready for the `stations` parameter of `create_sample_lines`, as `[station, ""]` rows so the sample lines get station-based names. `surveyExtent` is the largest surveyed distance left and right of the alignment, a starting point for that recipe's `leftWidth` and `rightWidth`. Check the list first: this recipe only proposes stations.
+- Elevations and slopes (optional): with `includeElevations` each listed point also carries its `elevation`, and `distanceToNext`, `heightToNext` and `slopeToNextPercent` towards the next point of the row. The points are ordered across the road from left (negative offset) to right, the distance is the plan distance between the two points, and the slope is positive where the next point is higher. The height comes from the geometry (Z of the point, of the block's insertion point, or the COGO point's elevation). Surveys drawn flat keep the height in a block attribute: name its tag in `elevationAttributeTag` (`sources.attributesSeen` lists the tags); then only that attribute counts, read with a decimal point or comma, and a bare AutoCAD point has no height unless a block with the attribute sits on the same spot. `elevations` at the top counts known, missing and zero heights, and each row has its own count with the lowest and highest height. A slope next to a point without a height stays empty. These are the measured values only: which points are pavement edges and which slope is acceptable is for the caller to judge. Use `rangeStart` and `rangeEnd` to read a long road in parts, because the result is limited in size.
 - `roundTo` rounds the stations, for example to 0.01 or 0.1; rows that round to the same station are merged and counted.
 - Office conventions such as the surveyor's layers, block names and usual tolerances belong to the caller's own instructions; this recipe only takes them as parameters.
