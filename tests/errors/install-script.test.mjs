@@ -20,6 +20,11 @@ test("the server is copied to a folder that runs on its own and keeps the previo
   try {
     const first = run(["--server", "--target", target]);
     assert.equal(first.status, 0, first.stderr);
+    // It prints the settings that start the copy, for JSON clients and for Codex.
+    const entry = path.join(target, "build", "index.js");
+    assert.ok(first.stdout.includes(JSON.stringify(entry)), "the JSON settings name the installed entry");
+    assert.ok(first.stdout.includes(`args = ['${entry}']`), "the Codex settings name the installed entry");
+    assert.match(first.stdout, /\[mcp_servers\.civil3d\]/);
     for (const expected of [
       "build/index.js",
       "build/build-info.json",
@@ -119,6 +124,47 @@ test("the plugin is copied into the bundle after the installed one was backed up
       "new plugin",
       "the replaced bundle is kept as it was"
     );
+  } finally {
+    await rm(work, { recursive: true, force: true });
+  }
+});
+
+test("only the newest plugin backups made by the script are kept", async () => {
+  const work = await mkdtemp(path.join(os.tmpdir(), "civil3d-mcp-install-prune-"));
+  const output = path.join(work, "output");
+  const bundle = path.join(work, "ApplicationPlugins", "Civil3dMcpPlugin.bundle");
+  const backup = path.join(work, "backup");
+  try {
+    await mkdir(output, { recursive: true });
+    await writeFile(path.join(output, "Civil3dMcpPlugin.dll"), "plugin");
+    await mkdir(path.join(bundle, "Contents", "Windows"), { recursive: true });
+    await writeFile(path.join(bundle, "Contents", "Windows", "Civil3dMcpPlugin.dll"), "installed");
+    for (const old of ["20200101-000000", "20200102-000000", "20200103-000000", "20200104-000000"]) {
+      await mkdir(path.join(backup, old), { recursive: true });
+    }
+    await mkdir(path.join(backup, "kept by hand"), { recursive: true });
+
+    const invalid = run(["--plugin", "--bundle", bundle, "--from", output, "--backup", backup, "--keep-backups", "x"]);
+    assert.equal(invalid.status, 1);
+    assert.match(invalid.stderr, /--keep-backups/);
+
+    const all = run(["--plugin", "--bundle", bundle, "--from", output, "--backup", backup, "--keep-backups", "0"]);
+    assert.equal(all.status, 0, all.stderr);
+    assert.equal((await readdir(backup)).length, 6, "0 keeps every backup");
+
+    // A second install in the same second would reuse the stamp; wait for a new one.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const pruned = run(["--plugin", "--bundle", bundle, "--from", output, "--backup", backup]);
+    assert.equal(pruned.status, 0, pruned.stderr);
+    const left = (await readdir(backup)).sort();
+    assert.equal(left.length, 4, left.join(", "));
+    assert.ok(left.includes("kept by hand"), "a folder the script did not name is left alone");
+    assert.deepEqual(
+      left.filter((name) => name.startsWith("2020")),
+      ["20200104-000000"],
+      "the two new backups and the newest old one stay, the older ones go"
+    );
+    assert.match(pruned.stdout, /older backup removed/);
   } finally {
     await rm(work, { recursive: true, force: true });
   }

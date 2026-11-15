@@ -2,14 +2,19 @@
 // does not depend on what happens in the development folder afterwards.
 //
 //   node scripts/install.mjs --server [--target <folder>]
-//   node scripts/install.mjs --plugin [--bundle <folder>] [--from <build output>] [--backup <folder>]
+//   node scripts/install.mjs --plugin [--bundle <folder>] [--from <build output>] [--backup <folder>] [--keep-backups <n>]
+//
+// %LOCALAPPDATA%\Civil3dMcpRoslyn is the standard home of everything the MCP
+// keeps on a computer: the installed server, plugin backups, drawing backups,
+// the write journal and pictures.
 //
 // --server copies the compiled server, the skills and the runtime packages to
 //   %LOCALAPPDATA%\Civil3dMcpRoslyn\server (the previous copy is kept next to
-//   it as server.previous). Point the MCP client at <target>\build\index.js.
+//   it as server.previous) and prints the client settings that start it.
 // --plugin copies the built plugin into the Civil 3D autoload bundle. It
-//   refuses while any Civil 3D is running, and first copies the installed
-//   bundle to a time-stamped backup folder.
+//   refuses while any Civil 3D is running, first copies the installed bundle
+//   to a time-stamped backup folder, and then keeps only the newest backups
+//   it made (3 unless --keep-backups says otherwise; 0 keeps all).
 //
 // Build first: `npm run build`, and for the plugin
 // `dotnet build plugin/Civil3dMcpPlugin -c Release`.
@@ -22,6 +27,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BUNDLE_NAME = "Civil3dMcpPlugin.bundle";
+const DEFAULT_KEPT_BACKUPS = 3;
+// Backup folders this script names (yyyyMMdd-HHmmss); nothing else is ever removed.
+const BACKUP_STAMP = /^\d{8}-\d{6}$/;
 const PLUGIN_DLL = "Civil3dMcpPlugin.dll";
 
 class InstallError extends Error {}
@@ -32,6 +40,10 @@ function parseArguments(argv) {
     const argument = argv[index];
     if (argument === "--server" || argument === "--plugin" || argument === "--help") {
       options[argument.slice(2)] = true;
+    } else if (argument === "--keep-backups") {
+      const value = argv[++index];
+      if (!/^\d+$/.test(value ?? "")) throw new InstallError("--keep-backups needs a whole number (0 keeps all).");
+      options.keepBackups = Number(value);
     } else if (["--target", "--bundle", "--from", "--backup"].includes(argument)) {
       const value = argv[++index];
       if (!value) throw new InstallError(`${argument} needs a folder.`);
@@ -188,10 +200,28 @@ function installServer(options) {
     fs.rmSync(staging, { recursive: true, force: true });
   }
 
+  const entry = path.join(target, "build", "index.js");
   console.log(`Server installed: ${target}`);
   console.log(`  commit ${buildInfo.commit}${buildInfo.dirty ? " (built with uncommitted changes)" : ""}`);
-  console.log(`  start it with: node "${path.join(target, "build", "index.js")}"`);
   if (fs.existsSync(previous)) console.log(`  previous copy kept: ${previous}`);
+  console.log(clientSettings(process.execPath, entry));
+}
+
+/** Ready-to-paste client settings that start the installed server. */
+function clientSettings(node, entry) {
+  const json = JSON.stringify({ mcpServers: { civil3d: { command: node, args: [entry] } } }, null, 2);
+  // A TOML literal string keeps Windows backslashes as they are; a path with a
+  // quote in it falls back to a basic string with its escapes.
+  const tomlString = (text) => (text.includes("'") ? JSON.stringify(text) : `'${text}'`);
+  const toml = ["[mcp_servers.civil3d]", `command = ${tomlString(node)}`, `args = [${tomlString(entry)}]`].join("\n");
+  return (
+    "\nMCP clients start the installed server with this file (restart the client afterwards):\n" +
+    `  ${entry}\n` +
+    "\nClaude Desktop (claude_desktop_config.json) and other JSON clients:\n" +
+    json.replace(/^/gm, "  ") +
+    "\n\nCodex (~/.codex/config.toml; keep the server name you already use, if any):\n" +
+    toml.replace(/^/gm, "  ")
+  );
 }
 
 // ── Plugin ──
@@ -229,6 +259,27 @@ function assertNotInUse(file) {
   }
 }
 
+/**
+ * Keeps the newest `keep` backup folders this script made and removes the
+ * older ones. Folders with any other name are left alone. 0 keeps all.
+ */
+function pruneBackups(backupRoot, keep) {
+  if (keep === 0 || !fs.existsSync(backupRoot)) return [];
+  const stamps = fs
+    .readdirSync(backupRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && BACKUP_STAMP.test(entry.name))
+    .map((entry) => entry.name)
+    .sort()
+    .reverse();
+  const removed = [];
+  for (const stamp of stamps.slice(keep)) {
+    const folder = path.join(backupRoot, stamp);
+    fs.rmSync(folder, { recursive: true, force: true });
+    removed.push(folder);
+  }
+  return removed;
+}
+
 function installPlugin(options) {
   if (process.platform !== "win32" && !(options.bundle && options.from)) {
     throw new InstallError("The plugin is installed on the Windows computer that runs Civil 3D.");
@@ -252,9 +303,10 @@ function installPlugin(options) {
   assertNotInUse(path.join(contents, PLUGIN_DLL));
 
   let backup = null;
+  let backupRoot = null;
   if (fs.existsSync(bundle)) {
     const dataRoot = localApplicationData();
-    const backupRoot = options.backup ?? (dataRoot && path.join(dataRoot, "Civil3dMcpRoslyn", "backup"));
+    backupRoot = options.backup ?? (dataRoot && path.join(dataRoot, "Civil3dMcpRoslyn", "backup"));
     if (!backupRoot) throw new InstallError("Say where to keep the backup with --backup <folder>.");
     backup = path.join(backupRoot, timeStamp(), BUNDLE_NAME);
     if (fs.existsSync(backup)) throw new InstallError(`The backup folder already exists: ${backup}`);
@@ -287,6 +339,11 @@ function installPlugin(options) {
   console.log(`  ${files.length} files, ${PLUGIN_DLL} sha256 ${sha256(path.join(contents, PLUGIN_DLL))}`);
   if (commit) console.log(`  commit ${commit}`);
   if (backup) console.log(`  previous bundle kept: ${backup}`);
+  if (backupRoot) {
+    for (const removed of pruneBackups(backupRoot, options.keepBackups ?? DEFAULT_KEPT_BACKUPS)) {
+      console.log(`  older backup removed: ${removed}`);
+    }
+  }
   console.log("  Civil 3D loads it at its next start and asks once whether to load the new file.");
   try {
     const serverCommit = readJson(path.join(root, "build", "build-info.json")).commit;
@@ -304,7 +361,7 @@ try {
     console.log(
       "Usage:\n" +
         "  node scripts/install.mjs --server [--target <folder>]\n" +
-        "  node scripts/install.mjs --plugin [--bundle <folder>] [--from <build output>] [--backup <folder>]"
+        "  node scripts/install.mjs --plugin [--bundle <folder>] [--from <build output>] [--backup <folder>] [--keep-backups <n>]"
     );
     process.exit(options.help ? 0 : 2);
   }
