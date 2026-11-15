@@ -182,37 +182,96 @@ When the client cancels a tool call (for example the user presses Stop), the ser
 
 ## Setup
 
-### 1. Build MCP Server
-```bash
-npm install && npm run build
-```
+### Where everything lives
 
-### 2. Build Plugin
-```bash
-# Copy DLLs from Civil 3D to C_References/ (see C_References/README.md)
+On a Windows computer the MCP keeps everything in one standard folder per user, `%LOCALAPPDATA%\Civil3dMcpRoslyn` (`C:\Users\<user>\AppData\Local\Civil3dMcpRoslyn`). It needs no administrator rights, and every computer gets the same layout:
+
+| Folder | Contents |
+|--------|----------|
+| `server\` | The installed server that MCP clients start: `server\build\index.js`. The copy it replaced is kept as `server.previous\`. |
+| `backup\` | Plugin bundles replaced by `install:plugin`; the newest 3 are kept. |
+| `backups\` | Drawing copies made by `backup: true` writes. |
+| `journal\` | The [write journal](#safety-switches-receipt-and-journal-for-writes). |
+| `images\` | Picture files of [`NewImagePath()`](#pictures). |
+| `endpoints\` | Records of the running Civil 3D instances. |
+
+The Civil 3D plugin goes where Autodesk loads add-ins from: `%APPDATA%\Autodesk\ApplicationPlugins\Civil3dMcpPlugin.bundle`. The source folder (the git clone) is needed only to build and can be anywhere; `%USERPROFILE%\Documents\civil3d-mcp-roslyn` is a good default. MCP clients never start the server from the source folder.
+
+### 1. Build
+
+Needs Node.js 22 or later, the .NET 8 SDK and git.
+
+```powershell
+git clone https://github.com/nezolder/civil3d-mcp-roslyn.git "$env:USERPROFILE\Documents\civil3d-mcp-roslyn"
+cd "$env:USERPROFILE\Documents\civil3d-mcp-roslyn"
+npm ci
+npm run build
+# Copy the Civil 3D reference DLLs to C_References/ first (see C_References/README.md)
 dotnet build plugin/Civil3dMcpPlugin -c Release
 ```
 
-### 3. Load in Civil 3D
+### 2. Install
+
+```powershell
+npm run install:server   # copies the server to %LOCALAPPDATA%\Civil3dMcpRoslyn\server
+npm run install:plugin   # close every Civil 3D first
+```
+
+`install:server` ends by printing the settings for the clients below with the full path filled in. Civil 3D asks once at its next start whether to load the new, unsigned plugin. Details: [Installing a build](#installing-a-build).
+
+### 3. Connect the AI clients
+
+JSON settings do not expand `%LOCALAPPDATA%`, so they name the full path. Restart the client after a change.
+
+Claude Desktop (`claude_desktop_config.json`) and other JSON clients:
+
+```json
+{
+  "mcpServers": {
+    "civil3d": {
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["C:\\Users\\<user>\\AppData\\Local\\Civil3dMcpRoslyn\\server\\build\\index.js"]
+    }
+  }
+}
+```
+
+Claude Code:
+
+```powershell
+claude mcp add civil3d --scope user -- node "$env:LOCALAPPDATA\Civil3dMcpRoslyn\server\build\index.js"
+```
+
+Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.civil3d]
+command = 'C:\Program Files\nodejs\node.exe'
+args = ['C:\Users\<user>\AppData\Local\Civil3dMcpRoslyn\server\build\index.js']
+```
+
+### 4. Update
+
+```powershell
+git pull
+npm ci                   # only when package-lock.json changed
+npm run build
+npm run install:server   # close the AI clients that use the MCP first
+dotnet build plugin/Civil3dMcpPlugin -c Release
+npm run install:plugin   # close every Civil 3D first
+```
+
+Then start the AI clients and Civil 3D again. The client settings stay as they are.
+
+### Loading by hand during development
+
 ```
 NETLOAD → select Civil3dMcpPlugin.dll
 C3DMCPSTATUS → verify running
 C3DMCPRESET  → release an operation that is stuck while Civil 3D is idle
 ```
 
-For a permanent installation use the autoload bundle instead; see [Installing a build](#installing-a-build).
-
-### 4. Configure AI
-```json
-{
-  "mcpServers": {
-    "civil3d": {
-      "command": "node",
-      "args": ["/path/to/civil3d-mcp/build/index.js"]
-    }
-  }
-}
-```
+To try a server build without installing it, a client can start `<source folder>\build\index.js` directly; switch it back to the installed copy afterwards.
 
 ## Versions and installing a build
 
@@ -231,8 +290,8 @@ npm run install:server   # or: node scripts/install.mjs --server --target <folde
 npm run install:plugin   # or: node scripts/install.mjs --plugin
 ```
 
-- **Server:** copies `build/`, `skills/` and only the packages needed at run time to `%LOCALAPPDATA%\Civil3dMcpRoslyn\server`, checks that the copy loads on its own, then swaps it in. The copy it replaces is kept as `server.previous`. Point the MCP client at `<that folder>\build\index.js`.
-- **Plugin:** copies the Release build into `%APPDATA%\Autodesk\ApplicationPlugins\Civil3dMcpPlugin.bundle`, which every Civil 3D loads at start. It refuses while a running Civil 3D holds the installed DLL, first copies the installed bundle to `%LOCALAPPDATA%\Civil3dMcpRoslyn\backup\<date-time>\`, and verifies each copied file by hash. Civil 3D asks once at its next start whether to load the new, unsigned file.
+- **Server:** copies `build/`, `skills/` and only the packages needed at run time to `%LOCALAPPDATA%\Civil3dMcpRoslyn\server`, checks that the copy loads on its own, then swaps it in. The copy it replaces is kept as `server.previous`. Close the clients that use it first: a running server keeps its old code until it restarts, and if Windows still holds a file in the folder the command stops and leaves the installed copy as it was. At the end it prints the client settings that start `<that folder>\build\index.js`.
+- **Plugin:** copies the Release build into `%APPDATA%\Autodesk\ApplicationPlugins\Civil3dMcpPlugin.bundle`, which every Civil 3D loads at start. It refuses while a running Civil 3D holds the installed DLL, first copies the installed bundle to `%LOCALAPPDATA%\Civil3dMcpRoslyn\backup\<date-time>\`, and verifies each copied file by hash. Afterwards it keeps the newest 3 of the backup folders it made and removes the older ones; `--keep-backups <n>` changes the number and `0` keeps all. Folders with other names are never touched. Civil 3D asks once at its next start whether to load the new, unsigned file.
 
 Neither command changes an MCP client's configuration.
 
