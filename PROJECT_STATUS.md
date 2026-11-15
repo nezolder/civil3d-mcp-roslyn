@@ -6,7 +6,24 @@ This repository contains the accepted runtime, six focused engineering recipes w
 
 ## Current catalogue
 
-The catalogue contains **39 skills** with **40 C# templates**; **38** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+The catalogue contains **41 skills** with **42 C# templates**; **40** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+
+## Pictures in a reply, and a PDF check of sheets (2026-11-14)
+
+The first part of the fourth review round: an assistant can look at the drawing, and can check and plot sheets.
+
+- **Pictures.** A script returns `ImageFile(path)` for a PNG or JPEG file it wrote. The plugin sends the file next to the JSON result and the MCP server passes it on as an MCP image block after the text; the JSON holds a numbered reference with type, byte count and pixel size. At most 4 pictures per result, 2 MB each, 4 MB together. `NewImagePath()` gives a file path in the plugin's image folder, which the plugin clears of files older than a day. The plugin reports the ability as the feature `images`.
+- **`plot_view_image`.** Pictures the extents or a window of the model space or of a sheet through the plot engine and a raster device, so the picture shows plot styles, lineweights and paper space and does not depend on the screen.
+- **`plot_layouts_to_pdf`.** Reads the page setup of each sheet, lists what would stop the plot (no device, a device or plot style table missing on the computer, a paper size the device does not offer) and, unless `plot` is false, plots every sheet to its own PDF file with its own page setup.
+- **Recipe test.** Every template is now also parsed as a script, the form the plugin compiles; a statement that is valid only inside a method is caught offline.
+
+Evidence boundaries:
+
+- **Proven offline:** the serializer tests (PNG and JPEG recognised by content, pixel size of a PNG, each limit and its message), the plugin reply with pictures under both execution routes, the MCP server's image blocks after the text and the receipt, and rejection of malformed entries; both recipes compile against the Civil 3D 2025 assemblies as methods and, bound with sample values, as scripts.
+- **Proven in two Civil 3D 2025 sessions on throwaway copies (2026-11-14, candidate builds):** every picture call returned a text block and an image block with type, bytes and pixel size, PNG and JPEG; a window of the model space showed exactly that area, as a wide or a tall picture after the window; a plot style table changed the picture; a sheet that was not current was pictured and the previous layout restored; unknown layout, unknown device and a partial window were refused with the lists; a missing file and a fifth picture failed with their messages, two pictures arrived as two blocks. The page setup check listed 16 sheets of a sheet template without a problem and left `DBMOD` at 0; four sheets were plotted to real PDF files in about 2.7 s each, two of them custom paper sizes; existing files were refused and `overwrite` replaced them.
+- **Found live and fixed:** a page setup that stores its device with the full path was reported as not installed (now matched by file name; check and plot proven); a tall picture size won among equally large ones (the size now lies like the window, proven; for a sheet like its paper, proven as a code variant, the recipe text itself only compiled); `outputDirectory` was required also for the check alone; a JPEG reference had no pixel size.
+- **Observed, not avoidable in the recipe:** a plot can mark the drawing as modified although no object is written. The graphics generation of a model space page moved `DBMOD` from 0 to 4 on read-only copies and to 5 on a writable one, also for a window with no Civil object in it; building the settings, reading the view, setting `BACKGROUNDPLOT` and the engine calls without graphics left it at 0. An extents picture of the model space also recomputed the drawing extents. A layout switch for the plot added 8 and 16. A sheet plotted while current stayed at 0. Which variable the plot touches is open. Both recipes report `dbmodBefore` and `dbmodAfter`.
+- **Unverified:** a window on a sheet; a twisted model space view; a picture of a whole sheet with its paper edge (the layout plot area with fit-to-size came out small in a corner, so it is not offered); page setups with a missing device, paper size or plot style table (the messages exist, the cases were not produced); whether a given client shows the image blocks to its model.
 
 ## Queries without an Undo step, and a manual way out of a stuck operation (2026-11-14)
 

@@ -32,6 +32,7 @@ import {
   logOperationFailure,
   logOperationSuccess,
 } from "../utils/operationAudit.js";
+import { imageContentBlocks, readResultImages, type ResultImage } from "./resultImages.js";
 
 const log = createLogger("ExecuteTool");
 /** Plugin ability behind requireClean and backup; an older plugin would ignore them. */
@@ -169,6 +170,7 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
       const usesWriteSafety =
         args.requireClean === true || args.backup === true || args.backupDirectory !== undefined;
       let receipt: Record<string, unknown> | undefined;
+      let images: ResultImage[] = [];
       try {
         const commandResult = await withApplicationConnection(
           async (client) =>
@@ -194,6 +196,7 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
               extra.signal,
               (response) => {
                 receipt = readReceipt(response);
+                images = readResultImages(response);
               }
             ),
           {
@@ -220,6 +223,7 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
             ...(receipt
               ? [{ type: "text" as const, text: JSON.stringify({ receipt }) }]
               : []),
+            ...imageContentBlocks(images),
           ],
         };
         logOperationSuccess(log, audit, performance.now());

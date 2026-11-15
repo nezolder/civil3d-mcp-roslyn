@@ -25,6 +25,9 @@ internal static class ResultSerializerTests
       ("unknown values fail without ToString fallback", UnknownType),
       ("reference cycles fail deterministically", ReferenceCycle),
       ("DBObject values are rejected without reading database paths", DbObjectIsNotReflected),
+      ("an image file becomes a numbered reference and its bytes go to the image list", ImageFiles),
+      ("image limits and unreadable or foreign files are refused with a reason", ImageLimits),
+      ("the plugin's image folder hands out new paths and forgets old files", ImageFolder),
     };
 
     foreach (var (name, run) in tests)
@@ -32,6 +35,188 @@ internal static class ResultSerializerTests
       run();
       Console.WriteLine($"PASS {name}");
     }
+  }
+
+  /// <summary>The first bytes of a PNG file of the given pixel size, padded to a length.</summary>
+  internal static byte[] PngBytes(int width, int height, int length)
+  {
+    var bytes = new byte[Math.Max(length, 33)];
+    new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52 }
+      .CopyTo(bytes, 0);
+    System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(16, 4), width);
+    System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(20, 4), height);
+    for (var index = 33; index < bytes.Length; index++) bytes[index] = (byte)(index * 31);
+    return bytes;
+  }
+
+  private static string ImageTestFolder()
+  {
+    var folder = Path.Combine(Path.GetTempPath(), "civil3d-mcp-image-test-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(folder);
+    return folder;
+  }
+
+  private static ScriptImage Image(string path) => new(path);
+
+  private static void ImageFiles()
+  {
+    var folder = ImageTestFolder();
+    try
+    {
+      var png = Path.Combine(folder, "a.png");
+      var jpeg = Path.Combine(folder, "b.bin");
+      var pngBytes = PngBytes(1024, 768, 2_000);
+      var jpegBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4, 5 };
+      File.WriteAllBytes(png, pngBytes);
+      File.WriteAllBytes(jpeg, jpegBytes);
+
+      var images = new List<ScriptImagePayload>();
+      var result = ResultSerializer.Serialize(new
+      {
+        Name = "Model",
+        First = Image(png),
+        Rows = new[] { new { Second = Image(jpeg) } },
+      }, images)!.AsObject();
+
+      AssertJson(result, """
+        {
+          "name": "Model",
+          "first": { "image": 1, "mimeType": "image/png", "bytes": 2000, "width": 1024, "height": 768 },
+          "rows": [ { "second": { "image": 2, "mimeType": "image/jpeg", "bytes": 9 } } ]
+        }
+        """);
+      Assert(images.Count == 2 && images[0].MimeType == "image/png" && images[0].Data.SequenceEqual(pngBytes)
+        && images[1].MimeType == "image/jpeg" && images[1].Data.SequenceEqual(jpegBytes),
+        "the image list holds the files in the order of their references, by content not by file name");
+
+      // A JPEG's pixel size is read from its frame header, past the segments before it.
+      var framed = new byte[]
+      {
+        0xFF, 0xD8,
+        0xFF, 0xE0, 0x00, 0x04, 0x4A, 0x46,
+        0xFF, 0xC4, 0x00, 0x03, 0x00,
+        0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x05, 0x00, 0x06, 0x40, 0x03, 0, 0, 0, 0,
+      };
+      Assert(ScriptImages.Inspect(framed) is { MimeType: "image/jpeg", Width: 1600, Height: 1280 },
+        "a JPEG reports the width and height of its frame");
+      Assert(ScriptImages.Inspect(jpegBytes) is { MimeType: "image/jpeg", Width: null, Height: null },
+        "a JPEG without a readable frame header is still a JPEG");
+
+      // A picture near the size limit does not count against the text budget.
+      var large = Path.Combine(folder, "large.png");
+      File.WriteAllBytes(large, PngBytes(1600, 1280, ScriptImages.MaxImageBytes));
+      var largeImages = new List<ScriptImagePayload>();
+      var withText = ResultSerializer.Serialize(
+        new { Note = new string('n', 1_000), Picture = Image(large) }, largeImages)!.AsObject();
+      Assert(!withText.ContainsKey("truncated") && largeImages.Count == 1
+        && largeImages[0].Data.Length == ScriptImages.MaxImageBytes,
+        "an image at the size limit is accepted and cuts nothing from the text");
+    }
+    finally
+    {
+      Directory.Delete(folder, recursive: true);
+    }
+  }
+
+  private static void ImageLimits()
+  {
+    var folder = ImageTestFolder();
+    try
+    {
+      var png = Path.Combine(folder, "a.png");
+      File.WriteAllBytes(png, PngBytes(10, 10, 100));
+
+      AssertImageError(() => ResultSerializer.Serialize(new { Picture = Image(png) }),
+        "only be returned as part of a script result");
+      AssertImageError(() => ResultSerializer.Serialize(Image(Path.Combine(folder, "missing.png")), new()),
+        "not found");
+      AssertImageError(() => ResultSerializer.Serialize(Image("relative.png"), new()), "full path");
+
+      var text = Path.Combine(folder, "text.png");
+      File.WriteAllText(text, "this is not a picture, whatever its name says");
+      AssertImageError(() => ResultSerializer.Serialize(Image(text), new()), "neither a PNG nor a JPEG");
+
+      var tooLarge = Path.Combine(folder, "large.png");
+      File.WriteAllBytes(tooLarge, PngBytes(10, 10, ScriptImages.MaxImageBytes + 1));
+      AssertImageError(() => ResultSerializer.Serialize(Image(tooLarge), new()), "the limit is");
+
+      AssertImageError(
+        () => ResultSerializer.Serialize(
+          Enumerable.Range(0, ScriptImages.MaxImagesPerResult + 1).Select(_ => Image(png)).ToArray(), new()),
+        $"at most {ScriptImages.MaxImagesPerResult} images");
+
+      var big = Path.Combine(folder, "big.png");
+      File.WriteAllBytes(big, PngBytes(10, 10, ScriptImages.MaxTotalImageBytes / 3 + 1));
+      var twoFit = new List<ScriptImagePayload>();
+      ResultSerializer.Serialize(new[] { Image(big), Image(big) }, twoFit);
+      Assert(twoFit.Count == 2, "images below the total limit are accepted together");
+      AssertImageError(
+        () => ResultSerializer.Serialize(new[] { Image(big), Image(big), Image(big) }, new()),
+        "bytes together");
+    }
+    finally
+    {
+      Directory.Delete(folder, recursive: true);
+    }
+  }
+
+  private static void ImageFolder()
+  {
+    var folder = ImageTestFolder();
+    var previous = Environment.GetEnvironmentVariable(ScriptImages.DirectoryEnvironmentVariable);
+    Environment.SetEnvironmentVariable(ScriptImages.DirectoryEnvironmentVariable, folder);
+    try
+    {
+      var now = new DateTime(2026, 11, 14, 12, 0, 0);
+      var old = Path.Combine(folder, "old.png");
+      var oldPdf = Path.Combine(folder, "old.PDF");
+      var recent = Path.Combine(folder, "recent.png");
+      var foreign = Path.Combine(folder, "keep.dwg");
+      foreach (var file in new[] { old, oldPdf, recent, foreign }) File.WriteAllText(file, "x");
+      File.SetLastWriteTime(old, now - ScriptImages.KeepFor - TimeSpan.FromMinutes(1));
+      File.SetLastWriteTime(oldPdf, now - TimeSpan.FromDays(3));
+      File.SetLastWriteTime(recent, now - TimeSpan.FromHours(1));
+      File.SetLastWriteTime(foreign, now - TimeSpan.FromDays(30));
+
+      var first = ScriptImages.NewPath("png", now);
+      var second = ScriptImages.NewPath(".PDF", now);
+      Assert(Path.GetDirectoryName(first) == folder && first.EndsWith(".png", StringComparison.Ordinal)
+        && second.EndsWith(".pdf", StringComparison.Ordinal) && first != second
+        && Path.GetFileName(first).StartsWith("20261114-120000-", StringComparison.Ordinal),
+        "new paths are unique, dated and inside the plugin's image folder");
+      Assert(!File.Exists(old) && !File.Exists(oldPdf), "pictures and PDFs older than a day are removed");
+      Assert(File.Exists(recent) && File.Exists(foreign), "recent files and files of other kinds are left alone");
+
+      foreach (var bad in new[] { "exe", "", "dwg", "png/../x" })
+      {
+        try
+        {
+          ScriptImages.NewPath(bad, now);
+          throw new InvalidOperationException($"extension '{bad}' was accepted");
+        }
+        catch (ArgumentException) { }
+      }
+    }
+    finally
+    {
+      Environment.SetEnvironmentVariable(ScriptImages.DirectoryEnvironmentVariable, previous);
+      Directory.Delete(folder, recursive: true);
+    }
+  }
+
+  private static void AssertImageError(Action action, string expectedText)
+  {
+    try
+    {
+      action();
+    }
+    catch (JsonRpcDispatchException ex) when (ex.Code == "CIVIL3D.RESULT_SERIALIZATION_FAILED")
+    {
+      Assert(ex.Message.Contains(expectedText, StringComparison.Ordinal),
+        $"expected '{expectedText}' in: {ex.Message}");
+      return;
+    }
+    throw new InvalidOperationException($"expected a serialization error containing '{expectedText}'");
   }
 
   private static void PrimitiveValues()

@@ -93,6 +93,12 @@ Details: `civil3d_skills` with `action: "guide"` and a `topic`:
 - A query reads the open drawing as it is in memory, including unsaved changes. Say whether a
   statement rests on the open drawing or on the saved file.
 - Pass `timeoutSeconds` in advance for a read that is known to take long.
+- To see the drawing, run the skill `plot_view_image`: it returns a picture of the extents or of
+  a window, drawn by the plot engine. A picture shows the look; read sizes and coordinates with
+  a query. `plot_layouts_to_pdf` checks the page setup of sheets and plots them to PDF files.
+  A plot can mark the drawing as modified without writing an object (`dbmodAfter` in the
+  result), and `requireClean` then refuses the next write: take pictures after the writes they
+  check.
 
 <!-- topic: writing -->
 ## Writing
@@ -256,6 +262,9 @@ are imported. Keep it synchronous: a script that uses `await` is rejected.
   `Dictionary<string, ...>`, `ObjectId`, `Handle`, `Point2d/3d`, `Vector2d/3d`. Enums come back
   as their names.
 - Not returnable: `DBObject` instances (entities, Civil objects). Return their fields.
+- A picture: return `ImageFile(path)` for a PNG or JPEG file the script wrote, for example a
+  plot to `NewImagePath()`. It arrives as an image next to the result; at most 4 per result,
+  2 MB each. The skill `plot_view_image` does this for a view or a sheet.
 - Limits: 1000 items per collection, depth 8, 40000 characters and about 10000 values in total.
   Past them lists are cut and reported under `truncated`. Do not work around them; summarize or
   page instead.

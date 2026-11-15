@@ -36,6 +36,9 @@ internal sealed class ExecutionRecord
   internal DateTimeOffset? FileLastWriteUtc { get; private set; }
   internal long? FileBytes { get; private set; }
 
+  /// <summary>Image files the script returned; sent next to the result, never journaled.</summary>
+  internal List<ScriptImagePayload> Images { get; } = new();
+
   /// <summary>True once the active drawing was resolved, so a receipt has something to say.</summary>
   internal bool ReachedDrawing => DatabaseFilename != null;
 
