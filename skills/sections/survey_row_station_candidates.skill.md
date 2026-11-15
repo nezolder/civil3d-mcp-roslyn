@@ -403,6 +403,16 @@ List<(double? distance, double? height, double? slopePercent)> NeighbourSlopes(I
     return result;
 }
 
+// Two items on one spot are one measured point. A height beats none, and a height other than 0 beats 0,
+// because a symbol drawn flat can sit on a measured point; otherwise the height seen first stays.
+bool IsZeroHeight(double? height) => height.HasValue && Math.Abs(height.Value) < 1e-9;
+double? MergeHeight(double? kept, double? other) =>
+    other.HasValue && (!kept.HasValue || (IsZeroHeight(kept) && !IsZeroHeight(other))) ? other : kept;
+
+// Two different heights on one spot, neither of them 0: one of the two items is wrong, or they are two measurements.
+bool HeightsDisagree(double? first, double? second) =>
+    first.HasValue && second.HasValue && !IsZeroHeight(first) && !IsZeroHeight(second) && Math.Abs(first.Value - second.Value) > 1e-3;
+
 // Host access starts here.
 ObjectId? ResolveId(string handle)
 {
@@ -455,6 +465,8 @@ if (includeCogoPoints && groupNames.Count > 0)
 // Survey points: AutoCAD points, block insertion points (also inside xrefs) and COGO points.
 var collected = new List<(double x, double y, string kind, string name, string layer, string id, bool fromXref, string label, double? z)>();
 var seenXy = new Dictionary<(long, long), int>();
+// Points whose spot carried two different heights (see HeightsDisagree); the first one was kept.
+var conflictingHeights = new HashSet<int>();
 var blockCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 var layerCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 // Attribute values seen, per tag, before filtering (at most 2000 distinct values kept per tag).
@@ -466,17 +478,15 @@ var scanTruncated = false;
 
 void Collect(double x, double y, string kind, string name, string layer, string id, bool fromXref, string label, double? z)
 {
-    // A block and a point on the same spot are one measured point; a height the first one lacks is taken from the second.
+    // A block and a point on the same spot are one measured point; MergeHeight says whose height counts.
     var spot = ((long)Math.Round(x / 1e-3), (long)Math.Round(y / 1e-3));
     if (seenXy.TryGetValue(spot, out var kept))
     {
         duplicates++;
-        if (z.HasValue && !collected[kept].z.HasValue)
-        {
-            var first = collected[kept];
-            first.z = z;
-            collected[kept] = first;
-        }
+        var first = collected[kept];
+        if (HeightsDisagree(first.z, z)) conflictingHeights.Add(kept);
+        first.z = MergeHeight(first.z, z);
+        collected[kept] = first;
         return;
     }
     seenXy[spot] = collected.Count;
@@ -706,6 +716,8 @@ for (var c = 0; c < candidates.Count; c++)
         rowElevations = new {
             known = heights.Count,
             missing = across.Count - heights.Count,
+            zero = heights.Count(height => IsZeroHeight(height)),
+            conflicting = across.Count(p => conflictingHeights.Contains(p.index)),
             min = heights.Count > 0 ? heights.Min() : (double?)null,
             max = heights.Count > 0 ? heights.Max() : (double?)null
         };
@@ -748,22 +760,34 @@ for (var c = 0; c < candidates.Count; c++)
 object elevationSummary = null;
 if (withElevations)
 {
-    var used = projected.Select(p => collected[p.index].z).ToList();
+    // The counts cover the points of this call's candidate rows, also of rows the candidates list had no room for.
+    var rowPointIndexes = candidates.SelectMany(c => c.row).Select(p => p.index).ToList();
+    var used = rowPointIndexes.Select(index => collected[index].z).ToList();
     var knownHeights = used.Count(z => z.HasValue);
-    var zeroHeights = used.Count(z => z.HasValue && z.Value == 0);
+    var zeroHeights = used.Count(z => IsZeroHeight(z));
+    var conflicts = rowPointIndexes.Count(index => conflictingHeights.Contains(index));
     elevationSummary = new {
         source = elevationTag.Length > 0 ? "attribute" : "geometry",
         attributeTag = elevationTag.Length > 0 ? elevationTag : null,
+        rowPoints = used.Count,
         known = knownHeights,
         missing = used.Count - knownHeights,
-        zero = zeroHeights
+        zero = zeroHeights,
+        conflicting = conflicts
     };
     if (elevationTag.Length > 0 && knownHeights == 0 && used.Count > 0)
-        warnings.Add($"No point had a readable number in the attribute '{elevationTag}'; sources.attributesSeen lists the tags that exist.");
+        warnings.Add($"No point of the rows had a readable number in the attribute '{elevationTag}'; sources.attributesSeen lists the tags that exist.");
     else if (elevationTag.Length == 0 && knownHeights > 0 && zeroHeights == knownHeights)
         warnings.Add("Every height read from the geometry is 0, so the survey seems to be drawn flat. If the heights are in a block attribute, name its tag in elevationAttributeTag (sources.attributesSeen lists the tags).");
-    else if (used.Count - knownHeights > 0)
-        warnings.Add($"{used.Count - knownHeights} of {used.Count} points have no height; the slopes next to them are left empty.");
+    else
+    {
+        if (used.Count - knownHeights > 0)
+            warnings.Add($"{used.Count - knownHeights} of {used.Count} row points have no height; the slopes next to them are left empty.");
+        if (elevationTag.Length == 0 && zeroHeights > 0)
+            warnings.Add($"{zeroHeights} of {knownHeights} heights read from the geometry are 0 while the others are not, so the slopes next to them are not real. Such points are usually symbols or labels drawn flat: keep only the survey point block with blockNames, or name the height attribute in elevationAttributeTag.");
+    }
+    if (conflicts > 0)
+        warnings.Add($"{conflicts} row points have two different heights on the same spot; the first one found was kept.");
 }
 
 return new {
@@ -832,6 +856,6 @@ return new {
 - Review hints: real cross rows repeat the same features, so their points sit at about the same offsets as in the neighbouring rows. `matchingPoints` counts a candidate's points whose offset (within 0.25 m) also occurs in at least 3 of its up to 20 nearest candidates. `needsReview` is true, with `reviewReasons`, when `matchingPoints` is below half of the upper quartile of all candidates (typically stray symbols in a junction), or when the median stations of the left and right halves (`leftStation`, `rightStation`, `halfShift`) are more than 2 × `rowGap` apart, because one perpendicular sample line then misses one half. Check these in plan; `rows.needsReview` counts them. The hints compare candidates with each other, so they need at least 4 candidates.
 - `rejectedRows` lists up to 50 groups that are not rows and why. A long group rejected for its station spread usually means a line measured along the road (such as a kerb line) or symbols between rows; lower `rowGap`, exclude those layers or blocks, or narrow the filters.
 - `sampleLineStations` is ready for the `stations` parameter of `create_sample_lines`, as `[station, ""]` rows so the sample lines get station-based names. `surveyExtent` is the largest surveyed distance left and right of the alignment, a starting point for that recipe's `leftWidth` and `rightWidth`. Check the list first: this recipe only proposes stations.
-- Elevations and slopes (optional): with `includeElevations` each listed point also carries its `elevation`, and `distanceToNext`, `heightToNext` and `slopeToNextPercent` towards the next point of the row. The points are ordered across the road from left (negative offset) to right, the distance is the plan distance between the two points, and the slope is positive where the next point is higher. The height comes from the geometry (Z of the point, of the block's insertion point, or the COGO point's elevation). Surveys drawn flat keep the height in a block attribute: name its tag in `elevationAttributeTag` (`sources.attributesSeen` lists the tags); then only that attribute counts, read with a decimal point or comma, and a bare AutoCAD point has no height unless a block with the attribute sits on the same spot. `elevations` at the top counts known, missing and zero heights, and each row has its own count with the lowest and highest height. A slope next to a point without a height stays empty. These are the measured values only: which points are pavement edges and which slope is acceptable is for the caller to judge. Use `rangeStart` and `rangeEnd` to read a long road in parts, because the result is limited in size.
+- Elevations and slopes (optional): with `includeElevations` each listed point also carries its `elevation`, and `distanceToNext`, `heightToNext` and `slopeToNextPercent` towards the next point of the row. The points are ordered across the road from left (negative offset) to right, the distance is the plan distance between the two points, and the slope is positive where the next point is higher. The height comes from the geometry (Z of the point, of the block's insertion point, or the COGO point's elevation). Surveys drawn flat keep the height in a block attribute: name its tag in `elevationAttributeTag` (`sources.attributesSeen` lists the tags); then only that attribute counts, read with a decimal point or comma, and a bare AutoCAD point has no height unless a block with the attribute sits on the same spot. `elevations` at the top counts the points of this call's candidate rows: known, missing, zero and conflicting heights; each row has its own count with the lowest and highest height. A slope next to a point without a height stays empty. Items on the same spot are one point: a height beats none and a height other than 0 beats 0, because a symbol drawn flat often sits on a measured point; two different heights on one spot are counted as conflicting and the first one stays. A symbol or label that stands alone at height 0 still gives a false slope, so with heights from the geometry keep only the survey point block with `blockNames`, or use the attribute. Two points a few millimetres apart give a very large slope from a small height difference. These are the measured values only: which points are pavement edges and which slope is acceptable is for the caller to judge. The result is limited in size and rows with elevations are several times longer, so the candidates list is cut on a longer road while `sampleLineStations` stays complete: take the stations from a first call, then read the elevations in station ranges with `rangeStart` and `rangeEnd` (a few rows each) until `truncated` no longer appears.
 - `roundTo` rounds the stations, for example to 0.01 or 0.1; rows that round to the same station are merged and counted.
 - Office conventions such as the surveyor's layers, block names and usual tolerances belong to the caller's own instructions; this recipe only takes them as parameters.

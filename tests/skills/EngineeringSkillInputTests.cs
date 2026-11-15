@@ -231,6 +231,14 @@ internal static class EngineeringSkillInputTests
         probes.Add(new("two points on one spot give a height difference but no slope",rowsFile,true,rowValues,
             "var s=NeighbourSlopes(new (double x,double y,double? z)[]{(5,5,10.0),(5,5,10.5)});"
             +"return new { success=s[0].distance.Value==0 && Math.Abs(s[0].height.Value-0.5)<1e-12 && s[0].slopePercent==null };"));
+        probes.Add(new("on one spot a height beats none and a measured height beats a symbol's 0",rowsFile,true,rowValues,
+            "return new { success=MergeHeight(null,97.5)==97.5 && MergeHeight(97.5,null)==97.5 && MergeHeight(null,null)==null"
+            +" && MergeHeight(0.0,97.5)==97.5 && MergeHeight(97.5,0.0)==97.5 && MergeHeight(0.0,0.0)==0.0 && MergeHeight(null,0.0)==0.0"
+            +" && MergeHeight(0.0,null)==0.0 && MergeHeight(97.5,98.25)==97.5 && MergeHeight(-0.0,-1.5)==-1.5 };"));
+        probes.Add(new("two different heights on one spot disagree, a 0 or a missing height does not",rowsFile,true,rowValues,
+            "return new { success=HeightsDisagree(97.5,98.25) && HeightsDisagree(97.5,97.502) && !HeightsDisagree(97.5,97.5004)"
+            +" && !HeightsDisagree(97.5,0.0) && !HeightsDisagree(0.0,97.5) && !HeightsDisagree(null,97.5) && !HeightsDisagree(97.5,null)"
+            +" && !HeightsDisagree(null,null) && IsZeroHeight(0.0) && IsZeroHeight(-0.0) && !IsZeroHeight(null) && !IsZeroHeight(0.001) };"));
 
         var trees=new List<SyntaxTree>();
         for(var index=0;index<probes.Count;index++)
