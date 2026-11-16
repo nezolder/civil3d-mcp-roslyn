@@ -195,15 +195,15 @@ On a Windows computer the MCP keeps everything in one standard folder per user, 
 | `images\` | Picture files of [`NewImagePath()`](#pictures). |
 | `endpoints\` | Records of the running Civil 3D instances. |
 
-The Civil 3D plugin goes where Autodesk loads add-ins from: `%APPDATA%\Autodesk\ApplicationPlugins\Civil3dMcpPlugin.bundle`. The source folder (the git clone) is needed only to build and can be anywhere; `%USERPROFILE%\Documents\civil3d-mcp-roslyn` is a good default. MCP clients never start the server from the source folder.
+The Civil 3D plugin goes where Autodesk loads add-ins from: `%APPDATA%\Autodesk\ApplicationPlugins\Civil3dMcpPlugin.bundle`. The source folder (the git clone) is needed only to build and can be anywhere; the standard place is `%USERPROFILE%\source\repos\civil3d-mcp-roslyn`, the default folder of Windows development tools, which OneDrive does not sync. MCP clients never start the server from the source folder.
 
 ### 1. Build
 
 Needs Node.js 22 or later, the .NET 8 SDK and git.
 
 ```powershell
-git clone https://github.com/nezolder/civil3d-mcp-roslyn.git "$env:USERPROFILE\Documents\civil3d-mcp-roslyn"
-cd "$env:USERPROFILE\Documents\civil3d-mcp-roslyn"
+git clone https://github.com/nezolder/civil3d-mcp-roslyn.git "$env:USERPROFILE\source\repos\civil3d-mcp-roslyn"
+cd "$env:USERPROFILE\source\repos\civil3d-mcp-roslyn"
 npm ci
 npm run build
 # Copy the Civil 3D reference DLLs to C_References/ first (see C_References/README.md)
