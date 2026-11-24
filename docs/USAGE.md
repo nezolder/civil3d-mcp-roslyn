@@ -302,7 +302,9 @@ are imported. Keep it synchronous: a script that uses `await` is rejected.
   access (topic `civil`).
 - Names that exist twice have a default: `DBObject`, `Entity` and `ErrorStatus` are the AutoCAD
   types, `Surface` and `Section` the Civil 3D ones, `Exception` is `System.Exception`. Write the
-  full name for the other one, and for other duplicated names such as `Table`.
+  full name for the other one, and for other duplicated names such as `Table`. Write
+  `Autodesk.Civil.DatabaseServices.Subassembly` in full: once a drawing with a corridor is open,
+  the stock subassembly library adds a namespace `Subassembly` and the short name fails (CS0118).
 - Other namespaces need a `using` line or a full name, for example
   `Autodesk.Civil.DatabaseServices.Styles`.
 

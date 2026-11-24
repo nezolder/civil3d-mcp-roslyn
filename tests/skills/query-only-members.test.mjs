@@ -28,6 +28,17 @@ test("the query-only guard names the section source list", () => {
   );
 });
 
+test("no catalog skill or live smoke body uses the short type name Subassembly", () => {
+  // A stock subassembly library loaded with a corridor drawing defines a root namespace Subassembly (CS0118).
+  const bodies = skillFiles(path.join(root, "skills")).map((file) => [file, fs.readFileSync(file, "utf8").match(/```csharp\r?\n([\s\S]*?)```/)?.[1] ?? ""]);
+  const smoke = path.join(root, "scripts", "live-smoke", "csharp");
+  for (const name of fs.readdirSync(smoke).filter((n) => n.endsWith(".cs"))) bodies.push([path.join(smoke, name), fs.readFileSync(path.join(smoke, name), "utf8")]);
+  for (const [file, code] of bodies) {
+    const bare = code.split("\n").filter((line) => !line.trim().startsWith("//") && /(?<![.\w])Subassembly(?![\w.])/.test(line.replace(/"[^"]*"/g, "")));
+    assert.deepEqual(bare, [], `${path.relative(root, file)} uses the short name Subassembly`);
+  }
+});
+
 test("no read-only catalog skill calls a member that civil3d_query refuses", () => {
   const members = queryBlockedMembers();
   for (const file of skillFiles(path.join(root, "skills"))) {

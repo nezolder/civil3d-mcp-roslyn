@@ -136,6 +136,12 @@ export function pluginErrorHint(code: string, message: string): string | undefin
       "preview: true to try it without keeping anything."
     );
   }
+  if (code === "CIVIL3D.COMPILATION_ERROR" && /CS0118: 'Subassembly' is a namespace/.test(message)) {
+    return (
+      "Hint: a loaded subassembly library defines a namespace named Subassembly. Write the type in full, " +
+      "Autodesk.Civil.DatabaseServices.Subassembly, and send the corrected code; nothing ran."
+    );
+  }
   return undefined;
 }
 

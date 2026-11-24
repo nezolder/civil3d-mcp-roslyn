@@ -208,6 +208,12 @@ test("known Civil 3D situations add a hint to the plugin message", () => {
   assert.match(readOpen.message, /Hint: eNotOpenForWrite/);
   assert.match(readOpen.message, /OpenMode\.ForWrite/);
 
+  const subassemblyName = civil3dErrorFromPlugin({
+    code: "CIVIL3D.COMPILATION_ERROR",
+    message: "C# compilation failed:\n(85,66): error CS0118: 'Subassembly' is a namespace but is used like a type",
+  });
+  assert.match(subassemblyName.message, /Autodesk\.Civil\.DatabaseServices\.Subassembly/);
+
   const structured = createStructuredToolErrorResult(locked);
   assert.equal(structured.content[0].text, locked.message);
   assert.equal(structured.structuredContent.error.message, locked.message);
