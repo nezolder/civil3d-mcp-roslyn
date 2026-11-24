@@ -16,6 +16,10 @@ parameters:
     type: string
     required: true
     description: Hex handle of the sample line group whose lines give the stations
+  - name: sampleLineDrawingPath
+    type: string
+    required: false
+    description: Full path of the saved drawing that holds the sample line group, when it is not this drawing (for example the cross section drawing that references this corridor); read in a side database, read only (default "")
   - name: baselineNameFilter
     type: string
     required: false
@@ -43,6 +47,7 @@ parameters:
 ```csharp
 var corridorHandle = "CORRIDOR_HANDLE";
 var sampleLineGroupHandle = "SAMPLE_LINE_GROUP_HANDLE";
+var sampleLineDrawingPath = "";
 var baselineNameFilter = "";
 var descriptionPrefix = "";
 var stationTolerance = 0.001;
@@ -66,20 +71,48 @@ var corridorId = Resolve(corridorHandle);
 var corridor = corridorId.IsNull ? null : Transaction.GetObject(corridorId, OpenMode.ForRead) as Corridor;
 if (corridor == null) return new { success = false, error = "corridorHandle does not resolve to a corridor in this drawing." };
 if (corridor.IsReferenceObject) return new { success = false, error = "The corridor is a data reference; change it in its source drawing." };
-var groupId = Resolve(sampleLineGroupHandle);
-var group = groupId.IsNull ? null : Transaction.GetObject(groupId, OpenMode.ForRead) as SampleLineGroup;
-if (group == null) return new { success = false, error = "sampleLineGroupHandle does not resolve to a sample line group." };
-
-// The plan polyline of every sample line.
+// The plan polyline of every sample line, from this drawing or from a saved drawing read in a side database.
 var lines = new List<(string name, List<Point2d> points)>();
-foreach (ObjectId id in group.GetSampleLineIds())
+string groupName = null;
+string ReadGroup(Database db, Transaction tr)
 {
-    var line = Transaction.GetObject(id, OpenMode.ForRead) as SampleLine;
-    if (line == null) continue;
-    var pts = new List<Point2d>();
-    for (var i = 0; i < line.Vertices.Count; i++) pts.Add(new Point2d(line.Vertices[i].Location.X, line.Vertices[i].Location.Y));
-    if (pts.Count >= 2) lines.Add((line.Name, pts));
+    if (!long.TryParse((sampleLineGroupHandle ?? "").Trim(), System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var value) || value <= 0
+        || !db.TryGetObjectId(new Handle(value), out var groupId) || groupId.IsErased)
+        return "sampleLineGroupHandle does not resolve in the drawing that holds the sample lines.";
+    var group = tr.GetObject(groupId, OpenMode.ForRead) as SampleLineGroup;
+    if (group == null) return "sampleLineGroupHandle does not resolve to a sample line group.";
+    groupName = group.Name;
+    foreach (ObjectId id in group.GetSampleLineIds())
+    {
+        var line = tr.GetObject(id, OpenMode.ForRead) as SampleLine;
+        if (line == null) continue;
+        var pts = new List<Point2d>();
+        for (var i = 0; i < line.Vertices.Count; i++) pts.Add(new Point2d(line.Vertices[i].Location.X, line.Vertices[i].Location.Y));
+        if (pts.Count >= 2) lines.Add((line.Name, pts));
+    }
+    return null;
 }
+string groupError;
+var sideDrawing = string.IsNullOrWhiteSpace(sampleLineDrawingPath) ? null : sampleLineDrawingPath.Trim();
+if (sideDrawing == null) groupError = ReadGroup(Database, Transaction);
+else
+{
+    if (!System.IO.Path.IsPathRooted(sideDrawing) || !System.IO.File.Exists(sideDrawing))
+        return new { success = false, error = "sampleLineDrawingPath must be the full path of an existing drawing." };
+    if (string.Equals(System.IO.Path.GetFullPath(sideDrawing), System.IO.Path.GetFullPath(Database.Filename), StringComparison.OrdinalIgnoreCase))
+        return new { success = false, error = "sampleLineDrawingPath is this drawing; leave it empty." };
+    using (var side = new Database(false, true))
+    {
+        side.ReadDwgFile(sideDrawing, FileOpenMode.OpenForReadAndAllShare, true, null);
+        side.CloseInput(true);
+        using (var tr = side.TransactionManager.StartOpenCloseTransaction())
+        {
+            groupError = ReadGroup(side, tr);
+            tr.Commit();
+        }
+    }
+}
+if (groupError != null) return new { success = false, error = groupError };
 if (lines.Count == 0) return new { success = false, error = "The sample line group has no sample lines." };
 
 // Where a sample line crosses an alignment: the offset changes sign along a segment; refine by halving.
@@ -186,7 +219,8 @@ return new
 {
     success = true,
     corridor = corridor.Name,
-    sampleLineGroup = group.Name,
+    sampleLineGroup = groupName,
+    sampleLineDrawing = sideDrawing ?? "this drawing",
     sampleLines = lines.Count,
     stationsAdded = plan.Count,
     rebuilt = rebuild && plan.Count > 0,
@@ -199,6 +233,7 @@ return new
 ## Usage Notes
 
 - Write recipe: identify the drawing, then run it once with `preview: true` to see `stationsAdded` and the per-baseline counts, then for real with `requireClean`, `backup` and `saveDrawing` as the usage guide's `writing` topic says.
+- The sample lines often live in the cross section drawing, which only references the corridor; the stations must be added in the corridor's source drawing. Run the recipe there with `sampleLineDrawingPath` set to the cross section drawing and `sampleLineGroupHandle` to the group's handle in that drawing. The saved file is read, so save the cross section drawing first when its sample lines changed.
 - For every main baseline the station is where the sample line's plan polyline crosses the baseline's alignment, so side streets and other baselines get their own station, not the sample line's station number. A crossing is added to every region of that baseline that contains it, unless the region already has a station within `stationTolerance`.
 - Offset baselines are listed in `offsetBaselinesNotChanged`: the .NET API has no call that adds a station to an offset baseline. Their sections follow the main baseline's stations in their region; check them in Civil 3D.
 - The corridor is not rebuilt unless `rebuild` is true. For a large corridor rebuild in a separate call (or from the user interface), as the usage guide's topic `civil` advises for long operations. After rebuilding, `corridor_section_check` with the same `sampleLineGroupHandle` checks the sections at these stations.

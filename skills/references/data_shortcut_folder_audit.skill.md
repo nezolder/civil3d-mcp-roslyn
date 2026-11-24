@@ -214,7 +214,7 @@ foreach (var typeDir in System.IO.Directory.GetDirectories(folderPath).OrderBy(d
         {
             if (fields.ContainsKey("shortcutCount")) findings.Add("SHORTCUT_COUNT_" + fields["shortcutCount"]);
             if (string.IsNullOrEmpty(keyName)) findings.Add("NO_NAME_FIELD");
-            else if (!fileKey.StartsWith(keyName, StringComparison.OrdinalIgnoreCase)) findings.Add("FILE_NAME_DIFFERS_FROM_KEY_NAME");
+            else if (!fileKey.StartsWith(keyName, StringComparison.OrdinalIgnoreCase)) row["renamedFrom"] = fileKey.Contains('_') ? fileKey.Substring(0, fileKey.LastIndexOf('_')) : fileKey;
             if (source == null) findings.Add("NO_SOURCE_FIELD");
             else if (!(bool)row["sourceExists"]) findings.Add("SOURCE_MISSING");
             if (row["handle"] == null) findings.Add("NO_HANDLE_FIELD");
@@ -289,6 +289,7 @@ if (checkSources)
 
 var findingCounts = keys.SelectMany(k => (List<string>)k["findings"]).GroupBy(f => f.Split(':')[0]).ToDictionary(g => g.Key, g => g.Count());
 var listed = keys.Where(k => !onlyProblems || ((List<string>)k["findings"]).Count > 0).ToList();
+var renamedKeys = keys.Count(k => k.ContainsKey("renamedFrom"));
 return new
 {
     success = true,
@@ -296,6 +297,7 @@ return new
     foundBy,
     keyCount = keys.Count,
     keysWithFindings = keys.Count(k => ((List<string>)k["findings"]).Count > 0),
+    renamedKeys,
     byType = keys.GroupBy(k => (string)k["type"]).ToDictionary(g => g.Key, g => g.Count()),
     findingCounts,
     sourceBasis = keys.GroupBy(k => (string)k["sourceBasis"] ?? "none").ToDictionary(g => g.Key, g => g.Count()),
@@ -313,9 +315,9 @@ return new
 ## Usage Notes
 
 - Read-only: the XML files are only read, and each source drawing is read once in a separate database with shared access, so a drawing open in another Civil 3D instance can still be checked. Nothing in the folder or in any drawing changes.
-- Findings per key: `DUPLICATE_KEY` (two files of one type folder with the same key name; creating a reference then fails), `SAME_OBJECT_HAS_SEVERAL_KEYS` (two keys point to the same object of the same source drawing, typically a key left behind after the object was renamed), `SOURCE_OBJECT_HAS_OTHER_NAME` (the object behind the handle now has another name), `HANDLE_NOT_FOUND_IN_SOURCE`, `SOURCE_MISSING`, `FILE_NAME_DIFFERS_FROM_KEY_NAME`, and `NO_..._FIELD` or `UNREADABLE_XML` when a file could not be read as expected.
+- Findings per key: `DUPLICATE_KEY` (two files of one type folder with the same key name; creating a reference then fails), `SAME_OBJECT_HAS_SEVERAL_KEYS` (two keys point to the same object of the same source drawing, typically a key left behind after the object was renamed), `SOURCE_OBJECT_HAS_OTHER_NAME` (the object behind the handle now has another name), `HANDLE_NOT_FOUND_IN_SOURCE`, `SOURCE_MISSING`, and `NO_..._FIELD` or `UNREADABLE_XML` when a file could not be read as expected.
 - The files are read as Civil 3D 2025 writes them: `Shortcut@name`, `File@name` (absolute source path), `DwgRelPath@path` (relative source path) and `Object@name`, `@type`, `@handleLow`, `@handleHigh` (decimal), `@parentAlignmentShortcutName`. `firstFileFields` shows what was read from the first file; when every key reports `NO_HANDLE_FIELD` or `NO_SOURCE_FIELD`, compare it with a file in the folder before trusting the result.
 - The source is found by the relative path first, against the project folder (the one holding `_Shortcuts`) and its parent, then by the absolute path; `sourceBasis` says which one was used. For a copied project pass `useAbsolutePaths: false`, so that no drawing of the original project is read.
-- The file name of a key is the object name plus an identifier, so `FILE_NAME_DIFFERS_FROM_KEY_NAME` means the file name does not start with the object name. `PARENT_ALIGNMENT_KEY_MISSING` marks a profile key whose parent alignment key is not in the folder.
+- The file name of a key is the object name at publishing plus an identifier. When the object was renamed later, Civil 3D updates the name inside the file but keeps the file name; such keys carry `renamedFrom` (counted in `renamedKeys`) and are not a finding on their own, seen live on 8 of 487 keys. `PARENT_ALIGNMENT_KEY_MISSING` marks a profile key whose parent alignment key is not in the folder.
 - The recipe only reports. Removing or renaming a stale key is a decision for the user, done in the Civil 3D user interface or the file system after a backup; synchronising references is a user action too (usage guide topic `civil`).
 - Found in field use (Civil 3D 2025): after a published object was renamed, the old key stayed in the folder and pointed to another object, and duplicate keys made creating references fail.

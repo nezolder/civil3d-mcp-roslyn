@@ -31,11 +31,11 @@ parameters:
   - name: uniqueLinkCodes
     type: array
     required: false
-    description: Link codes that may appear only once on each side of a section, for example a curb's code (default none)
+    description: Link codes that must form one connected run of links on each side of a section, for example a curb's code (default none)
   - name: overlapLinkCodes
     type: array
     required: false
-    description: Link codes whose links from different subassemblies must not overlap across the offset (default Top)
+    description: Link codes whose links must not overlap across the offset, within one subassembly or between subassemblies (default Top)
   - name: requiredShapeCodes
     type: array
     required: false
@@ -154,6 +154,7 @@ string SubassemblyName(ObjectId id)
     return name;
 }
 
+var codesSeen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 var checkedStations = 0;
 var stationsWithoutAssembly = 0;
 var truncated = false;
@@ -181,7 +182,7 @@ foreach (Baseline baseline in corridor.Baselines)
         if (applied == null) { stationsWithoutAssembly++; continue; }
 
         // Every link with its offset range and the subassembly it belongs to.
-        var links = new List<(string sub, ObjectId subId, List<string> codes, double minOffset, double maxOffset, double length, double midOffset)>();
+        var links = new List<(string sub, ObjectId subId, List<string> codes, double minOffset, double maxOffset, double length, double midOffset, Point2d first, Point2d last)>();
         foreach (AppliedSubassembly sub in applied.GetAppliedSubassemblies())
         {
             foreach (CalculatedLink link in sub.Links)
@@ -193,33 +194,48 @@ foreach (Baseline baseline in corridor.Baselines)
                 for (var i = 1; i < pts.Count; i++)
                     length += Math.Sqrt(Math.Pow(pts[i].Y - pts[i - 1].Y, 2) + Math.Pow(pts[i].Z - pts[i - 1].Z, 2));
                 var offsets = pts.Select(p => p.Y).ToList();
-                links.Add((SubassemblyName(sub.SubassemblyId), sub.SubassemblyId, CodesOf(link.CorridorCodes), offsets.Min(), offsets.Max(), length, (offsets.Min() + offsets.Max()) / 2));
+                var codes = CodesOf(link.CorridorCodes);
+                foreach (var c in codes) codesSeen[c] = codesSeen.TryGetValue(c, out var seen) ? seen + 1 : 1;
+                links.Add((SubassemblyName(sub.SubassemblyId), sub.SubassemblyId, codes, offsets.Min(), offsets.Max(), length, (offsets.Min() + offsets.Max()) / 2,
+                    new Point2d(pts[0].Y, pts[0].Z), new Point2d(pts[pts.Count - 1].Y, pts[pts.Count - 1].Z)));
             }
         }
         string Side(double offset) => offset < 0 ? "left" : "right";
 
+        // A code given as unique must form one connected run of links per side; two separate runs
+        // (for example a second curb) are reported, whether they come from one subassembly or several.
         foreach (var code in uniqueLinkCodes.Where(c => !string.IsNullOrWhiteSpace(c)))
         {
-            foreach (var side in links.Where(l => l.codes.Any(c => string.Equals(c, code, StringComparison.OrdinalIgnoreCase))).GroupBy(l => Side(l.midOffset)))
+            var coded = links.Where(l => l.codes.Any(c => string.Equals(c, code, StringComparison.OrdinalIgnoreCase))).ToList();
+            var parent = Enumerable.Range(0, coded.Count).ToArray();
+            int Find(int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; }
+            bool Touch(Point2d a, Point2d b) => a.GetDistanceTo(b) <= Math.Max(overlapTolerance, 1e-4);
+            for (var i = 0; i < coded.Count; i++)
+                for (var j = i + 1; j < coded.Count; j++)
+                    if (Touch(coded[i].first, coded[j].first) || Touch(coded[i].first, coded[j].last) || Touch(coded[i].last, coded[j].first) || Touch(coded[i].last, coded[j].last))
+                        parent[Find(i)] = Find(j);
+            var runs = Enumerable.Range(0, coded.Count).GroupBy(Find).Select(g => g.Select(i => coded[i]).ToList()).ToList();
+            foreach (var side in runs.GroupBy(r => Side((r.Min(l => l.minOffset) + r.Max(l => l.maxOffset)) / 2)).Where(g => g.Count() > 1))
             {
-                var bySub = side.GroupBy(l => l.subId).ToList();
-                if (bySub.Count > 1)
-                    Report("REPEATED_CODE_ON_ONE_SIDE", baseline.Name, station, side.Key, side.Min(l => Math.Abs(l.midOffset)) * (side.Key == "left" ? -1 : 1), code,
-                        string.Join(", ", bySub.Select(g => g.First().sub)), new { subassemblies = bySub.Count });
+                var ordered = side.OrderBy(r => r.Min(l => Math.Abs(l.midOffset))).ToList();
+                Report("REPEATED_CODE_ON_ONE_SIDE", baseline.Name, station, side.Key, ordered[1].Min(l => l.minOffset), code,
+                    string.Join(", ", side.SelectMany(r => r.Select(l => l.sub)).Distinct()),
+                    new { runs = side.Count(), offsets = ordered.Select(r => new[] { Math.Round(r.Min(l => l.minOffset), 3), Math.Round(r.Max(l => l.maxOffset), 3) }).ToList() });
             }
         }
 
+        // Links with the same code whose offset ranges overlap by more than the tolerance, within one subassembly or across.
         foreach (var code in overlapLinkCodes.Where(c => !string.IsNullOrWhiteSpace(c)))
         {
             var coded = links.Where(l => l.codes.Any(c => string.Equals(c, code, StringComparison.OrdinalIgnoreCase))).OrderBy(l => l.minOffset).ToList();
             for (var i = 0; i < coded.Count; i++)
                 for (var j = i + 1; j < coded.Count; j++)
                 {
-                    if (coded[i].subId == coded[j].subId) continue;
                     var overlap = Math.Min(coded[i].maxOffset, coded[j].maxOffset) - Math.Max(coded[i].minOffset, coded[j].minOffset);
                     if (overlap > overlapTolerance)
                         Report("OVERLAPPING_LINKS", baseline.Name, station, Side(coded[j].minOffset + overlap / 2), coded[j].minOffset, code,
-                            coded[i].sub + " / " + coded[j].sub, new { overlap = Math.Round(overlap, 4) });
+                            coded[i].subId == coded[j].subId ? coded[i].sub : coded[i].sub + " / " + coded[j].sub,
+                            new { overlap = Math.Round(overlap, 4), sameSubassembly = coded[i].subId == coded[j].subId });
                 }
         }
 
@@ -257,6 +273,10 @@ return new
     stationsWithoutAssembly,
     stationLimitReached = truncated,
     findingCounts,
+    // Codes given in a parameter that no checked link carries: such a check found nothing because it had nothing to look at.
+    codesNotSeen = uniqueLinkCodes.Concat(overlapLinkCodes).Concat(shortLinkCodes).Where(c => !string.IsNullOrWhiteSpace(c) && !codesSeen.ContainsKey(c))
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+    linkCodesSeen = codesSeen.OrderByDescending(p => p.Value).Take(40).ToDictionary(p => p.Key, p => p.Value),
     findingsListed = findings.Count,
     findings
 };
@@ -266,7 +286,8 @@ return new
 
 - Read-only: it reads the corridor as it was last built and changes nothing. With `corridorOutOfDate` true the result describes the old build; ask the user to rebuild first.
 - Stations: by default the corridor's own stations of each matching baseline; with `sampleLineGroupHandle` exactly the sample line stations, on baselines that follow the group's alignment, which is what the section sheets will show. Offset baselines are not checked.
-- Checks, each switched on by its input: `uniqueLinkCodes` (a code, such as a curb's, found in links of more than one subassembly on the same side: `REPEATED_CODE_ON_ONE_SIDE`), `overlapLinkCodes` (links with the code from different subassemblies covering the same offsets: `OVERLAPPING_LINKS`), `requiredShapeCodes` (`MISSING_SHAPE_CODE` at a station without such a shape), `minLinkLength` with `shortLinkCodes` (`SHORT_LINK`; a short link often gives an unreadable label).
+- Checks, each switched on by its input: `uniqueLinkCodes` (links with a code, such as a curb's, that form two or more separate runs on the same side; links sharing an end point are one run: `REPEATED_CODE_ON_ONE_SIDE`), `overlapLinkCodes` (links with the code covering the same offsets, also inside one subassembly; `sameSubassembly` in the detail tells which: `OVERLAPPING_LINKS`), `requiredShapeCodes` (`MISSING_SHAPE_CODE` at a station without such a shape), `minLinkLength` with `shortLinkCodes` (`SHORT_LINK`; a short link often gives an unreadable label).
 - Side is by offset sign: negative is left. A link is placed by the middle of its offset range; length is measured along its points in the section plane (offset and elevation).
-- Codes and lengths are the caller's: the recipe holds no office or standard values. Which findings matter is an engineering decision; the result lists where to look.
+- Codes and lengths are the caller's: the recipe holds no office or standard values, and the default `Top` is only the stock subassemblies' code. `linkCodesSeen` lists the codes of the checked links with counts and `codesNotSeen` the given codes that no link carries; a check whose code is not seen found nothing because it had nothing to look at, so run once, read `linkCodesSeen` and run again with the drawing's own codes. Which findings matter is an engineering decision; the result lists where to look.
+- One assembly built from a single Subassembly Composer subassembly with all links (seen live: 8 to 42 links per station) is checked the same way as one built from several stock subassemblies.
 - Found in field use (Civil 3D 2025): duplicated curbs, overlapping links, missing layers and short labelled links had to be found by ad hoc scripts on every review round.
