@@ -705,9 +705,29 @@ export async function runSmoke(deps) {
     check((changes.modified?.byType?.Alignment ?? 0) >= 1, "the receipt does not list the changed alignment", problems);
     const after = await readProbe(PROBE_LINE);
     details.after = after;
+    state.dbmodAfterSavedWrite = after.dbmod;
     check(after.lines === 1, `${after.lines} probe lines, expected 1`, problems);
     check(after.description === state.marker, "the alignment description was not kept", problems);
   });
+
+  // The alignment has a profile view, profiles, sample lines and a corridor
+  // hanging on it. Civil 3D updates those after the command, so the drawing
+  // can be modified again right after the save (seen live). Reported apart,
+  // as a warning: it is Civil 3D behaviour a caller has to live with.
+  await step(
+    "W2b",
+    "Still clean right after a saved write to an object with dependents",
+    async ({ problems, details }) => {
+      details.dbmod = state.dbmodAfterSavedWrite;
+      check(
+        state.dbmodAfterSavedWrite === 0,
+        "Civil 3D marked the drawing modified again right after the save (dependent objects updated after the command)",
+        problems
+      );
+    },
+    { optional: true }
+  );
+  await settle("W2c", "Saved and still clean before the next requireClean write");
 
   await step("W3", "Failing script: rolled back, the drawing stays clean", async ({ problems, details }) => {
     const result = await execute(guarded({
@@ -780,6 +800,7 @@ export async function runSmoke(deps) {
   });
 
   if (state.corridor) {
+    await settle("W7b", "Saved and still clean before the corridor rebuild");
     await step("W8", "Corridor rebuild with save", async ({ problems, details }) => {
       const result = await execute(guarded({
         ...writeSwitches,

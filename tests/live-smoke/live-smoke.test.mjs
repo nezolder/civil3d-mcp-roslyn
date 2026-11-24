@@ -139,6 +139,8 @@ function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = n
         rolledBack: args.preview ? true : undefined,
       });
       if (!args.preview) {
+        // The alignment's dependents are updated after the command.
+        if (args.saveDrawing) civil.dirtyLater = true;
         const key = lineKey(code);
         civil.lines.set(key, (civil.lines.get(key) ?? 0) + 1);
         civil.description = param(code, "marker");
@@ -255,12 +257,14 @@ test("a full run against the simulated Civil 3D passes every case", async () => 
   const civil = simulatedCivil();
   const report = await run(civil);
   const failed = report.steps.filter((step) => step.status !== "pass");
-  assert.deepEqual(failed, [], JSON.stringify(failed, null, 2));
+  // W2b reports, as a warning, that Civil 3D marked the drawing modified
+  // after the save; everything else passes.
+  assert.deepEqual(failed.map((step) => [step.id, step.status]), [["W2b", "warn"]], JSON.stringify(failed, null, 2));
   assert.equal(report.ok, true);
   assert.deepEqual(
     report.steps.map((step) => step.id),
     ["S1", "S1b", "S2", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
-      "W0", "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "G1", "G2", "E1"]
+      "W0", "W1", "W2", "W2b", "W2c", "W3", "W4", "W5", "W6", "W7", "W7b", "W8", "W9", "G1", "G2", "E1"]
   );
   // The fixture steps do not ask for a clean drawing, so a drawing Civil 3D
   // marks modified after a save does not stop them; the write cases do.

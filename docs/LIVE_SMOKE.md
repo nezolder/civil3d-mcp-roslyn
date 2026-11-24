@@ -34,7 +34,7 @@ code `0` when every case passed, `1` when a case failed and `2` when it could no
    These steps do not set `requireClean`: Civil 3D can mark the drawing modified again right after
    a save while it updates a new profile view or corridor by itself (seen live: `DBMOD` 1 some
    40 ms after a saved write had reported 0). Before the write cases, and after the corridor
-   rebuild, a settle step saves, waits 1.5 s and reads `DBMOD`, at most three times, until the
+   rebuild (and after the real write, see `W2b`), a settle step saves, waits 1.5 s and reads `DBMOD`, at most three times, until the
    drawing stays clean.
 4. **Reading**: catalog recipes by name (`drawing_info`, `list_alignments`, `list_surfaces`,
    `list_profiles`, `section_inventory`, `surface_elevation`, `profile_elevation_at_station`,
@@ -44,6 +44,10 @@ code `0` when every case passed, `1` when a case failed and `2` when it could no
    exists; a script that fails after a change is rolled back; a write without save leaves the
    drawing modified and `requireClean` then refuses; a save makes it clean again; the same
    `idempotencyKey` a second time is refused; the corridor is rebuilt and saved.
+   The real write changes the alignment, which has profiles, a profile view, sample lines and the
+   corridor hanging on it; case `W2b` reports as a warning when Civil 3D marks the drawing modified
+   again right after that save (seen in every live run so far), and a settle step follows before
+   the next write that asks for a clean drawing.
 6. **Guards**: a wrong `expectedDrawing` and a wrong session token are both refused with nothing
    run.
 7. **Final state**: still the same drawing, saved, with the expected object counts.
