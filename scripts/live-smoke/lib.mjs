@@ -333,6 +333,41 @@ export async function runSmoke(deps) {
   }
 
   const writeSwitches = { requireClean: true, saveDrawing: true };
+  // Civil 3D can mark the drawing modified again right after a save, when it
+  // updates a new profile view or corridor on its own (first live run: DBMOD 1
+  // 42 ms after a saved write had reported 0). The fixture steps therefore do
+  // not ask for a clean drawing; the write cases do, after settle().
+  const fixtureSwitches = { requireClean: false, saveDrawing: true };
+  const sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+
+  /**
+   * Saves until the drawing stays clean: a save, a short wait, a DBMOD read,
+   * at most three rounds. Each save is a new, deliberate call after a known
+   * outcome, never a resend of an unclear one.
+   */
+  async function settle(id, title) {
+    return required(id, title, async ({ problems, details }) => {
+      details.rounds = [];
+      for (let round = 1; round <= 3; round++) {
+        const result = await execute(guarded({
+          requireClean: false,
+          saveDrawing: true,
+          code: script("save_only"),
+          description: "MCP smoke: save until clean",
+        }));
+        if (result.isError) {
+          problems.push(`save failed: ${result.error?.code ?? ""} ${result.text}`.trim());
+          return;
+        }
+        await sleep(1500);
+        const after = await query(guarded({ code: script("discover") }));
+        if (after.isError) throw new Error(`DBMOD read failed: ${after.text}`);
+        details.rounds.push({ saved: result.receipt?.saved, dbmodAfterSave: result.receipt?.dbmodAfter, dbmodLater: after.data?.dbmod });
+        if (after.data?.dbmod === 0) return;
+      }
+      problems.push("the drawing did not stay clean after three saves");
+    });
+  }
 
   // --- Connection and target drawing ------------------------------------
   await required("S1", "Connection and build (status)", async ({ problems, details }) => {
@@ -400,7 +435,7 @@ export async function runSmoke(deps) {
   await required("F1", "Ground surface (create_tin_surface)", async ({ problems, details }) => {
     const points = surfacePoints();
     const result = await execute(guarded({
-      ...writeSwitches,
+      ...fixtureSwitches,
       skill: "create_tin_surface",
       params: { surfaceName: NAMES.surface, points, description: "MCP live smoke test" },
       description: "MCP smoke: ground surface",
@@ -414,7 +449,7 @@ export async function runSmoke(deps) {
 
   await required("F2", "Centerline polyline (create_polyline)", async ({ problems }) => {
     const result = await execute(guarded({
-      ...writeSwitches,
+      ...fixtureSwitches,
       skill: "create_polyline",
       params: { vertices: centerlineVertices() },
       description: "MCP smoke: centerline polyline",
@@ -426,7 +461,7 @@ export async function runSmoke(deps) {
 
   await required("F3", "Alignment from the polyline", async ({ problems, details }) => {
     const result = await execute(guarded({
-      ...writeSwitches,
+      ...fixtureSwitches,
       code: script("create_alignment", {
         polylineHandle: state.handles.polyline,
         alignmentName: NAMES.alignment,
@@ -445,7 +480,7 @@ export async function runSmoke(deps) {
 
   await required("F4", "Ground profile and profile view (create_surface_profile_view)", async ({ problems, details }) => {
     const result = await execute(guarded({
-      ...writeSwitches,
+      ...fixtureSwitches,
       skill: "create_surface_profile_view",
       params: {
         alignmentHandle: state.handles.alignment,
@@ -467,7 +502,7 @@ export async function runSmoke(deps) {
 
   await required("F5", "Design profile (create_design_profile_from_pvis)", async ({ problems }) => {
     const result = await execute(guarded({
-      ...writeSwitches,
+      ...fixtureSwitches,
       skill: "create_design_profile_from_pvis",
       params: {
         alignmentHandle: state.handles.alignment,
@@ -485,7 +520,7 @@ export async function runSmoke(deps) {
 
   await required("F6", "Sample lines every 20 units (create_sample_lines)", async ({ problems, details }) => {
     const result = await execute(guarded({
-      ...writeSwitches,
+      ...fixtureSwitches,
       skill: "create_sample_lines",
       params: {
         alignmentHandle: state.handles.alignment,
@@ -506,7 +541,7 @@ export async function runSmoke(deps) {
     "Assembly and corridor (BasicLane, rebuilt)",
     async ({ problems, details }) => {
       const result = await execute(guarded({
-        ...writeSwitches,
+        ...fixtureSwitches,
         code: script("create_corridor", {
           alignmentHandle: state.handles.alignment,
           profileHandle: state.handles.designProfile,
@@ -599,6 +634,8 @@ export async function runSmoke(deps) {
       check(text.includes(NAMES.corridor), "the corridor is not listed", problems);
     });
   }
+
+  await settle("W0", "Saved and still clean before the write cases");
 
   // --- Writing -------------------------------------------------------------
   const probeValues = (line, marker, fail) => ({
@@ -754,6 +791,8 @@ export async function runSmoke(deps) {
       details.outOfDate = result.data?.outOfDate;
     });
   }
+
+  if (state.corridor) await settle("W9", "Saved and still clean after the corridor rebuild");
 
   // --- Guards ----------------------------------------------------------------
   await step("G1", "Wrong target drawing: nothing runs", async ({ problems, details }) => {

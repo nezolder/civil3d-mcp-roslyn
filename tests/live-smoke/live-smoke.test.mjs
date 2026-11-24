@@ -100,7 +100,10 @@ function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = n
       return ok({ success: true, handle: nextHandle() }, receipt(args, { added: { Polyline: 1 } }));
     }
     if (args.skill === "create_surface_profile_view" || args.skill === "create_sample_lines") {
-      return ok({ success: true, createdCount: 19 }, receipt(args, { added: { Profile: 1 } }));
+      const reply = ok({ success: true, createdCount: 19 }, receipt(args, { added: { Profile: 1 } }));
+      // Civil 3D updates a new profile view after the save and marks the drawing modified again.
+      if (args.skill === "create_surface_profile_view") civil.dirtyLater = true;
+      return reply;
     }
     if (args.skill === "create_design_profile_from_pvis") {
       assert.deepEqual(args.params.pviData[1], [150, 104.2, 60]);
@@ -120,7 +123,9 @@ function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = n
         receipt(args, { added: { Corridor: 1, Assembly: 1 } }));
     }
     if (code.includes("rebuilds the fixture corridor")) {
-      return ok({ success: true, outOfDate: false }, receipt(args, { modified: { Corridor: 1 } }));
+      const reply = ok({ success: true, outOfDate: false }, receipt(args, { modified: { Corridor: 1 } }));
+      civil.dirtyLater = true;
+      return reply;
     }
     if (code.includes("adds one line and sets the alignment description")) {
       const handle = nextHandle();
@@ -219,6 +224,10 @@ function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = n
     async callTool({ name, arguments: args }, _schema, options) {
       assert.ok(options?.timeout > 0, "every call carries a timeout");
       civil.calls.push({ name, args, wrongToken });
+      if (civil.dirtyLater) {
+        civil.dirtyLater = false;
+        civil.dbmod = 1;
+      }
       if (throwOn && throwOn(name, args)) throw new Error("Request timed out");
       return respond(name, args, wrongToken);
     },
@@ -237,6 +246,7 @@ function run(civil, overrides = {}) {
     expectedPath: FIXTURE,
     fileExists: (file) => civil.backups.includes(file),
     timeouts: { callMs: 1000, writeMs: 2000 },
+    sleep: async () => {},
     ...overrides,
   });
 }
@@ -250,15 +260,23 @@ test("a full run against the simulated Civil 3D passes every case", async () => 
   assert.deepEqual(
     report.steps.map((step) => step.id),
     ["S1", "S1b", "S2", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
-      "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "G1", "G2", "E1"]
+      "W0", "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "G1", "G2", "E1"]
   );
+  // The fixture steps do not ask for a clean drawing, so a drawing Civil 3D
+  // marks modified after a save does not stop them; the write cases do.
+  const fixtureWrites = civil.calls.filter((item) => item.args.description?.startsWith("MCP smoke: ") && item.args.requireClean === false);
+  assert.ok(fixtureWrites.length >= 7);
+  assert.equal(report.steps.find((step) => step.id === "W9").details.rounds.length, 1, JSON.stringify(report.steps.find((step) => step.id === "W9")));
   // Every write names the drawing and carries a description.
   for (const call of civil.calls.filter((item) => item.name === "civil3d_execute")) {
     assert.equal(call.args.expectedDrawing.databaseFilename, FIXTURE);
     assert.match(call.args.description, /^MCP smoke: /);
   }
-  // Only the idempotency case sends a write a second time.
-  const writes = civil.calls.filter((item) => item.name === "civil3d_execute").map((item) => JSON.stringify(item.args));
+  // Apart from the deliberate saves of the settle steps, only the idempotency
+  // case sends a write a second time.
+  const writes = civil.calls
+    .filter((item) => item.name === "civil3d_execute" && item.args.description !== "MCP smoke: save until clean")
+    .map((item) => JSON.stringify(item.args));
   const repeated = writes.filter((item, index) => writes.indexOf(item) !== index);
   assert.equal(repeated.length, 1);
   assert.match(repeated[0], /idempotencyKey/);

@@ -24,13 +24,18 @@ code `0` when every case passed, `1` when a case failed and `2` when it could no
    accepted and nothing running (differing plugin and server builds are a warning). A read must then show that the active drawing is
    this run's `mcp_smoke*.dwg`, still holds no surface, alignment, corridor or assembly, and has no
    unsaved changes. Otherwise the run stops before its first write.
-3. **Test drawing**, each step one write with `expectedDrawing`, `requireClean` and `saveDrawing`:
+3. **Test drawing**, each step one write with `expectedDrawing` and `saveDrawing`:
    a planar TIN surface from a 21 x 9 grid, a centerline polyline, an alignment made from it, a
    ground profile with a profile view, a design profile from three PVIs, sample lines every 20
    units, and an assembly with the stock BasicLane on both sides with a corridor along the design
    profile. Style names are taken from the drawing (the first of each kind), so any template works.
    The corridor step is optional: when the stock subassembly cannot be loaded it is reported as a
    warning and the corridor cases are left out.
+   These steps do not set `requireClean`: Civil 3D can mark the drawing modified again right after
+   a save while it updates a new profile view or corridor by itself (seen live: `DBMOD` 1 some
+   40 ms after a saved write had reported 0). Before the write cases, and after the corridor
+   rebuild, a settle step saves, waits 1.5 s and reads `DBMOD`, at most three times, until the
+   drawing stays clean.
 4. **Reading**: catalog recipes by name (`drawing_info`, `list_alignments`, `list_surfaces`,
    `list_profiles`, `section_inventory`, `surface_elevation`, `profile_elevation_at_station`,
    `station_offset`, `corridor_summary`), with values checked against the generated geometry.
