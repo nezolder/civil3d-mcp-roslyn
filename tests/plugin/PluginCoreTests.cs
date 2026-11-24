@@ -2985,6 +2985,8 @@ internal static class PluginCoreTests
         "activeDrawing",
         "build",
         "features",
+        "authorized",
+        "tokenRequired",
       };
       Assert(health!.Count == expectedFields.Count && health.All(item => expectedFields.Contains(item.Key)),
         "health response must remain limited to the stable status fields");
