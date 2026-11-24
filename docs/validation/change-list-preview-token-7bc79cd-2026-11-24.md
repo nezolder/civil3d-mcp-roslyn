@@ -74,6 +74,8 @@ Probes between the rounds, on the same instance:
 | 3.3 | Raw socket: A's token to B's port and B's token to A's | `UNAUTHORIZED` twice | As expected | Pass |
 | 3.4 | Preview on B, 3 lines | `rolledBack`, B DBMOD 0, A unchanged | As expected; A DBMOD 1, its handle seed unchanged | Pass |
 
+At the end of round 2 the user looked at both windows: the file tab of B (previews only) showed no unsaved mark, the tab of A (real writes) did. This agrees with the DBMOD values read through the API.
+
 The write journal had one line per write request of round 2 (13), each with the plugin commit, the process, `preview`, `committed`, DBMOD before and after and the counts; none for the read-only calls and none for the input the server refused.
 
 ## Observations
@@ -94,5 +96,4 @@ The write journal had one line per write request of round 2 (13), each with the 
 - The share of the write overhead that comes from change tracking; there was no run with tracking switched off.
 - `changeItems` above 100 at the plugin level; the server refused it first.
 - A call through the older server beyond `status`.
-- Whether the title bar or the file tab shows the drawing as unmodified after a preview; DBMOD was read through the API only.
 - The restore of the original plugin bundle after the test is recorded in the pull request, not here.
