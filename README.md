@@ -29,7 +29,7 @@ This independent project is not affiliated with or endorsed by Autodesk. Autodes
 
 | Tool | Purpose | Safety |
 |------|---------|--------|
-| `civil3d_execute` | Execute C# code with **write** access; optional clean-drawing check and backup before, save after, and a receipt of what happened | ⚠️ Modifies drawing |
+| `civil3d_execute` | Execute C# code with **write** access; optional preview that keeps nothing, clean-drawing check and backup before, save after, and a receipt of what happened, including the objects added, modified and erased | ⚠️ Modifies drawing |
 | `civil3d_query` | Run intended read-only C# without committing the host transaction | Trusted code only; not a side-effect sandbox |
 | `civil3d_skills` | Browse/search/read code skill templates; `api_lookup` searches already-loaded public Civil 3D API metadata; `status` shows the server and plugin versions and the running instances; `guide` returns the working order for assistants | ✅ Metadata only |
 
@@ -156,19 +156,55 @@ Committing the `civil3d_execute` transaction changes the open drawing but does n
 | `backup: true` | Copies the saved DWG file to a time-stamped copy before the script runs, for example `Plan.20261111-103000.dwg`. The copy is verified by size, and an existing file is never overwritten. If it cannot be made, nothing runs (`CIVIL3D.BACKUP_FAILED`); an unnamed drawing is refused with `CIVIL3D.SAVE_PATH_REQUIRED`. Because the copy shows the last saved state, `backup` also asks for a clean drawing unless `requireClean: false` is set explicitly. |
 | `backupDirectory` | Absolute folder for that copy. Default: `CIVIL3D_MCP_BACKUP_DIR` of the Civil 3D process, else `%LOCALAPPDATA%\Civil3dMcpRoslyn\backups`. Copies are never deleted automatically. |
 | `description` | One line about the change. It is shown on the Civil 3D command line as `[Civil 3D MCP] …` before the script runs, and kept in the journal. |
+| `preview: true` | Runs the script with write access and then abandons its transaction: nothing is committed, saved or backed up, and an `idempotencyKey` is not used up. The other inputs stay as the real call will have them, and their checks (target drawing, clean state, a file that can be saved) still run, so a preview also shows that the real call would be refused. The receipt lists what the script would change. Needs a plugin with the feature `preview`; the server never sends a preview to an older plugin, which would commit it. |
+| `changeItems` | How many objects the receipt's change list names in each group, 0 to 100, default 10. With 0 only the counts by type remain. |
 
 Every write that reached the drawing returns a **receipt** next to its result. The result stays alone in the first text block; the receipt is a second text block:
 
 ```json
 {"receipt": {"drawing": {"databaseFilename": "C:\\Projects\\Plan.dwg", "fingerprintGuid": "{…}"},
-  "dbmodBefore": 0, "dbmodAfter": 1, "committed": true, "saved": true,
+  "dbmodBefore": 0, "dbmodAfter": 1, "preview": false, "committed": true, "saved": true,
   "fileLastWriteUtc": "2026-11-11T09:30:00.0000000+00:00", "fileBytes": 1843200,
-  "backupPath": "C:\\Users\\me\\AppData\\Local\\Civil3dMcpRoslyn\\backups\\Plan.20261111-103000.dwg"}}
+  "backupPath": "C:\\Users\\me\\AppData\\Local\\Civil3dMcpRoslyn\\backups\\Plan.20261111-103000.dwg",
+  "changes": {
+    "added": {"count": 3, "byType": {"Polyline": 2, "Alignment": 1},
+      "items": [{"type": "Alignment", "handle": "2F3A", "name": "Axis-1", "layer": "C-ROAD"}, …]},
+    "modified": {"count": 1, "byType": {"Profile": 1}, "items": [{"type": "Profile", "handle": "1C02", "name": "FG"}]},
+    "erased": {"count": 0},
+    "containers": {"BlockTableRecord": 1, "DBDictionary": 2},
+    "complete": true}}}
 ```
 
 `committed` says whether the change is in the open drawing, `saved` whether this call wrote the file, and the file fields describe the file on disk after the call. A refused or failed write carries the same block (and `structuredContent.receipt`), so a failed save is visibly a committed, unsaved change. Queries have no receipt.
 
-The plugin also appends one line per write request to a local **journal**, `%LOCALAPPDATA%\Civil3dMcpRoslyn\journal\<year>-<month>.jsonl` (override with `CIVIL3D_MCP_JOURNAL_DIR` in the Civil 3D process): time, Civil 3D session, drawing, description, SHA-256 and size of the code, success or error code, committed, saved, backup path, `DBMOD` before and after, duration and plugin commit. It never contains the code or the result. A journal that cannot be written does not change the outcome of the write.
+#### What a write changed
+
+`changes` is the plugin's own account of what the write did to the drawing. It does not come from the script: a script that reports success and a script that reports nothing get the same list.
+
+- **`added`** is every object that exists after the write and did not before. The plugin notes the drawing's next free handle before the script runs and looks at every handle given out since. This also finds objects Civil 3D creates by itself, for example the parts of a new surface.
+- **`modified`** and **`erased`** come from two sources: the objects the script opened for write in its transaction whose modified or erased flag is set, and the drawing's own notifications, which arrive when an object is closed. For a committed write the second source also shows what Civil 3D updated by itself during the commit, such as dependent objects.
+- Each group has `count`, `byType` (the .NET type name a script would use, most frequent first) and the first `items` with `type`, `handle`, `name` and `layer`; `more` counts the ones not listed.
+- **`containers`** counts symbol tables, dictionaries, layout blocks and draw order lists apart. They change whenever something is put into them and would otherwise hide the objects the write was about.
+- For a committed write the list is made after the commit, by reading the drawing again in a separate short transaction, so it shows what is in the drawing and not what the script intended.
+- **`complete`** is false, with a `note`, when the list can miss something: a preview (see below), more than 2,000,000 new handles, more than 200,000 touched objects, or the notifications switched off with `CIVIL3D_MCP_CHANGE_EVENTS=0`.
+- When the list cannot be made, `changes` is `{"available": false, "reason": "…"}`. The write itself is never failed or changed by the list.
+- After a script or a commit that failed there is no list either, but the plugin checks that nothing the script added is left in the drawing: `{"available": false, "reason": "…", "rolledBack": true}`; with `rolledBack: false`, `leftBehind` counts what stayed.
+
+The list tells which objects were touched, not whether their geometry is right; reading the result back with a query stays necessary.
+
+#### Preview
+
+With `preview: true` the receipt has `preview: true`, `committed: false`, `saved: false`, and `changes` describes what the script would add, modify and erase. After the transaction is abandoned the plugin checks that no added object exists and no erased object is still erased, and reports it as `rolledBack`; with `rolledBack: false`, `leftAfterPreview` counts what stayed behind.
+
+A preview has limits that follow from how it works:
+
+- It shows what the script itself does. What Civil 3D would update when the change is kept (dependent objects, rebuilds on commit) is not in the list, so `complete` is always false.
+- Handles of new objects in the script's result do not exist afterwards, and handle numbers are used up: the real call gives other handles.
+- Only the drawing is taken back. A file the script wrote, a system variable it set or a command it queued stays.
+- AutoCAD marks the drawing as modified (`DBMOD`) as soon as a script touches it, also when nothing is kept. When the drawing was clean before the preview and the check found nothing left behind, the plugin takes the mark off again, so the real call can still ask for `requireClean` or `backup`; `dbmodAfter` shows the outcome. The same is done after a script that failed before its commit. A drawing that already had unsaved changes, a preview with `rolledBack: false` and a failed commit keep the mark.
+- It is one Undo step in Civil 3D, like a write, and runs under the same command.
+
+The plugin also appends one line per write request to a local **journal**, `%LOCALAPPDATA%\Civil3dMcpRoslyn\journal\<year>-<month>.jsonl` (override with `CIVIL3D_MCP_JOURNAL_DIR` in the Civil 3D process): time, Civil 3D session, drawing, description, SHA-256 and size of the code, success or error code, preview, committed, saved, backup path, `DBMOD` before and after, the number of objects added, modified and erased, duration and plugin commit. It never contains the code, the result or an object name. A journal that cannot be written does not change the outcome of the write.
 
 A plugin from before these switches would ignore them silently. The server therefore asks the plugin for its feature list first and refuses with `CIVIL3D.PLUGIN_UPDATE_REQUIRED` (`not_started`) when `requireClean`, `backup` or `backupDirectory` cannot be honoured.
 
@@ -193,7 +229,7 @@ On a Windows computer the MCP keeps everything in one standard folder per user, 
 | `backups\` | Drawing copies made by `backup: true` writes. |
 | `journal\` | The [write journal](#safety-switches-receipt-and-journal-for-writes). |
 | `images\` | Picture files of [`NewImagePath()`](#pictures). |
-| `endpoints\` | Records of the running Civil 3D instances. |
+| `endpoints\` | Records of the running Civil 3D instances, each with its [session token](#security). |
 
 The Civil 3D plugin goes where Autodesk loads add-ins from: `%APPDATA%\Autodesk\ApplicationPlugins\Civil3dMcpPlugin.bundle`. The source folder (the git clone) is needed only to build and can be anywhere; the standard place is `%USERPROFILE%\source\repos\civil3d-mcp-roslyn`, the default folder of Windows development tools, which OneDrive does not sync. MCP clients never start the server from the source folder.
 
@@ -312,6 +348,9 @@ Neither command changes an MCP client's configuration.
 | `CIVIL3D_MCP_BACKUP_DIR` | `%LOCALAPPDATA%\Civil3dMcpRoslyn\backups` | Plugin process: default folder for `backup: true` copies (absolute path). |
 | `CIVIL3D_MCP_JOURNAL_DIR` | `%LOCALAPPDATA%\Civil3dMcpRoslyn\journal` | Plugin process: folder of the write journal (absolute path). |
 | `CIVIL3D_MCP_IMAGE_DIR` | `%LOCALAPPDATA%\Civil3dMcpRoslyn\images` | Plugin process: folder for the files of `NewImagePath()` (absolute path). |
+| `CIVIL3D_MCP_CHANGE_EVENTS` | `1` | Plugin process: with `0` the change list of a write does not listen to the drawing's notifications and uses the handles and the script's transaction only. A switch for the case that the notifications cause trouble; the list then says that it can be incomplete. |
+| `CIVIL3D_MCP_REQUIRE_TOKEN` | `1` | Plugin process: with `0` the plugin also runs requests that present no [session token](#security), for an MCP server from before the token existed. |
+| `CIVIL3D_MCP_TOKEN` | unset | MCP server: the session token to present when the port is fixed with `CIVIL3D_PORT` and no endpoint record can be read. Normally not needed. |
 | `CIVIL3D_MCP_COMMIT` | from git | Build time only: commit recorded by `npm run build` when git cannot be asked. |
 | `LOG_LEVEL` | `info` | Log level |
 
@@ -321,7 +360,7 @@ Civil requests run as correlated modal commands. The existing serialization gate
 
 ## Multiple Civil 3D instances
 
-Each loaded plugin session publishes a small local endpoint record containing only an opaque instance ID, process ID, program name, port, and start time. It contains no drawing name or project data. The first Civil 3D instance prefers port 8080; another instance automatically uses a free localhost port.
+Each loaded plugin session publishes a small local endpoint record containing only an opaque instance ID, process ID, program name, port, start time and the session's [token](#security). It contains no drawing name or project data. The first Civil 3D instance prefers port 8080; another instance automatically uses a free localhost port.
 
 A record normally disappears when its Civil 3D session ends. One left behind by a crash or a killed process is removed by the next plugin session that starts, and until then the MCP server skips records whose process no longer exists, so stale records do not slow down every call. Windows may reuse the process ID of a closed Civil 3D for another program; a record whose ID now belongs to a different program is removed as well. A session that the caller names with `instanceId` is always probed.
 
@@ -382,7 +421,15 @@ All Civil 3D API operations are allowed.
 
 The check reads what the compiler resolved, not the script text. A comment, a string or a name that only looks similar (`process.StartStation`, `styleRegistry.Add`) is therefore not refused, and a short name behind a `using` line (`File.Delete`) is. The error names the type or member and its script line.
 
-This guard is defense in depth, not a trust boundary: a script can still reach these operations indirectly, for example through reflection. Both code tools receive mutable Civil 3D and AutoCAD API objects; `civil3d_query` skips the host's transaction commit but cannot guarantee that arbitrary dynamic C# is side-effect-free. Run only trusted, approval-gated code. Loopback TCP prevents remote network access but does not authenticate other local processes.
+This guard is defense in depth, not a trust boundary: a script can still reach these operations indirectly, for example through reflection. Both code tools receive mutable Civil 3D and AutoCAD API objects; `civil3d_query` skips the host's transaction commit but cannot guarantee that arbitrary dynamic C# is side-effect-free. Run only trusted, approval-gated code.
+
+### Who may send requests
+
+The plugin listens on the IPv4 loopback address only, so it cannot be reached from the network. Loopback alone is open to every program and every user on the same computer, so each plugin session also makes up a random 256-bit **session token** when its listener starts and runs a request only when the request presents it. The token is written into the session's endpoint record under `%LOCALAPPDATA%\Civil3dMcpRoslyn\endpoints`, a folder in the user's own profile, where the MCP server reads it by itself; nothing has to be configured. A new token is made at every listener start and is never sent back over the connection.
+
+- A request without the right token is refused with `CIVIL3D.UNAUTHORIZED` (`outcome: "not_started"`) before the drawing is looked at; it is not journaled. The health request alone is still answered, with a short reply that says a plugin is here, which session and which build, and nothing about the drawing or a running operation. `civil3d_skills` with `action: "status"` then lists that instance with `authorized: false`.
+- What this protects against: other users of the same computer, and programs that can open a local connection but cannot read the user's profile folder. What it does not protect against: a program that runs as the same user can read the record, as it can read the drawings themselves.
+- An MCP server from before the token cannot use a plugin that has it, and says so in the error. Update both sides together (`npm run install:server`, `npm run install:plugin`). For the time in between, `CIVIL3D_MCP_REQUIRE_TOKEN=0` in the environment of Civil 3D switches the requirement off. A new server works with an older plugin unchanged.
 
 ## License
 

@@ -436,6 +436,17 @@ function buildStatus(instances: InstanceStatus[], skillsDirectory: string) {
     } else if (instance.pluginBuild.dirty) {
       warnings.push(`${label} runs a plugin built from a folder with uncommitted changes.`);
     }
+    if (instance.authorized === false) {
+      warnings.push(
+        `${label} did not accept this server's session token, so calls to it are refused ` +
+          "(CIVIL3D.UNAUTHORIZED). The server and the plugin are of different versions or read " +
+          "different endpoint folders (CIVIL3D_MCP_ENDPOINT_DIR)."
+      );
+    } else if (instance.tokenRequired === false) {
+      warnings.push(
+        `${label} runs requests without a session token (CIVIL3D_MCP_REQUIRE_TOKEN=0 in Civil 3D).`
+      );
+    }
   }
   return {
     server: {

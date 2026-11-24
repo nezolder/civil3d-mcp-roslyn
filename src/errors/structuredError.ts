@@ -81,6 +81,9 @@ function classifyPluginCode(code: string): {
     case "CIVIL3D.BACKUP_FAILED":
       // Raised before the document lock: the script never ran.
       return { category: "execution", outcome: "not_started" };
+    case "CIVIL3D.UNAUTHORIZED":
+      // Refused by the listener before anything was looked at or run.
+      return { category: "connection", outcome: "not_started" };
     case "CIVIL3D.DRAWING_GUARD_INVALID":
       return { category: "validation", outcome: "not_started" };
     case "CIVIL3D.IDEMPOTENCY_CONFLICT":

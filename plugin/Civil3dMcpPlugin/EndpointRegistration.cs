@@ -7,7 +7,8 @@ namespace Civil3DMcpPlugin;
 
 /// <summary>
 /// Publishes one small, drawing-free endpoint record for the lifetime of the
-/// current Civil 3D plugin session. The Node host probes records before use, so
+/// current Civil 3D plugin session. The record also carries the session
+/// token that requests must present. The Node host probes records before use, so
 /// files left behind by a crashed process are harmless; each new session also
 /// removes the records of processes that no longer exist, so they do not pile
 /// up and slow discovery down.
@@ -33,7 +34,8 @@ internal sealed class EndpointRegistration : IDisposable
   internal static EndpointRegistration Create(
     string instanceId,
     int port,
-    DateTimeOffset startedAtUtc)
+    DateTimeOffset startedAtUtc,
+    string? token = null)
   {
     var directory = ResolveDirectory();
     Directory.CreateDirectory(directory);
@@ -51,7 +53,8 @@ internal sealed class EndpointRegistration : IDisposable
       processId,
       port,
       startedAtUtc,
-      CurrentProcessName
+      CurrentProcessName,
+      token
     );
     var json = JsonSerializer.Serialize(payload, JsonOptions);
 
@@ -202,7 +205,10 @@ internal sealed class EndpointRegistration : IDisposable
     int ProcessId,
     int Port,
     DateTimeOffset StartedAtUtc,
-    string? ProcessName = null
+    string? ProcessName = null,
+    // The session token (see SessionAuth). The folder is in the user's own
+    // profile, so only that user's programs can read it.
+    string? Token = null
   );
 
   private static readonly string? CurrentProcessName = ReadCurrentProcessName();

@@ -87,7 +87,8 @@ public static class CommandDispatcher
   /// Optional safety switches of a write: requireClean refuses a drawing with
   /// unsaved changes, backup copies the saved drawing file first. A backup is
   /// taken from the file on disk, so it asks for a clean drawing unless the
-  /// caller explicitly sets requireClean to false.
+  /// caller explicitly sets requireClean to false. preview runs the same call
+  /// without keeping anything; changeItems sizes the receipt's change list.
   /// </summary>
   internal static void ReadWriteSafetyOptions(
     JsonObject? parameters,
@@ -128,12 +129,45 @@ public static class CommandDispatcher
       );
     }
 
+    // Validated for every call, so that a typo is not silently ignored.
+    var preview = PluginRuntime.GetOptionalBool(parameters, "preview") ?? false;
+    var changeItems = ReadChangeItemLimit(parameters);
+    if (readOnly && (preview || changeItems != null))
+    {
+      throw new JsonRpcDispatchException(
+        "CIVIL3D.INVALID_INPUT",
+        "Parameters 'preview' and 'changeItems' are only valid when readOnly is false."
+      );
+    }
+
     if (record == null) return;
+    if (changeItems != null) record.ChangeItemLimit = changeItems.Value;
     record.RequireClean = requireClean ?? backup;
     record.RequireCleanFromBackup = requireClean == null && backup;
     record.Backup = backup;
     record.BackupDirectory = backupDirectory;
     record.SaveRequested = saveDrawing;
+  }
+
+  /// <summary>
+  /// Optional number of objects the receipt lists by handle and name in each
+  /// of its added, modified and erased groups. Zero leaves only the counts.
+  /// </summary>
+  internal static int? ReadChangeItemLimit(JsonObject? parameters)
+  {
+    var value = parameters?["changeItems"];
+    if (value == null) return null;
+    if (value is JsonValue jsonValue
+      && jsonValue.TryGetValue<int>(out var items)
+      && items >= 0
+      && items <= ChangeList.MaxItemLimit)
+    {
+      return items;
+    }
+    throw new JsonRpcDispatchException(
+      "CIVIL3D.INVALID_INPUT",
+      $"Parameter 'changeItems' must be an integer between 0 and {ChangeList.MaxItemLimit}."
+    );
   }
 
   /// <summary>
@@ -204,7 +238,38 @@ public static class CommandDispatcher
         builtAtUtc = BuildInfo.BuiltAtUtc,
       },
       features = Features,
+      authorized = true,
+      tokenRequired = PluginRuntime.TokenRequired,
     });
+  }
+
+  /// <summary>
+  /// The health reply for a caller that did not present the session token:
+  /// that a plugin is here, which session and which build. Nothing about the
+  /// drawing or the running operation.
+  /// </summary>
+  internal static object GetLimitedHealth()
+  {
+    var status = PluginRuntime.GetStatus();
+    return new
+    {
+      connected = true,
+      authorized = false,
+      tokenRequired = true,
+      instanceId = status.InstanceId,
+      processId = status.ProcessId,
+      port = status.Port,
+      startedAtUtc = status.StartedAtUtc,
+      mode = "code_execution",
+      activeDrawingKnown = false,
+      build = new
+      {
+        commit = BuildInfo.Commit,
+        dirty = BuildInfo.Dirty,
+        builtAtUtc = BuildInfo.BuiltAtUtc,
+      },
+      features = Features,
+    };
   }
 
   /// <summary>
@@ -212,7 +277,10 @@ public static class CommandDispatcher
   /// it relies on one, so that an older plugin cannot silently ignore a
   /// safety switch.
   /// </summary>
-  internal static readonly string[] Features = { "activeDrawing", "writeSafety", "images" };
+  internal static readonly string[] Features =
+  {
+    "activeDrawing", "writeSafety", "images", "changeList", "preview", "sessionToken",
+  };
 
   /// <summary>
   /// Returns the active drawing identity without compiling or running caller

@@ -30,6 +30,112 @@ public sealed class RpcTcpServer
   public void Stop() { }
 }
 
+/// <summary>
+/// Stands in for the tracker that reads the drawing through the Autodesk API.
+/// A test says what the "script" changed; the double records how it was used.
+/// </summary>
+internal sealed class DrawingChangeTracker : IDisposable
+{
+  /// <summary>Fills the list of the next tracked write; null means nothing changed.</summary>
+  public static Action<ChangeList>? Changes { get; set; }
+  public static bool FailToStart { get; set; }
+  /// <summary>What the check after a failed script finds; null means the check itself failed.</summary>
+  public static int? LeftAfterFailure { get; set; } = 0;
+  public static int FailedCount { get; private set; }
+  public static int StartCount { get; private set; }
+  public static int DisposeCount { get; private set; }
+  public static int? LastItemLimit { get; private set; }
+  public static bool? LastPreview { get; private set; }
+  public static bool? LastCommitted { get; private set; }
+  /// <summary>Transactions that were open when the tracker was told the script had ended.</summary>
+  public static int? ActiveTransactionsAtCapture { get; private set; }
+  /// <summary>Transactions still open when the result was read back; must be zero.</summary>
+  public static int? ActiveTransactionsAtFinish { get; private set; }
+
+  private readonly Autodesk.AutoCAD.DatabaseServices.Database _database;
+  private readonly int _itemLimit;
+
+  private DrawingChangeTracker(Autodesk.AutoCAD.DatabaseServices.Database database, int itemLimit)
+  {
+    _database = database;
+    _itemLimit = itemLimit;
+  }
+
+  internal static DrawingChangeTracker? Start(
+    Autodesk.AutoCAD.DatabaseServices.Database database, int itemLimit)
+  {
+    StartCount++;
+    LastItemLimit = itemLimit;
+    return FailToStart ? null : new DrawingChangeTracker(database, itemLimit);
+  }
+
+  internal void BeforeTransactionEnds(
+    Autodesk.AutoCAD.DatabaseServices.Transaction transaction, bool preview)
+  {
+    LastPreview = preview;
+    ActiveTransactionsAtCapture = _database.TransactionManager.ActiveCount;
+  }
+
+  internal ChangeList? Finish(bool committed, bool preview)
+  {
+    LastCommitted = committed;
+    ActiveTransactionsAtFinish = _database.TransactionManager.ActiveCount;
+    if (!committed && !preview) return null;
+    var list = new ChangeList(_itemLimit) { Preview = preview };
+    Changes?.Invoke(list);
+    if (preview) list.LeftAfterPreview ??= 0;
+    return list;
+  }
+
+  internal ChangeList FinishFailed()
+  {
+    FailedCount++;
+    ActiveTransactionsAtFinish = _database.TransactionManager.ActiveCount;
+    return ChangeList.AfterFailure(LeftAfterFailure);
+  }
+
+  public void Dispose() => DisposeCount++;
+
+  public static void Reset()
+  {
+    LeftAfterFailure = 0;
+    FailedCount = 0;
+    Changes = null;
+    FailToStart = false;
+    StartCount = 0;
+    DisposeCount = 0;
+    LastItemLimit = null;
+    LastPreview = null;
+    LastCommitted = null;
+    ActiveTransactionsAtCapture = null;
+    ActiveTransactionsAtFinish = null;
+  }
+}
+
+/// <summary>
+/// Stand-in for the plugin's DrawingModifiedFlag: takes the test drawing's
+/// DBMOD back to zero and counts the calls.
+/// </summary>
+internal static class DrawingModifiedFlag
+{
+  public static int ClearCount { get; private set; }
+  public static bool Fail { get; set; }
+
+  internal static bool TryClear(Autodesk.AutoCAD.DatabaseServices.Database database)
+  {
+    ClearCount++;
+    if (Fail) return false;
+    Autodesk.AutoCAD.ApplicationServices.Application.DbMod = 0;
+    return true;
+  }
+
+  public static void Reset()
+  {
+    ClearCount = 0;
+    Fail = false;
+  }
+}
+
 public static class RoslynExecutor
 {
   private static int _activeCount;

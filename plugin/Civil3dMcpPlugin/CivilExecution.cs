@@ -45,7 +45,9 @@ public static class CivilExecution
       ? (long?)null
       : Stopwatch.GetTimestamp();
 
-    progress?.ConfigureExecution(write, saveDrawing);
+    // A preview runs like a write and keeps nothing: no commit and no save.
+    var preview = write && record is { Preview: true };
+    progress?.ConfigureExecution(write && !preview, saveDrawing && !preview);
     progress?.SetStage(OperationStage.WaitingForCommandContext);
     void ExecuteBody()
     {
@@ -111,21 +113,31 @@ public static class CivilExecution
             progress?.SetStage(OperationStage.AcquiringDocumentLock);
             using (var documentLock = doc.LockDocument())
             {
+              // Watches what the write does to the drawing, for the receipt.
+              var changeTracker = writeRecord == null
+                ? null
+                : DrawingChangeTracker.Start(database, writeRecord.ChangeItemLimit);
+              var commitStarted = false;
               try
               {
+                T actionResult;
                 progress?.SetStage(OperationStage.StartingTransaction);
                 using (var transaction = database.TransactionManager.StartTransaction())
                 {
                   try
                   {
-                    var actionResult = action(doc, civilDoc, database, transaction);
+                    actionResult = action(doc, civilDoc, database, transaction);
+                    changeTracker?.BeforeTransactionEnds(transaction, preview);
 
-                    if (write)
+                    // A preview leaves the transaction uncommitted, so that
+                    // disposing it below takes everything back.
+                    if (write && !preview)
                     {
                       progress?.SetStage(OperationStage.CommittingTransaction);
                       progress?.RecordCommit(null);
                       try
                       {
+                        commitStarted = true;
                         transaction.Commit();
                         operationCommitted = true;
                         progress?.RecordCommit(true);
@@ -136,24 +148,46 @@ public static class CivilExecution
                         throw;
                       }
                     }
-
-                    return actionResult;
                   }
                   finally
                   {
                     progress?.SetStage(OperationStage.DisposingTransaction);
                   }
                 }
+
+                // The transaction is closed: read back what is in the drawing
+                // now, or check that a preview left nothing behind.
+                if (changeTracker != null)
+                {
+                  writeRecord!.Changes = changeTracker.Finish(operationCommitted, preview);
+                  RestoreCleanMark(writeRecord, database, operationCommitted);
+                }
+                return actionResult;
+              }
+              catch (Exception) when (changeTracker != null && !operationCommitted)
+              {
+                // The script or the commit failed and the transaction is gone.
+                // Say whether anything was left behind; the failure itself is
+                // reported by the caller of this method.
+                if (writeRecord!.Changes == null)
+                {
+                  writeRecord.Changes = changeTracker.FinishFailed();
+                  // After a commit that broke off half way nobody can say
+                  // what the drawing holds, so the mark stays.
+                  if (!commitStarted) RestoreCleanMark(writeRecord, database, operationCommitted);
+                }
+                throw;
               }
               finally
               {
+                changeTracker?.Dispose();
                 progress?.SetStage(OperationStage.DisposingDocumentLock);
               }
             }
           }
         );
 
-        if (saveDrawing)
+        if (saveDrawing && !preview)
         {
           try
           {
@@ -283,14 +317,32 @@ public static class CivilExecution
             "Save it once in Civil 3D before using backup."
         );
       }
-      record.BackupPath = DrawingBackup.Create(namedDrawingPath, record.BackupDirectory, DateTime.Now);
+      // A preview changes nothing, so it needs no copy; the checks above
+      // still tell whether the real call would be refused.
+      if (!record.Preview)
+      {
+        record.BackupPath = DrawingBackup.Create(namedDrawingPath, record.BackupDirectory, DateTime.Now);
+      }
     }
 
-    EchoDescription(doc, record.Description);
+    EchoDescription(doc, record.Description, record.Preview);
     return namedDrawingPath;
   }
 
   /// <summary>DBMOD is 0 when the drawing has no unsaved changes. Null when it cannot be read.</summary>
+  /// <summary>
+  /// A preview or a failed write keeps nothing, yet AutoCAD marks the drawing
+  /// as modified. When the drawing was clean before and the check found
+  /// nothing left behind, the mark is taken off again, so that the real write
+  /// can still ask for a clean drawing or a backup.
+  /// </summary>
+  private static void RestoreCleanMark(ExecutionRecord record, Database database, bool committed)
+  {
+    if (committed || record.DbmodBefore != 0 || record.Changes is not { NothingLeft: true }) return;
+    if (TryReadDbmod() is not int now || now == 0) return;
+    DrawingModifiedFlag.TryClear(database);
+  }
+
   private static int? TryReadDbmod()
   {
     try
@@ -308,14 +360,15 @@ public static class CivilExecution
   /// The text is the caller's, so anything the command line could treat as a
   /// format instruction is replaced first.
   /// </summary>
-  private static void EchoDescription(Document doc, string? description)
+  private static void EchoDescription(Document doc, string? description, bool preview)
   {
     var text = ExecutionRecord.ToSingleLine(description, 200);
     if (text == null) return;
     try
     {
       text = text.Replace("%", "pct").Replace('{', '(').Replace('}', ')');
-      doc.Editor.WriteMessage("\n[Civil 3D MCP] " + text + "\n");
+      doc.Editor.WriteMessage(
+        "\n[Civil 3D MCP] " + (preview ? "(preview, nothing is kept) " : string.Empty) + text + "\n");
     }
     catch (Exception)
     {

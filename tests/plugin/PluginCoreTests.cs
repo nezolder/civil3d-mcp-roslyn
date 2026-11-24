@@ -53,6 +53,9 @@ internal static class PluginCoreTests
       ("backup copies the saved drawing first and fails closed", BackupBeforeWriteAsync),
       ("a write returns a receipt next to its result and a query does not", WriteReceiptAsync),
       ("every write request leaves one journal line without code or result", WriteJournalAsync),
+      ("the receipt lists what a write changed, read after the transaction closed", ChangeListReceiptAsync),
+      ("a preview runs the script and keeps nothing: no commit, save, backup or used key", PreviewKeepsNothingAsync),
+      ("the listener runs a request only with the session token from its endpoint record", SessionTokenAsync),
       ("the description is shown on the command line as plain text", DescriptionEchoAsync),
       ("health reports the cached active drawing and the build without a command", HealthActiveDrawingAsync),
       ("script time limit parameter is validated and forwarded", ScriptTimeLimitParameterAsync),
@@ -94,6 +97,7 @@ internal static class PluginCoreTests
       SaveAfterCommitOrderingAsync, SaveRequestValidationAsync, SaveFailureCompletesIdempotencyAsync,
       ReadOnlyDrawingSaveAsync, ScriptTimeLimitParameterAsync,
       RequireCleanAsync, BackupBeforeWriteAsync, WriteReceiptAsync, WriteJournalAsync, DescriptionEchoAsync,
+      ChangeListReceiptAsync, PreviewKeepsNothingAsync,
       SerializedDispatchStatusAsync, RunningScriptProgressAndCancellationAsync, ProgressCleanupAsync,
       HealthBypassesSerializedQueueAsync, ApiLookupBypassesSerializedQueueAsync,
       CancellationAndErrorCleanupAsync, GateWaitMeasurementAsync, ExecuteResultSerializationAsync,
@@ -134,6 +138,7 @@ internal static class PluginCoreTests
       ResultSerializerTests.RunAll();
       ApiLookupRankingTests.RunAll();
       ScriptCacheTests.RunAll();
+      ChangeListTests.RunAll();
     }
     catch (Exception ex)
     {
@@ -1766,6 +1771,16 @@ internal static class PluginCoreTests
       ? Directory.GetFiles(JournalDirectory, "*.jsonl").SelectMany(File.ReadAllLines).ToArray()
       : Array.Empty<string>();
 
+  /// <summary>A small file standing in for a saved drawing, at a path valid on this machine.</summary>
+  private static string CreateTestDrawingFile(string name)
+  {
+    var directory = Path.Combine(SafetyDirectory, "drawings");
+    Directory.CreateDirectory(directory);
+    var path = Path.Combine(directory, name);
+    File.WriteAllText(path, "saved drawing content");
+    return path;
+  }
+
   private static void ClearSafetyFiles()
   {
     if (Directory.Exists(SafetyDirectory)) Directory.Delete(SafetyDirectory, recursive: true);
@@ -2061,6 +2076,452 @@ internal static class PluginCoreTests
     }
   }
 
+  private static async Task ChangeListReceiptAsync()
+  {
+    ClearSafetyFiles();
+    // A path that is valid on the machine running the test, as in the receipt test.
+    var drawingPath = CreateTestDrawingFile("Changes.dwg");
+    string Write(string id, string code) => CreateSafetyWriteRequest(id, code, drawingPath, _ => { });
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    DrawingChangeTracker.Changes = list =>
+    {
+      list.Add(ChangeKind.Added, new ChangedObject("Alignment", "2F3A", "Tengely-1", "C-ROAD"));
+      list.Add(ChangeKind.Added, new ChangedObject("Polyline", "2F3B", null, "0"));
+      list.Add(ChangeKind.Modified, new ChangedObject("Profile", "1C02", "Hossz-szelvény"));
+      list.AddContainer("BlockTableRecord");
+    };
+    var written = JsonNode.Parse(await SendAsync(Write("changes-write", "changes-write")))!.AsObject();
+    Assert(written["result"]?.GetValue<string>() == "changes-write", "the result keeps its own place");
+    var receipt = written["receipt"]!.AsObject();
+    Assert(receipt["preview"]?.GetValue<bool>() == false && receipt["committed"]?.GetValue<bool>() == true,
+      "an ordinary write is committed and is no preview");
+    var changes = receipt["changes"]!.AsObject();
+    Assert(changes["added"]!["count"]!.GetValue<int>() == 2
+      && changes["added"]!["items"]![0]!["name"]!.GetValue<string>() == "Tengely-1"
+      && changes["added"]!["items"]![0]!["handle"]!.GetValue<string>() == "2F3A"
+      && changes["modified"]!["byType"]!["Profile"]!.GetValue<int>() == 1
+      && changes["erased"]!["count"]!.GetValue<int>() == 0
+      && changes["containers"]!["BlockTableRecord"]!.GetValue<int>() == 1
+      && changes["complete"]!.GetValue<bool>(),
+      "the receipt lists the added, modified and erased objects");
+    Assert(DrawingChangeTracker.StartCount == 1 && DrawingChangeTracker.DisposeCount == 1,
+      "one tracker per write, always released");
+    Assert(DrawingChangeTracker.LastItemLimit == ChangeList.DefaultItemLimit
+      && DrawingChangeTracker.LastPreview == false && DrawingChangeTracker.LastCommitted == true,
+      "the tracker is told how the write went");
+    Assert(DrawingChangeTracker.ActiveTransactionsAtCapture == 1 && DrawingChangeTracker.ActiveTransactionsAtFinish == 0,
+      "the script's flags are read inside its transaction, the drawing is read back after it closed");
+    var line = JsonNode.Parse(ReadJournalLines().Single())!.AsObject();
+    Assert(line["added"]?.GetValue<int>() == 2 && line["modified"]?.GetValue<int>() == 1
+      && line["erased"]?.GetValue<int>() == 0 && line["preview"]?.GetValue<bool>() == false,
+      "the journal keeps the three counts");
+    Assert(!ReadJournalLines().Single().Contains("Tengely", StringComparison.Ordinal),
+      "the journal holds counts only, no object names");
+
+    // changeItems sizes the list; a value outside the range is refused before anything runs.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    DrawingChangeTracker.Changes = list =>
+    {
+      for (var index = 0; index < 5; index++) list.Add(ChangeKind.Added, new ChangedObject("Line", $"A{index}"));
+    };
+    var limited = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "changes-limit", "changes-limit", drawingPath, p => p["changeItems"] = 2)))!["receipt"]!["changes"]!["added"]!.AsObject();
+    Assert(DrawingChangeTracker.LastItemLimit == 2 && limited["items"]!.AsArray().Count == 2
+      && limited["more"]!.GetValue<int>() == 3,
+      "changeItems bounds the listed objects");
+    ResetEnvironment(actualPath: drawingPath);
+    foreach (var invalid in new JsonNode[] { -1, 101, "many", 2.5 })
+    {
+      AssertError(
+        await SendAsync(CreateSafetyWriteRequest("changes-bad-limit", "must-not-run", drawingPath, p => p["changeItems"] = invalid)),
+        "CIVIL3D.INVALID_INPUT");
+    }
+    var queryWithLimit = JsonNode.Parse(CreateRequest("changes-query", readOnly: true, code: "must-not-run"))!.AsObject();
+    queryWithLimit["params"]!.AsObject()["changeItems"] = 3;
+    AssertError(await SendAsync(queryWithLimit.ToJsonString()), "CIVIL3D.INVALID_INPUT");
+    AssertNoCivilResourcesOpened();
+
+    // A query is not tracked and has no receipt.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    AssertResult(await SendAsync(CreateRequest("changes-plain-query", readOnly: true, code: "query")), "query");
+    Assert(DrawingChangeTracker.StartCount == 0, "a query is not tracked");
+
+    // A failed script has no change list: nothing was committed. The receipt
+    // still says whether anything was left behind, checked after the
+    // transaction was gone. AutoCAD marks the drawing as modified although
+    // nothing was kept; on a drawing that was clean the mark is taken off.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (_, _) =>
+    {
+      Application.DbMod = 1;
+      throw new InvalidOperationException("script failed");
+    };
+    var failed = JsonNode.Parse(await SendAsync(Write("changes-failed", "changes-failed")))!.AsObject();
+    var failedChanges = failed["receipt"]?["changes"]?.AsObject();
+    Assert(failed["error"] != null && failed["receipt"]?["committed"]?.GetValue<bool>() == false
+      && failedChanges != null && failedChanges["available"]!.GetValue<bool>() == false
+      && failedChanges["rolledBack"]!.GetValue<bool>() && failedChanges.Count == 3,
+      "a rolled back write reports no changes, only that nothing was left behind");
+    Assert(DrawingChangeTracker.FailedCount == 1 && DrawingChangeTracker.ActiveTransactionsAtFinish == 0,
+      "what a failed script left behind is checked after its transaction is gone");
+    Assert(DrawingChangeTracker.DisposeCount == 1, "the tracker is released after a failure as well");
+    Assert(DrawingModifiedFlag.ClearCount == 1 && failed["receipt"]?["dbmodBefore"]?.GetValue<int>() == 0
+      && failed["receipt"]?["dbmodAfter"]?.GetValue<int>() == 0,
+      "a failed write that kept nothing leaves a clean drawing clean");
+
+    // Something stayed behind: it is reported and the drawing stays marked.
+    ResetEnvironment(actualPath: drawingPath);
+    DrawingChangeTracker.LeftAfterFailure = 2;
+    RoslynExecutor.Handler = (_, _) =>
+    {
+      Application.DbMod = 1;
+      throw new InvalidOperationException("script failed");
+    };
+    var leftBehind = JsonNode.Parse(await SendAsync(Write("changes-left", "changes-left")))!["receipt"]!.AsObject();
+    Assert(leftBehind["changes"]!["rolledBack"]!.GetValue<bool>() == false
+      && leftBehind["changes"]!["leftBehind"]!.GetValue<int>() == 2
+      && DrawingModifiedFlag.ClearCount == 0 && leftBehind["dbmodAfter"]?.GetValue<int>() == 1,
+      "objects a failed script left behind are reported and the drawing stays marked as modified");
+
+    // A failed commit is reported the same way, but the drawing stays marked
+    // as modified: a commit that broke off half way is not trusted.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
+    CurrentDatabase.TransactionManager.CommitException = new InvalidOperationException("commit failed");
+    var commitFailed = JsonNode.Parse(await SendAsync(Write("changes-commit-failed", "x")))!.AsObject();
+    Assert(commitFailed["error"] != null
+      && commitFailed["receipt"]!["changes"]!["available"]!.GetValue<bool>() == false
+      && commitFailed["receipt"]!["changes"]!["rolledBack"]!.GetValue<bool>()
+      && DrawingChangeTracker.DisposeCount == 1,
+      "a failed commit reports no changes and releases the tracker");
+    Assert(DrawingModifiedFlag.ClearCount == 0 && commitFailed["receipt"]!["dbmodAfter"]?.GetValue<int>() == 1,
+      "after a failed commit the drawing stays marked as modified");
+
+    // A committed write is never marked clean again.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
+    var kept = JsonNode.Parse(await SendAsync(Write("changes-kept", "kept")))!["receipt"]!.AsObject();
+    Assert(kept["committed"]?.GetValue<bool>() == true && DrawingModifiedFlag.ClearCount == 0
+      && kept["dbmodAfter"]?.GetValue<int>() == 1,
+      "a committed write leaves the drawing marked as modified");
+
+    // The list is an extra: when it cannot be made, the write still succeeds.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    DrawingChangeTracker.FailToStart = true;
+    var untracked = JsonNode.Parse(await SendAsync(Write("changes-untracked", "untracked")))!.AsObject();
+    Assert(untracked["result"]?.GetValue<string>() == "untracked"
+      && untracked["receipt"]?["committed"]?.GetValue<bool>() == true
+      && !untracked["receipt"]!.AsObject().ContainsKey("changes"),
+      "a write without a tracker is committed and simply has no change list");
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    Assert(CurrentDatabase.TransactionManager.CommittedCount == 0, "fresh drawing");
+  }
+
+  private static async Task PreviewKeepsNothingAsync()
+  {
+    ClearSafetyFiles();
+    var drawingDirectory = Path.Combine(SafetyDirectory, "drawings");
+    Directory.CreateDirectory(drawingDirectory);
+    var drawingPath = Path.Combine(drawingDirectory, "Preview.dwg");
+    File.WriteAllText(drawingPath, "saved drawing content");
+
+    // The full call a real write would use, with preview switched on.
+    // AutoCAD marks the drawing as modified as soon as the script touches it,
+    // also when the transaction is abandoned afterwards.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
+    DrawingChangeTracker.Changes = list =>
+    {
+      list.Add(ChangeKind.Added, new ChangedObject("Corridor", "5001", "Korridor-1"));
+      list.Add(ChangeKind.Erased, new ChangedObject("Polyline", "0A11", null, "0"));
+    };
+    string Preview(string id, bool preview) => CreateSafetyWriteRequest(id, "preview-code", drawingPath, p =>
+    {
+      if (preview) p["preview"] = true;
+      p["saveDrawing"] = true;
+      p["backup"] = true;
+      p["idempotencyKey"] = "preview-key-1";
+      p["description"] = "Korridor létrehozása";
+    });
+    var previewed = JsonNode.Parse(await SendAsync(Preview("preview-run", preview: true)))!.AsObject();
+    Assert(previewed["result"]?.GetValue<string>() == "preview-code", "the script runs and its result comes back");
+    Assert(RoslynExecutor.CallCount == 1, "a preview runs the script once");
+    Assert(CurrentDatabase.TransactionManager.StartedCount == 1
+      && CurrentDatabase.TransactionManager.CommittedCount == 0
+      && CurrentDatabase.TransactionManager.ActiveCount == 0,
+      "a preview opens a transaction and never commits it");
+    Assert(CurrentDatabase.SaveAsCallCount == 0, "a preview never saves");
+    Assert(_modalHost == null || CurrentDocument.LastQueuedCommand == ModalCommandAdmission.CommandName,
+      "a preview changes objects before it takes them back, so it runs under the write command");
+    Assert(!Directory.Exists(BackupDirectory) || Directory.GetFiles(BackupDirectory).Length == 0,
+      "a preview makes no backup copy");
+    var receipt = previewed["receipt"]!.AsObject();
+    Assert(receipt["preview"]?.GetValue<bool>() == true
+      && receipt["committed"]?.GetValue<bool>() == false
+      && receipt["saved"]?.GetValue<bool>() == false
+      && receipt["backupPath"] == null,
+      "the receipt says that nothing was kept");
+    var changes = receipt["changes"]!.AsObject();
+    Assert(changes["added"]!["items"]![0]!["name"]!.GetValue<string>() == "Korridor-1"
+      && changes["erased"]!["count"]!.GetValue<int>() == 1
+      && changes["rolledBack"]!.GetValue<bool>()
+      && !changes["complete"]!.GetValue<bool>(),
+      "the receipt lists what the write would change and that it was taken back");
+    Assert(DrawingChangeTracker.LastPreview == true && DrawingChangeTracker.LastCommitted == false
+      && DrawingChangeTracker.ActiveTransactionsAtCapture == 1 && DrawingChangeTracker.ActiveTransactionsAtFinish == 0,
+      "the preview is described inside the transaction and checked after it was abandoned");
+    Assert(DrawingModifiedFlag.ClearCount == 1 && receipt["dbmodBefore"]?.GetValue<int>() == 0
+      && receipt["dbmodAfter"]?.GetValue<int>() == 0 && Application.DbMod == 0,
+      "a preview that kept nothing leaves a clean drawing clean, so the real write can ask for a clean drawing");
+    var message = CurrentDocument.Editor.Messages.Single(text => text.Contains("[Civil 3D MCP]", StringComparison.Ordinal));
+    Assert(message.Trim() == "[Civil 3D MCP] (preview, nothing is kept) Korridor létrehozása",
+      $"the person at the computer is told that it is a preview, got: {message}");
+    var line = JsonNode.Parse(ReadJournalLines().Single())!.AsObject();
+    Assert(line["preview"]?.GetValue<bool>() == true && line["committed"]?.GetValue<bool>() == false
+      && line["added"]?.GetValue<int>() == 1 && line["erased"]?.GetValue<int>() == 1,
+      "a preview is journaled as a preview");
+
+    // The key was not used up: the real write with the same key goes through, once.
+    var real = JsonNode.Parse(await SendAsync(Preview("preview-real", preview: false)))!.AsObject();
+    Assert(real["receipt"]?["committed"]?.GetValue<bool>() == true && real["receipt"]?["saved"]?.GetValue<bool>() == true
+      && real["receipt"]?["backupPath"] != null && real["receipt"]?["preview"]?.GetValue<bool>() == false,
+      "the same call without preview commits, saves and backs up");
+    AssertError(await SendAsync(Preview("preview-real-again", preview: false)), "CIVIL3D.IDEMPOTENCY_COMPLETED");
+    // A preview with a used key is still only a preview.
+    Assert(JsonNode.Parse(await SendAsync(Preview("preview-after", preview: true)))!["receipt"]?["preview"]?.GetValue<bool>() == true,
+      "a preview is never refused for a key the real write has used");
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("preview-bad-key", "must-not-run", drawingPath, p =>
+      {
+        p["preview"] = true;
+        p["idempotencyKey"] = "not a valid key!";
+      })),
+      "CIVIL3D.INVALID_INPUT");
+
+    // The checks of the real call still run, so a preview shows that it would be refused.
+    ResetEnvironment(actualPath: drawingPath);
+    Application.DbMod = 3;
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("preview-dirty", "must-not-run", drawingPath, p =>
+      {
+        p["preview"] = true;
+        p["requireClean"] = true;
+      })),
+      "CIVIL3D.DRAWING_NOT_CLEAN");
+    AssertNoCivilResourcesOpened();
+    ResetEnvironment(actualPath: drawingPath);
+    CurrentDocument.IsReadOnly = true;
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("preview-read-only", "must-not-run", drawingPath, p =>
+      {
+        p["preview"] = true;
+        p["saveDrawing"] = true;
+      })),
+      "CIVIL3D.DRAWING_READ_ONLY");
+    AssertNoCivilResourcesOpened();
+    ResetEnvironment(actualPath: drawingPath);
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("preview-wrong-drawing", "must-not-run",
+        Path.Combine(drawingDirectory, "Other.dwg"), p => p["preview"] = true)),
+      "CIVIL3D.DRAWING_MISMATCH");
+    AssertNoCivilResourcesOpened();
+
+    // preview belongs to writes and must be a boolean.
+    ResetEnvironment(actualPath: drawingPath);
+    var query = JsonNode.Parse(CreateRequest("preview-query", readOnly: true, code: "must-not-run"))!.AsObject();
+    query["params"]!.AsObject()["preview"] = true;
+    AssertError(await SendAsync(query.ToJsonString()), "CIVIL3D.INVALID_INPUT");
+    AssertError(
+      await SendAsync(CreateSafetyWriteRequest("preview-text", "must-not-run", drawingPath, p => p["preview"] = "yes")),
+      "CIVIL3D.INVALID_INPUT");
+    AssertNoCivilResourcesOpened();
+
+    // The mark is only taken off when the drawing was clean before and the
+    // check found nothing left. A drawing with unsaved changes stays marked.
+    ResetEnvironment(actualPath: drawingPath);
+    Application.DbMod = 4;
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 5;
+      return Task.FromResult<object?>(code);
+    };
+    var onDirty = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "preview-on-dirty", "preview-on-dirty", drawingPath, p => p["preview"] = true)))!["receipt"]!.AsObject();
+    Assert(DrawingModifiedFlag.ClearCount == 0 && onDirty["dbmodBefore"]?.GetValue<int>() == 4
+      && onDirty["dbmodAfter"]?.GetValue<int>() == 5,
+      "a preview on a drawing with unsaved changes never marks it clean");
+    // Something stayed behind: the drawing did change.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
+    DrawingChangeTracker.Changes = list => list.LeftAfterPreview = 1;
+    var leftover = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "preview-leftover", "preview-leftover", drawingPath, p => p["preview"] = true)))!["receipt"]!.AsObject();
+    Assert(leftover["changes"]!["rolledBack"]!.GetValue<bool>() == false && DrawingModifiedFlag.ClearCount == 0
+      && leftover["dbmodAfter"]?.GetValue<int>() == 1,
+      "a preview that left something behind keeps the drawing marked as modified");
+    // The mark cannot be taken off: the preview is still a preview.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
+    DrawingModifiedFlag.Fail = true;
+    var stillMarked = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "preview-still-marked", "preview-still-marked", drawingPath, p => p["preview"] = true)))!.AsObject();
+    Assert(stillMarked["result"]?.GetValue<string>() == "preview-still-marked"
+      && stillMarked["receipt"]!["changes"]!["rolledBack"]!.GetValue<bool>()
+      && stillMarked["receipt"]!["dbmodAfter"]?.GetValue<int>() == 1,
+      "when the mark cannot be taken off the preview still succeeds and the receipt shows the mark");
+
+    // A script that fails in a preview is an ordinary failure with nothing kept.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (_, _) =>
+    {
+      Application.DbMod = 1;
+      throw new InvalidOperationException("script failed");
+    };
+    var failed = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "preview-failed", "preview-failed", drawingPath, p => p["preview"] = true)))!.AsObject();
+    Assert(failed["error"] != null && failed["receipt"]?["preview"]?.GetValue<bool>() == true
+      && failed["receipt"]?["committed"]?.GetValue<bool>() == false
+      && failed["receipt"]!["changes"]!["available"]!.GetValue<bool>() == false
+      && failed["receipt"]!["changes"]!["rolledBack"]!.GetValue<bool>()
+      && failed["receipt"]!["dbmodAfter"]?.GetValue<int>() == 0,
+      "a failed preview reports the failure, that nothing was left behind, and leaves a clean drawing clean");
+    Assert(CurrentDatabase.TransactionManager.CommittedCount == 0 && CurrentDatabase.TransactionManager.ActiveCount == 0,
+      "a failed preview leaves no transaction open");
+    ResetEnvironment();
+  }
+
+  private static async Task SessionTokenAsync()
+  {
+    ClearSafetyFiles();
+    var drawingPath = CreateTestDrawingFile("Token.dwg");
+    string Write(string id, string code) => CreateSafetyWriteRequest(id, code, drawingPath, _ => { });
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    Directory.CreateDirectory(EndpointDirectory);
+    foreach (var leftover in Directory.GetFiles(EndpointDirectory)) File.Delete(leftover);
+
+    static string WithAuth(string request, JsonNode? auth)
+    {
+      var json = JsonNode.Parse(request)!.AsObject();
+      json[SessionAuth.RequestPropertyName] = auth;
+      return json.ToJsonString();
+    }
+    Task<string> Transport(string request) => PluginRuntime.HandleTransportRequestAsync(request, CancellationToken.None);
+
+    // Before the listener has started there is no token, and nothing is run.
+    AssertError(await Transport(Write("token-none-yet", "must-not-run")), SessionAuth.RefusalCode);
+
+    try
+    {
+      PluginRuntime.StartServer();
+      var record = JsonNode.Parse(File.ReadAllText(Directory.GetFiles(EndpointDirectory, "*.json").Single()))!.AsObject();
+      var token = record["token"]?.GetValue<string>();
+      Assert(token != null && token.Length == 64 && token.All(Uri.IsHexDigit),
+        "the endpoint record carries a 256-bit token");
+
+      // Without the token, or with another one, nothing runs and nothing is journaled.
+      foreach (var auth in new JsonNode?[] { null, "", new string('0', 64), token![..63], token + "0", 42, new JsonObject() })
+      {
+        var request = WithAuth(Write("token-refused", "must-not-run"), auth?.DeepClone());
+        var refused = await Transport(request);
+        AssertError(refused, SessionAuth.RefusalCode);
+        Assert(!JsonNode.Parse(refused)!.AsObject().ContainsKey("receipt"), "a refused request reaches no drawing");
+        AssertError(await Transport(WithAuth(CreateRequest("token-refused-query", readOnly: true), auth?.DeepClone())),
+          SessionAuth.RefusalCode);
+        AssertError(await Transport(WithAuth(CreateApiLookupRequest("token-refused-lookup", "Alignment"), auth?.DeepClone())),
+          SessionAuth.RefusalCode);
+      }
+      AssertNoCivilResourcesOpened();
+      Assert(ReadJournalLines().Length == 0, "a request without the token is not a write request");
+      Assert(JsonNode.Parse(await Transport(Write("token-id", "must-not-run")))!["id"]?.GetValue<string>() == "token-id",
+        "the refusal answers the request it belongs to");
+
+      // Health without the token says that a plugin is here, and nothing about the drawing.
+      var limited = JsonNode.Parse(await Transport(CreateHealthRequest("token-health")))!["result"]!.AsObject();
+      Assert(limited["connected"]?.GetValue<bool>() == true && limited["authorized"]?.GetValue<bool>() == false
+        && limited["tokenRequired"]?.GetValue<bool>() == true
+        && limited["instanceId"]?.GetValue<string>() == PluginRuntime.InstanceId
+        && limited["processId"]?.GetValue<int>() == Environment.ProcessId
+        && limited["port"]?.GetValue<int>() == PluginRuntime.Port
+        && limited["build"]?["commit"]?.GetValue<string>() == BuildInfo.Commit
+        && limited["features"]!.AsArray().Any(feature => feature!.GetValue<string>() == "sessionToken"),
+        "the short health reply identifies the session and its build");
+      Assert(limited["activeDrawingKnown"]?.GetValue<bool>() == false && !limited.ContainsKey("activeDrawing")
+        && !limited.ContainsKey("currentOperation") && !limited.ContainsKey("operationInProgress"),
+        "the short health reply tells nothing about the drawing or the running operation");
+      Assert(!limited.ToJsonString().Contains(token!, StringComparison.Ordinal), "the token is never sent back");
+
+      // With the token everything works as before.
+      var full = JsonNode.Parse(await Transport(WithAuth(CreateHealthRequest("token-health-ok"), token)))!["result"]!.AsObject();
+      Assert(full["authorized"]?.GetValue<bool>() == true && full["tokenRequired"]?.GetValue<bool>() == true
+        && full.ContainsKey("operationInProgress") && full.ContainsKey("activeDrawingKnown"),
+        "the full health reply needs the token");
+      Assert(!full.ToJsonString().Contains(token!, StringComparison.Ordinal), "the token is never sent back");
+      AssertResult(await Transport(WithAuth(Write("token-ok", "written"), token)), "written");
+      Assert(CurrentDatabase.TransactionManager.CommittedCount == 1, "a request with the token is run");
+
+      // The in-process entry asks for no token (it is not reachable from outside).
+      AssertResult(await SendAsync(CreateRequest("token-in-process", readOnly: true, code: "query")), "query");
+
+      // The requirement can be switched off for an MCP server from before the token.
+      using (new EnvironmentVariableScope(SessionAuth.RequireEnvironmentVariable, "0"))
+      {
+        AssertResult(await Transport(CreateRequest("token-not-required", readOnly: true, code: "open")), "open");
+        var open = JsonNode.Parse(await Transport(CreateHealthRequest("token-health-open")))!["result"]!.AsObject();
+        Assert(open["authorized"]?.GetValue<bool>() == true && open["tokenRequired"]?.GetValue<bool>() == false,
+          "health says that the token is not asked for");
+      }
+      // Any other value keeps the requirement.
+      using (new EnvironmentVariableScope(SessionAuth.RequireEnvironmentVariable, "false"))
+      {
+        AssertError(await Transport(CreateRequest("token-still-required", readOnly: true)), SessionAuth.RefusalCode);
+      }
+
+      // A restarted listener has a new token; the old one is worth nothing.
+      PluginRuntime.StopServer();
+      AssertError(await Transport(WithAuth(CreateRequest("token-stopped", readOnly: true), token)), SessionAuth.RefusalCode);
+      PluginRuntime.StartServer();
+      var newToken = JsonNode.Parse(File.ReadAllText(Directory.GetFiles(EndpointDirectory, "*.json").Single()))!["token"]!.GetValue<string>();
+      Assert(newToken != token, "every listener start makes a new token");
+      AssertError(await Transport(WithAuth(CreateRequest("token-old", readOnly: true), token)), SessionAuth.RefusalCode);
+      AssertResult(await Transport(WithAuth(CreateRequest("token-new", readOnly: true, code: "new"), newToken)), "new");
+    }
+    finally
+    {
+      PluginRuntime.StopServer();
+    }
+
+    Assert(SessionAuth.CreateToken() != SessionAuth.CreateToken(), "tokens are random");
+    Assert(!SessionAuth.Matches(null, "x") && !SessionAuth.Matches("", "") && SessionAuth.Matches("abc", "abc")
+      && !SessionAuth.Matches("abc", "ABC") && !SessionAuth.Matches("abc", null),
+      "only the exact, non-empty token matches");
+  }
+
   private static async Task DescriptionEchoAsync()
   {
     ResetEnvironment();
@@ -2097,7 +2558,7 @@ internal static class PluginCoreTests
       && unknown["build"]?.AsObject().ContainsKey("dirty") == true,
       "a build without a stamp says so instead of inventing a commit");
     Assert(unknown["features"]?.AsArray().Select(item => item?.GetValue<string>()).SequenceEqual(
-      new[] { "activeDrawing", "writeSafety", "images" }) == true,
+      new[] { "activeDrawing", "writeSafety", "images", "changeList", "preview", "sessionToken" }) == true,
       "health lists what this plugin build can do");
 
     // The identity is picked up when the application is idle.
@@ -2630,6 +3091,8 @@ internal static class PluginCoreTests
         "activeDrawing",
         "build",
         "features",
+        "authorized",
+        "tokenRequired",
       };
       Assert(health!.Count == expectedFields.Count && health.All(item => expectedFields.Contains(item.Key)),
         "health response must remain limited to the stable status fields");
@@ -2964,6 +3427,8 @@ internal static class PluginCoreTests
     ActiveDrawingTracker.ResetForTests();
     CivilApplication.ActiveDocument = new CivilDocument();
     RoslynExecutor.Reset();
+    DrawingChangeTracker.Reset();
+    DrawingModifiedFlag.Reset();
   }
 
   private static JsonObject Guard(string databaseFilename, Guid fingerprintGuid)
