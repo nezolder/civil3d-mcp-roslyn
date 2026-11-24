@@ -99,8 +99,9 @@ for (var i = 0; i < pviData.Length; i++)
         var grade = (p.elevation - previous.elevation) / span;
         if (!Double.IsFinite(span) || span <= tolerance || !Double.IsFinite(grade))
             return new { success = false, error = "PVI stations must be strictly increasing with finite tangent grades." };
-        if (previous.station + lengths[i - 1] / 2 >= p.station - lengths[i] / 2 - tolerance)
-            return new { success = false, error = "Adjacent vertical curves must leave a positive tangent gap." };
+        // A single curve that reaches past a neighbouring PVI is reported by the fit check below.
+        if (lengths[i - 1] > 0 && lengths[i] > 0 && previous.station + lengths[i - 1] / 2 >= p.station - lengths[i] / 2 - tolerance)
+            return new { success = false, error = $"The vertical curves at stations {previous.station:0.###} ({lengths[i - 1]:0.###} long) and {p.station:0.###} ({lengths[i]:0.###} long) overlap or touch; shorten one or move the PVIs apart." };
     }
     if (p.curveLength > 0 && i > 0 && i < pviData.Length - 1)
     {
@@ -108,7 +109,7 @@ for (var i = 0; i < pviData.Length; i++)
         var after = pviData[i + 1];
         if (!Double.IsFinite(lengths[i]) || p.station - lengths[i] / 2 <= before.station + tolerance
             || p.station + lengths[i] / 2 >= after.station - tolerance)
-            return new { success = false, error = $"The symmetric curve at station {p.station} ({lengths[i]:0.###} long) must fit strictly between its neighboring PVIs." };
+            return new { success = false, error = $"The symmetric curve at station {p.station:0.###} ({lengths[i]:0.###} long{(byK ? $" from K {p.curveLength:0.###}" : "")}) must fit strictly between its neighboring PVIs at {before.station:0.###} and {after.station:0.###}; at most {2 * Math.Min(p.station - before.station, after.station - p.station):0.###} fits." };
         if (minCurveLength > 0 && lengths[i] < minCurveLength - tolerance)
             return new { success = false, error = $"The curve at station {p.station} would be {lengths[i]:0.###} long, shorter than minCurveLength {minCurveLength}." };
         var gradeIn = (p.elevation - before.elevation) / (p.station - before.station);

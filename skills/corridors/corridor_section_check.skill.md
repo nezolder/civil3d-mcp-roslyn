@@ -52,6 +52,10 @@ parameters:
     type: double
     required: false
     description: Offset overlap smaller than this is ignored, in drawing units (default 0.01)
+  - name: stationSnapTolerance
+    type: double
+    required: false
+    description: A sample line station this close to a corridor station is checked at that corridor station, in drawing units (default 0.02; the two often differ by a fraction of a millimetre)
   - name: maxStations
     type: int
     required: false
@@ -76,6 +80,7 @@ var requiredShapeCodes = new string[] { };
 var shortLinkCodes = new string[] { };
 var minLinkLength = 0.30;
 var overlapTolerance = 0.01;
+var stationSnapTolerance = 0.02;
 var maxStations = 500;
 var limit = 200;
 
@@ -85,6 +90,8 @@ requiredShapeCodes ??= new string[] { };
 shortLinkCodes ??= new string[] { };
 if (maxStations < 1 || maxStations > 2000) return new { success = false, error = "maxStations must be between 1 and 2000." };
 if (limit < 1 || limit > 500) return new { success = false, error = "limit must be between 1 and 500." };
+if (!double.IsFinite(stationSnapTolerance) || stationSnapTolerance < 0 || stationSnapTolerance > 1)
+    return new { success = false, error = "stationSnapTolerance must be between 0 and 1." };
 if (!double.IsFinite(minLinkLength) || minLinkLength < 0 || !double.IsFinite(overlapTolerance) || overlapTolerance < 0)
     return new { success = false, error = "minLinkLength and overlapTolerance must be finite and not negative." };
 if (!double.IsNaN(startStation) && !double.IsNaN(endStation) && endStation < startStation)
@@ -158,6 +165,7 @@ var codesSeen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 var checkedStations = 0;
 var notCorridorStations = new List<object>();
 var notCorridorStationCount = 0;
+var snapped = 0;
 var stationsWithoutAssembly = 0;
 var truncated = false;
 var baselineRows = new List<object>();
@@ -173,8 +181,16 @@ foreach (Baseline baseline in corridor.Baselines)
     var to = double.IsNaN(endStation) ? baseline.EndStation : Math.Min(endStation, baseline.EndStation);
     var stations = (sampleStations ?? baseline.SortedStations().ToList()).Where(s => s >= from - 1e-6 && s <= to + 1e-6).ToList();
     var checkedHere = 0;
-    foreach (var station in stations)
+    var built = baseline.SortedStations();
+    foreach (var requested in stations)
     {
+        // GetAppliedAssemblyAtStation needs the exact corridor station.
+        var station = requested;
+        if (sampleStations != null && built.Length > 0)
+        {
+            var nearest = built.OrderBy(b => Math.Abs(b - requested)).First();
+            if (Math.Abs(nearest - requested) <= stationSnapTolerance) { if (nearest != requested) snapped++; station = nearest; }
+        }
         if (checkedStations >= maxStations) { truncated = true; break; }
         checkedStations++;
         checkedHere++;
@@ -281,6 +297,7 @@ return new
     baselines = baselineRows,
     stationsChecked = checkedStations,
     stationsWithoutAssembly,
+    sampleStationsSnapped = snapped,
     // Sample line stations where the corridor has no station: nothing was checked there.
     notCorridorStationCount,
     notCorridorStations,
@@ -300,7 +317,7 @@ return new
 - Read-only: it reads the corridor as it was last built and changes nothing. With `corridorOutOfDate` true the result describes the old build; ask the user to rebuild first.
 - Stations: by default the corridor's own stations of each matching baseline; with `sampleLineGroupHandle` exactly the sample line stations, on baselines that follow the group's alignment, which is what the section sheets will show. Offset baselines are not checked.
 - Checks, each switched on by its input: `uniqueLinkCodes` (links with a code, such as a curb's, that form two or more separate runs on the same side; links sharing an end point are one run: `REPEATED_CODE_ON_ONE_SIDE`), `overlapLinkCodes` (links with the code covering the same offsets, also inside one subassembly; `sameSubassembly` in the detail tells which: `OVERLAPPING_LINKS`), `requiredShapeCodes` (`MISSING_SHAPE_CODE` at a station without such a shape), `minLinkLength` with `shortLinkCodes` (`SHORT_LINK`; a short link often gives an unreadable label).
-- A sample line station that is not a station of the built corridor has no section to check (Civil 3D answers "Station not processed"); it is counted in `notCorridorStationCount` and listed in `notCorridorStations`, not checked. Seen live: 23 of 30 junction sample lines. `add_sample_line_stations_to_corridor` adds such stations; rebuild the corridor and check again.
+- Sections are read with `GetAppliedAssemblyAtStation`, which needs the exact corridor station; a sample line station within `stationSnapTolerance` of a corridor station is read there (counted in `sampleStationsSnapped`; seen live: sample line and corridor stations differing by 0.1 to 8 mm). A sample line station with no corridor station that close has no section to check (Civil 3D answers "Station not processed"); it is counted in `notCorridorStationCount` and listed in `notCorridorStations`. `add_sample_line_stations_to_corridor` adds such stations; rebuild the corridor and check again.
 - Side is by offset sign: negative is left. A link is placed by the middle of its offset range; length is measured along its points in the section plane (offset and elevation).
 - Codes and lengths are the caller's: the recipe holds no office or standard values, and the default `Top` is only the stock subassemblies' code. `linkCodesSeen` lists the codes of the checked links with counts and `codesNotSeen` the given codes that no link carries; a check whose code is not seen found nothing because it had nothing to look at, so run once, read `linkCodesSeen` and run again with the drawing's own codes. Which findings matter is an engineering decision; the result lists where to look.
 - One assembly built from a single Subassembly Composer subassembly with all links (seen live: 8 to 42 links per station) is checked the same way as one built from several stock subassemblies.
