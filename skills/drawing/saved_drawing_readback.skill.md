@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["mentett rajzfájl független visszaolvasása megnyitás nélkül", "read back the saved DWG file in a side database", "mentés utáni ellenőrzés a lemezen lévő fájlból", "saved file readback compare with open drawing"]
 workflow_tags: ["source_state", "readback"]
 tested_civil_version: "2025"
-validation_summary: "Offline: 2025 API compilation. Live: not yet tested; verify on a throwaway copy before use."
+validation_summary: "Live (Civil 3D 2025, throwaway copy, 2026-11-24): after saved writes no difference; after an unsaved write the surface flagged (points, operations); a backup file read via filePath; DBMOD stayed 0. Large drawings untested."
 parameters:
   - name: filePath
     type: string
@@ -15,7 +15,7 @@ parameters:
   - name: handles
     type: array
     required: false
-    description: Up to 200 object handles (hex text, as in a receipt) to look up in the saved file (default none)
+    description: Up to 200 object handles (hex text, as in a receipt) to look up in the saved file; surfaces also report point count, elevation range and definition operations (default none)
   - name: compareWithOpen
     type: bool
     required: false
@@ -88,6 +88,18 @@ Dictionary<string, object> Describe(Database db, Transaction tr, Handle handle)
             row["extents"] = new[] { Math.Round(e.MinPoint.X, 6), Math.Round(e.MinPoint.Y, 6), Math.Round(e.MaxPoint.X, 6), Math.Round(e.MaxPoint.Y, 6) };
         }
         catch (Autodesk.AutoCAD.Runtime.Exception) { row["extents"] = null; }
+    }
+    if (obj is Autodesk.Civil.DatabaseServices.Surface surface)
+    {
+        try
+        {
+            var general = surface.GetGeneralProperties();
+            row["points"] = general.NumberOfPoints;
+            row["minElevation"] = Math.Round(general.MinimumElevation, 6);
+            row["maxElevation"] = Math.Round(general.MaximumElevation, 6);
+        }
+        catch (System.Exception) { row["points"] = null; }
+        row["operations"] = surface.Operations.Count;
     }
     return row;
 }
@@ -187,7 +199,7 @@ return new
 
 ## Usage Notes
 - This reads the file on disk, not the editor's memory. Use it after a write with `saveDrawing: true` to check that the change reached the file; a query alone reads the open drawing, including unsaved changes.
-- Take the handles from the write's receipt (`changes`) or from your own result. `handlesDiffering` lists handles whose type, name, layer or extents differ between the file and the open drawing; after a clean save it should be empty and `sameModelSpaceCounts` true.
+- Take the handles from the write's receipt (`changes`) or from your own result. `handlesDiffering` lists handles whose type, name, layer, extents or, for a surface, point count, elevation range or number of definition operations differ between the file and the open drawing; after a clean save it should be empty and `sameModelSpaceCounts` true.
 - With `dbmodOpen` 1 the open drawing has unsaved changes, so differences are expected.
 - `filePath` can name another drawing (a backup copy, an xref source) to read it without opening it; `comparison` then compares it with the active drawing.
 - Nothing is changed: the separate database is read with shared access and closed at the end. Extents of some Civil objects are not available in a database that is not open in the editor; they come back as null.

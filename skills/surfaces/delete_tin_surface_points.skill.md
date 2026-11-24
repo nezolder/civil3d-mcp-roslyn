@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["TIN felület hibás pontjainak törlése", "delete TIN surface points or vertices", "terepfelület pontok törlése egy definíciós művelettel", "felületi pont eltávolítása kiugró magasság szerint"]
 workflow_tags: ["modeling", "source_state"]
 tested_civil_version: "2025"
-validation_summary: "Offline: 2025 API compilation. Live: not yet tested; verify on a throwaway copy before use."
+validation_summary: "Offline: 2025 API compilation. Live (Civil 3D 2025, throwaway copy, 2026-11-24): listOnly, boundary with elevation filters (2 of 25), one XY point, refusals (data reference, no match, maxPoints); saved and read back. Undo not tested."
 parameters:
   - name: surfaceName
     type: string
@@ -180,7 +180,7 @@ return new {
 ```
 
 ## Usage Notes
-- Run with `listOnly: true` first and check the listed points; then run again without it. The write is one Undo step and one entry in the surface definition (`SurfaceOperationDeleteMultipleTinVertices`, or `SurfaceOperationDeleteTinVertex` for a single point), so it can also be removed or switched off later in the definition.
+- Run with `listOnly: true` first and check the listed points; then run again without it. The write is one Undo step and one entry in the surface definition (`SurfaceOperationDeleteMultipleTinVertices`, also for a single point), so it can also be removed or switched off later in the definition.
 - `points` mode refuses the whole call when any row matches no point or more than one point within `tolerance`; nothing is deleted then.
 - `boundary` mode without an elevation filter deletes every point inside the boundary; `maxPoints` caps it.
 - A deleted point comes back if the surface is rebuilt with the operation disabled or removed. Points that come from a later definition item (a point group or a file added after this operation) are not affected.
