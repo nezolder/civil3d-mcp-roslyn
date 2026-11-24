@@ -98,9 +98,14 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function defaultTemplate() {
   const base = path.join(process.env.LOCALAPPDATA ?? "", "Autodesk", "C3D 2025");
   if (!fs.existsSync(base)) return null;
+  // The stock file is named "_Autodesk Civil 3D ..." in recent releases and
+  // "_AutoCAD Civil 3D ..." in older ones.
+  const names = ["_Autodesk Civil 3D (Metric) NCS.dwt", "_AutoCAD Civil 3D (Metric) NCS.dwt"];
   for (const language of fs.readdirSync(base)) {
-    const candidate = path.join(base, language, "Template", "_AutoCAD Civil 3D (Metric) NCS.dwt");
-    if (fs.existsSync(candidate)) return candidate;
+    for (const name of names) {
+      const candidate = path.join(base, language, "Template", name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
   }
   return null;
 }

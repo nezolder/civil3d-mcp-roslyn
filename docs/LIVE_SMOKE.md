@@ -61,9 +61,9 @@ Civil 3D (order, checks and stop rules only; that is not evidence of Civil 3D be
 | Option | Meaning |
 | --- | --- |
 | `--start-civil` | Start Civil 3D for the run (Windows). |
-| `--template <dwt>` | Template of the new drawing. Default: `_AutoCAD Civil 3D (Metric) NCS.dwt` from `%LOCALAPPDATA%\Autodesk\C3D 2025\<language>\Template`. |
+| `--template <dwt>` | Template of the new drawing. Default: the stock `_Autodesk Civil 3D (Metric) NCS.dwt` (older name `_AutoCAD Civil 3D (Metric) NCS.dwt`) from `%LOCALAPPDATA%\Autodesk\C3D 2025\<language>\Template`. |
 | `--acad <path>` | `acad.exe`. Default: `CIVIL3D_ACAD_EXE`, else `C:\Program Files\Autodesk\AutoCAD 2025\acad.exe`. |
-| `--profile <name>` | AutoCAD profile (`/p`), for example the one the Civil 3D shortcut uses. |
+| `--profile <name>` | AutoCAD profile (`/p`) as the Civil 3D shortcut gives it, a profile name or an `.arg` file path. |
 | `--language <code>` | Product language (`/language`), when the shortcut sets one. |
 | `--port <port>` | Instead of starting Civil 3D: use the running instance on this port. Its active drawing must be a new, saved `mcp_smoke*.dwg`. |
 | `--drawing <path>` | With `--port`: the exact full path that drawing must have. |
