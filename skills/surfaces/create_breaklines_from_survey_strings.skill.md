@@ -76,6 +76,22 @@ parameters:
     type: string
     required: false
     description: Description of the new breakline group (default "Survey strings")
+  - name: midOrdinateDistance
+    type: double
+    required: false
+    description: Breakline mid-ordinate distance passed to Civil 3D, must be greater than 0; 3D polylines have no arcs, so it has no effect on them (default 0.1)
+  - name: supplementingDistance
+    type: double
+    required: false
+    description: Civil 3D adds breakline vertices at this spacing along longer segments; 0 adds none (default 0)
+  - name: weedingDistance
+    type: double
+    required: false
+    description: Weeding distance passed to Civil 3D; with weedingAngle 0 no vertex is weeded (default 0)
+  - name: weedingAngle
+    type: double
+    required: false
+    description: Weeding angle as the Civil 3D API takes it (unit not verified); 0 keeps every surveyed vertex (default 0)
   - name: scanLimit
     type: int
     required: false
@@ -106,12 +122,19 @@ var minPointsPerString = 3;
 var polylineLayer = "POLYLINE_LAYER";
 var surfaceHandle = "";
 var breaklineDescription = "Survey strings";
+var midOrdinateDistance = 0.1;
+var supplementingDistance = 0.0;
+var weedingDistance = 0.0;
+var weedingAngle = 0.0;
 var scanLimit = 200000;
 var maxStrings = 500;
 
 if (!double.IsFinite(maxTieLength) || maxTieLength <= 0 || !double.IsFinite(maxLateralJump) || maxLateralJump < 0 || !double.IsFinite(maxOffset) || maxOffset <= 0)
     return new { success = false, error = "maxTieLength and maxOffset must be greater than 0, maxLateralJump not negative." };
 if (minPointsPerString < 2) return new { success = false, error = "minPointsPerString must be at least 2." };
+if (!double.IsFinite(midOrdinateDistance) || midOrdinateDistance <= 0 || !double.IsFinite(supplementingDistance) || supplementingDistance < 0
+    || !double.IsFinite(weedingDistance) || weedingDistance < 0 || !double.IsFinite(weedingAngle) || weedingAngle < 0)
+    return new { success = false, error = "midOrdinateDistance must be greater than 0; supplementingDistance, weedingDistance and weedingAngle not negative." };
 if (scanLimit < 1 || scanLimit > 500000 || maxStrings < 1 || maxStrings > 2000)
     return new { success = false, error = "scanLimit must be 1-500000 and maxStrings 1-2000." };
 polylineLayer = (polylineLayer ?? "").Trim();
@@ -309,7 +332,7 @@ if (surface != null)
 {
     surface.UpgradeOpen();
     var operationsBefore = surface.Operations.Count;
-    var operation = surface.BreaklinesDefinition.AddStandardBreaklines(created, 0.0, 0.0, 0.0, 0.0);
+    var operation = surface.BreaklinesDefinition.AddStandardBreaklines(created, midOrdinateDistance, supplementingDistance, weedingDistance, weedingAngle);
     operation.Description = breaklineDescription ?? "";
     if (surface.Operations.Count != operationsBefore + 1)
         throw new InvalidOperationException("The surface did not record exactly one new breakline operation.");
@@ -345,6 +368,7 @@ return new
 - Write recipe: run it first with `preview: true` and read `stringsDrawn`, `byCode` and the polylines (station range, mean offset, length); adjust the codes, `maxTieLength` and `maxLateralJump`; then run it for real with `requireClean`, `backup` and `saveDrawing`.
 - Points are grouped by the surveyor's code (`codeAttributeTag`, or a COGO point's raw description) or, without a tag, by layer. Inside a group, points are taken in station order along the alignment; a point continues the open string whose last point is closest in offset, when the plan distance is at most `maxTieLength` and the offset changes by at most `maxLateralJump`. So two kerbs with the same code on the two sides of the road become two strings, and a gap in the survey (a gate, a missing stretch) starts a new string instead of a long straight tie.
 - A point without a height is left out (`withoutHeight`); with `elevationAttributeTag` the height is the number in that attribute, for a survey drawn flat. Points on the same spot count once.
+- Civil 3D refuses a mid-ordinate distance of 0 (`ArgumentException: midOrdinateDistance`, seen live); the defaults keep every surveyed vertex and add none.
 - With `surfaceHandle` all new polylines go into the TIN surface as one standard breakline operation with `breaklineDescription`, kept apart from the surface's other breaklines, so it can be removed in one step. The surface is rebuilt by Civil 3D as usual; read it back with `surface_definition_summary` or `saved_drawing_readback`.
 - Nothing is changed in xrefs or in the survey points; only new 3D polylines (and the layer when missing) are added in this drawing. Which codes form a terrain break is the caller's engineering decision.
 - The defaults (30 for the longest tie, 0.8 for the largest sideways jump) come from field use on a street survey (Civil 3D 2025), where longer ties or bigger jumps joined points that did not belong together.
