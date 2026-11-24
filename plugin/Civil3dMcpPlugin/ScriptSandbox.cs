@@ -74,6 +74,21 @@ public static class ScriptSandbox
     [("System.AppDomain", "Load")] = LoadReason,
   };
 
+  private const string SectionSourcesReason =
+    "SampleLineGroup.GetSectionSources needs the group opened for write; in a read-only call it has " +
+    "closed Civil 3D 2025 with a fatal eNotOpenForWrite. Read the list in civil3d_execute with the group " +
+    "opened ForWrite; with preview: true nothing is kept";
+
+  /// <summary>
+  /// Members refused in civil3d_query only. They are safe in a write call,
+  /// where the script can open the object for write, but have crashed
+  /// Civil 3D when a read-only call reached them.
+  /// </summary>
+  private static readonly Dictionary<(string Type, string Member), string> QueryBlockedMembers = new()
+  {
+    [("Autodesk.Civil.DatabaseServices.SampleLineGroup", "GetSectionSources")] = SectionSourcesReason,
+  };
+
   /// <summary>
   /// The check that needs no compiler: there must be code at all.
   /// </summary>
@@ -102,8 +117,27 @@ public static class ScriptSandbox
     );
   }
 
+  /// <summary>
+  /// Refuses a compiled script for civil3d_query when it uses a member that
+  /// is only safe in a write call. Runs on every query, cached or not, since
+  /// the same script text may also be sent as a write; scripts that do not
+  /// even mention such a member skip the semantic walk.
+  /// </summary>
+  public static void ValidateForQuery(string code, Compilation compilation)
+  {
+    if (!QueryBlockedMembers.Keys.Any(key => code.Contains(key.Member, StringComparison.Ordinal))) return;
+    if (FindViolation(compilation, QueryReasonFor) is not { } violation) return;
+    throw new JsonRpcDispatchException(
+      "CIVIL3D.SANDBOX_VIOLATION",
+      $"Script blocked in civil3d_query: {violation.Reason}. '{violation.Name}' at script line {violation.Line}. Nothing was run."
+    );
+  }
+
   /// <summary>The first blocked name in the script, in reading order, or null.</summary>
   internal static Violation? FindViolation(Compilation compilation)
+    => FindViolation(compilation, ReasonFor);
+
+  private static Violation? FindViolation(Compilation compilation, Func<ISymbol, string?> reasonFor)
   {
     foreach (var tree in compilation.SyntaxTrees)
     {
@@ -120,7 +154,7 @@ public static class ScriptSandbox
           : info.CandidateSymbols.ToArray();
         foreach (var symbol in symbols)
         {
-          if (ReasonFor(symbol) is not { } reason) continue;
+          if (reasonFor(symbol) is not { } reason) continue;
           // Loop checkpoints never add a line break, so the line is the caller's own.
           var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
           return new Violation(reason, DisplayName(symbol), line);
@@ -162,6 +196,16 @@ public static class ScriptSandbox
           return namespaceReason;
         }
       }
+    }
+    return null;
+  }
+
+  private static string? QueryReasonFor(ISymbol symbol)
+  {
+    if (symbol is not (IMethodSymbol or IPropertySymbol) || symbol.ContainingType is null) return null;
+    for (var owner = symbol.ContainingType; owner is not null; owner = owner.BaseType)
+    {
+      if (QueryBlockedMembers.TryGetValue((FullName(owner), symbol.Name), out var reason)) return reason;
     }
     return null;
   }

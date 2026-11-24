@@ -22,7 +22,7 @@ const GUIDE_FILE_CANDIDATES = [
 /** Part sent as the server's MCP instructions and as the default guide reply. */
 const CORE_TOPIC = "core";
 /** Parts read on request with civil3d_skills action "guide" and a topic. */
-export const GUIDE_TOPICS = ["drawing", "writing", "errors", "csharp"] as const;
+export const GUIDE_TOPICS = ["drawing", "writing", "errors", "csharp", "civil"] as const;
 export type GuideTopic = (typeof GUIDE_TOPICS)[number];
 
 /** Always-delivered part; a client pays for it in every conversation. */

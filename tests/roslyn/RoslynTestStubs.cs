@@ -68,6 +68,13 @@ namespace Autodesk.Civil.DatabaseServices
 
   public class DBObject { }
   public class Entity : Autodesk.AutoCAD.DatabaseServices.Entity { }
+
+  // Stands in for the real group, whose section source list needs write access.
+  public class SampleLineGroup : Entity
+  {
+    public List<string> GetSectionSources() => new() { "EG", "Corridor" };
+  }
+
   public class Surface : Entity { }
   public class Section : Entity { }
   public class Table : Entity { }

@@ -43,9 +43,10 @@ attempts are allowed, how results are reported) are not part of it.
 Details: `civil3d_skills` with `action: "guide"` and a `topic`:
 
 - `drawing`: identifying the target drawing, and reading.
-- `writing`: read before the first write. Switches, several drawings, receipt, older plugin.
+- `writing`: read before the first write. Switches, receipt, several drawings.
 - `errors`: read after any error, timeout or crash.
 - `csharp`: read before sending new C#. Compile check and known API pitfalls.
+- `civil`: Civil 3D behaviour: modified flag, data shortcuts, sections, profiles.
 
 <!-- topic: drawing -->
 ## Target drawing and reading
@@ -212,9 +213,9 @@ server never repeats a call by itself.
   `CIVIL3D.CANCELLED` after sending are `unknown`: the operation may still be running or may have
   committed. The MCP client's own tool-call timeout gives no error object at all; treat it the
   same way.
-- `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` means Civil 3D did not start the command within 15 seconds.
-  Nothing ran. The message says why; ask the user to finish the open command or dialog, or to
-  click once into the Civil 3D window.
+- `CIVIL3D.COMMAND_CONTEXT_TIMEOUT`: Civil 3D did not start the command within 15 seconds and
+  nothing ran. It was busy: a command, a dialog, a data shortcut sync, or just after a save. Ask
+  the user to press Esc or click into the drawing, then send it again.
 
 ### Uncertain outcome
 
@@ -257,15 +258,15 @@ has reopened the drawing (or the recovered file), with a fresh `status`, path, f
 | `CIVIL3D.INSTANCE_SELECTION_REQUIRED` | `not_started` | Several instances and no `expectedDrawing`. Pass `expectedDrawing`, or `instanceId` for the bootstrap query. |
 | `CIVIL3D.DRAWING_GUARD_REQUIRED` | `not_started` | A write was sent without `expectedDrawing`. |
 | `CIVIL3D.DRAWING_MISMATCH` | `not_started` | Another drawing is active. Identify again; do not guess. |
-| `CIVIL3D.DRAWING_NOT_CLEAN` | `not_started` | Unsaved changes; a freshly opened drawing can count as modified too. Find out where they come from. Do not save them or drop the switch silently. |
+| `CIVIL3D.DRAWING_NOT_CLEAN` | `not_started` | Unsaved changes, or a modified flag Civil 3D raised by itself (topic `civil`). Do not save them or drop the switch silently. |
 | `CIVIL3D.DRAWING_READ_ONLY`, `CIVIL3D.SAVE_PATH_REQUIRED` | `not_started` | The file cannot be saved: open read-only, or never named. The user has to fix it. |
 | `CIVIL3D.BACKUP_FAILED` | `not_started` | The copy could not be made or verified. Fix the folder; do not write without the copy. |
 | `CIVIL3D.PLUGIN_UPDATE_REQUIRED` | `not_started` | Older plugin; see the `writing` topic. |
 | `CIVIL3D.COMPILATION_ERROR` | `reported_error` | The script did not start. Fix it from the diagnostics; see the `csharp` topic. |
 | `CIVIL3D.SANDBOX_VIOLATION` | `reported_error` | The script uses a refused type or member; the message names it and its line. Nothing ran. See the `csharp` topic. |
 | `CIVIL3D.TRANSACTION_FAILED` | `reported_error` | The script threw or the commit failed; the change was rolled back (`committed: false` in the receipt). |
-| `CIVIL3D.RESULT_SERIALIZATION_FAILED` | `reported_error` | The return value could not be turned into JSON. This happens before the commit (`committed: false`); return simpler values. |
-| `CIVIL3D.SAVE_FAILED` | `reported_error` | Committed in the open drawing, not saved. Do not repeat the change; resolve the save with the user. |
+| `CIVIL3D.RESULT_SERIALIZATION_FAILED` | `reported_error` | The return value could not be turned into JSON, before the commit (`committed: false`); return simpler values. |
+| `CIVIL3D.SAVE_FAILED` | `reported_error` | Committed in the open drawing, not saved. Do not repeat the change or close the drawing; resolve the save with the user. |
 
 For a fix, change one thing with a stated reason and a checkable result. Do not send the same
 failed idea again in another wrapping without new evidence.
@@ -294,6 +295,8 @@ are imported. Keep it synchronous: a script that uses `await` is rejected.
   files or folders, HTTP and sockets, loading assemblies, native calls, the registry, ending the
   process. The check reads what the compiler resolved, so a comment or a similar name is not
   refused. It is a guard rail against accidents, not a security boundary.
+- Refused in `civil3d_query` only: `SampleLineGroup.GetSectionSources()`, which needs write
+  access (topic `civil`).
 - Names that exist twice have a default: `DBObject`, `Entity` and `ErrorStatus` are the AutoCAD
   types, `Surface` and `Section` the Civil 3D ones, `Exception` is `System.Exception`. Write the
   full name for the other one, and for other duplicated names such as `Table`.
@@ -349,3 +352,71 @@ Reported from field use, not covered by this repository's tests; treat them as w
 - The COM and the .NET interfaces do not expose the same properties as writable; through COM, for
   example, a baseline region's start and end stations and computed point coordinates were
   read-only. Check with `api_lookup` that the setter exists before planning a write around it.
+
+<!-- topic: civil -->
+## Civil 3D behaviour that affects calls
+
+Seen in live Civil 3D 2025 work. A point not proven by this repository's own tests says so.
+
+### The modified flag
+
+- `DBMOD` shows that the open drawing differs from its file, not that the user has unsaved work.
+  Civil 3D raises it by itself: some time after a save while section views and other dynamic
+  objects regenerate (about 30 seconds was seen), when opening a drawing synchronises data
+  references, and after a layout switch, a plot or a screen capture.
+- Compare `dbmodBefore` and `dbmodAfter` in the receipt; do not infer user edits from a 1 alone.
+  When `requireClean` refuses a drawing the user says has no unsaved work, ask the user to save
+  it. Do not save it from a script, and do not drop the switch without telling the user.
+
+### Section sources
+
+- `SampleLineGroup.GetSectionSources()` needs the group opened for write. On a group opened for
+  read Civil 3D 2025 has closed with a fatal `eNotOpenForWrite`, repeatedly after a corridor was
+  added to or removed from the drawing. `civil3d_query` refuses a script that calls it. Read the
+  list in `civil3d_execute` with the group opened `ForWrite`; with `preview: true` nothing is
+  kept.
+
+### Data shortcuts
+
+- The .NET API creates and repairs references (`DataShortcuts.CreateReference`,
+  `RepairBrokenDRef`) but cannot synchronise an existing reference with its source. The user
+  synchronises in the user interface, or opening the drawing does it. Ask the user.
+- A reference that stayed out of date across synchronising and reopening was fixed in field use
+  only by deleting it and creating it again, in small steps with a save in between. The cause
+  is not known.
+- While another Civil 3D instance refreshes data shortcuts from a source drawing, that drawing
+  cannot be saved, not even by the user: the save ends with `eFileAccessErr`
+  (`CIVIL3D.SAVE_FAILED`) and the change is only in the open drawing. Do not close the drawing
+  and do not repeat the change; ask the user to save once the other instance is done.
+- After a published object is renamed, the shortcut file of the old name can stay in the
+  project's shortcuts folder and point to another object, and two files with the same key make
+  creating a reference fail. Check the folder before creating references in such a project.
+
+### Long operations
+
+- Deleting and recreating data references, rebuilding a large corridor and resampling every
+  sample line group take long. Several of them in one call froze Civil 3D twice in field use
+  (not reproduced); one per call with a save in between did not. Send them as separate calls,
+  set `timeoutSeconds` in advance and read the state back between them.
+
+### Section views and profiles
+
+- Section views created through the API (a view group or single views) did not show the code
+  set style labels of corridor points that a view made with the Civil 3D dialog, with the same
+  settings, did. Cause unverified; a likely lead is the corridor point labeling method of
+  section view creation, which the .NET API does not expose.
+  `SectionView.GetSectionCorridorPointLabelGroupIds()` shows which label groups a view has.
+  Check them after creating views and tell the user when they are missing.
+- The .NET API has no call that projects objects into section views; `SectionView` only lists
+  existing projection labels. The user runs the Civil 3D command for projecting objects to
+  multiple section views, or the script draws static objects.
+- A parabolic vertical curve set by its length keeps the length when a tangent moves, so its
+  radius changes. For a fixed radius use a K-value method of `ProfileEntityCollection`, such as
+  `AddFreeSymmetricParabolaByPVIAndK` (radius in metres = 100 x K with grades in percent).
+  Rounding K can make a short curve shorter than a required minimum; check the length.
+
+### Corridors
+
+- After a profile was swapped and the corridor rebuilt, target mappings have come back empty
+  (64 at once), and 3D polylines are not taken as targets by themselves. After such a change
+  run `corridor_target_audit` and compare the targets with the state before.

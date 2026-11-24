@@ -35,6 +35,8 @@ var tests = new (string Name, Func<Task> Run)[]
   ("the guard refuses blocked types and members by what the compiler resolved", SandboxRefusesBlockedSymbolsAsync),
   ("the guard lets look-alike names, comments and strings through", SandboxAllowsLookAlikesAsync),
   ("a refused script runs nothing and is not cached", SandboxRefusalRunsNothingAsync),
+  ("a query may not read section sources; a write may, cached or not", QueryRefusesSectionSourcesAsync),
+  ("the query-only guard lets look-alike names through", QueryGuardAllowsLookAlikesAsync),
   ("LINQ results serialize without ToList", LinqResultsAsync),
   ("dates and times serialize as ISO 8601 text", DateResultsAsync),
   ("tuples serialize as arrays", TupleResultsAsync),
@@ -555,6 +557,71 @@ static async Task SandboxRefusalRunsNothingAsync()
   {
     Assert(error.Code == "CIVIL3D.INVALID_INPUT", $"unexpected code: {error.Code}");
   }
+}
+
+static async Task<JsonRpcDispatchException> FailQueryAsync(string code, ScriptContext context)
+{
+  try
+  {
+    await RoslynExecutor.ExecuteAsync(code, context, null, readOnly: true);
+  }
+  catch (JsonRpcDispatchException error)
+  {
+    return error;
+  }
+  throw new InvalidOperationException($"the query was expected to be refused: {code}");
+}
+
+static async Task QueryRefusesSectionSourcesAsync()
+{
+  RoslynExecutor.ClearCache();
+  var context = Context();
+  const string code =
+    "Value = 99;\n" +
+    "var group = new SampleLineGroup();\n" +
+    "return group.GetSectionSources().Count;";
+
+  // Refused before anything runs, also when the text is not cached yet.
+  var error = await FailQueryAsync(code, context);
+  Assert(error.Code == "CIVIL3D.SANDBOX_VIOLATION", $"unexpected code: {error.Code}");
+  Assert(error.Message.StartsWith("Script blocked in civil3d_query: ", StringComparison.Ordinal)
+    && error.Message.Contains("'Autodesk.Civil.DatabaseServices.SampleLineGroup.GetSectionSources' at script line 3.", StringComparison.Ordinal)
+    && error.Message.Contains("civil3d_execute", StringComparison.Ordinal)
+    && error.Message.Contains("preview: true", StringComparison.Ordinal)
+    && error.Message.EndsWith("Nothing was run.", StringComparison.Ordinal),
+    $"unexpected message: {error.Message}");
+  Assert(context.Value == 41, "no statement of a refused query may run");
+
+  // The same text as a write runs, and is cached.
+  Assert(Equals(await RoslynExecutor.ExecuteAsync(code, context), 2), "a write may read section sources");
+  Assert(context.Value == 99, "the write ran");
+  Assert(RoslynExecutor.CachedScriptCount == 1, "the write was cached");
+
+  // A cached script is still checked when it comes back as a query.
+  context.Value = 41;
+  error = await FailQueryAsync(code, context);
+  Assert(error.Code == "CIVIL3D.SANDBOX_VIOLATION", $"cached query: unexpected code {error.Code}");
+  Assert(context.Value == 41, "a cached refused query runs nothing");
+
+  // A method group, without a call, is refused too.
+  error = await FailQueryAsync(
+    "Func<List<string>> read = new SampleLineGroup().GetSectionSources;\nreturn read().Count;", context);
+  Assert(error.Code == "CIVIL3D.SANDBOX_VIOLATION", $"method group: unexpected code {error.Code}");
+
+  // A compile error is still reported as a compile error.
+  error = await FailQueryAsync("return new SampleLineGroup().GetSectionSources().Count + missingName;", context);
+  Assert(error.Code == "CIVIL3D.COMPILATION_ERROR", $"compile error: unexpected code {error.Code}");
+}
+
+static async Task QueryGuardAllowsLookAlikesAsync()
+{
+  var result = await RoslynExecutor.ExecuteAsync(
+    "class Report { public int GetSectionSources() => 3; }\n" +
+    "// SampleLineGroup.GetSectionSources() is only mentioned here\n" +
+    "var note = \"group.GetSectionSources()\";\n" +
+    "return new Report().GetSectionSources() + (note.Length > 0 ? 0 : 1);",
+    Context(), null, readOnly: true);
+  Assert(Equals(result, 3), $"unexpected result: {result}");
 }
 
 static async Task<string> ResultJsonAsync(string code)

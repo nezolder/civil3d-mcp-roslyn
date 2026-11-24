@@ -506,7 +506,8 @@ export function registerSkillsTool(server: McpServer, options: SkillsToolOptions
         .optional()
         .describe(
           "For 'guide': drawing = identify the target drawing and read, writing = safety inputs, receipt and readback, " +
-            "errors = outcomes, time limits and uncertain results, csharp = script rules and API pitfalls. " +
+            "errors = outcomes, time limits and uncertain results, csharp = script rules and API pitfalls, " +
+            "civil = Civil 3D behaviour (modified flag, data shortcuts, sections, profiles, corridors). " +
             "Omit it for the short working order."
         ),
       category: z.string().optional().describe("Filter by category (surfaces, alignments, points, etc.)"),
