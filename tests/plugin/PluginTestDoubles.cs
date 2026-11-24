@@ -150,6 +150,9 @@ public static class RoslynExecutor
   /// <summary>Script limit the dispatcher passed on the most recent call.</summary>
   public static TimeSpan? LastTimeLimit { get; private set; }
 
+  /// <summary>Whether the most recent call came from civil3d_query.</summary>
+  public static bool? LastReadOnly { get; private set; }
+
   public static int ActiveCount => Volatile.Read(ref _activeCount);
   public static int CallCount => Volatile.Read(ref _callCount);
   public static int MaxActiveCount => Volatile.Read(ref _maxActiveCount);
@@ -160,9 +163,11 @@ public static class RoslynExecutor
     InternalBenchmarkMeasurement? benchmarkMeasurement,
     OperationProgress? progress = null,
     CancellationToken cancellationToken = default,
-    TimeSpan? timeLimit = null)
+    TimeSpan? timeLimit = null,
+    bool readOnly = false)
   {
     LastTimeLimit = timeLimit;
+    LastReadOnly = readOnly;
     progress?.SetStage(OperationStage.RunningScript);
     Interlocked.Increment(ref _callCount);
     var active = Interlocked.Increment(ref _activeCount);

@@ -2632,12 +2632,14 @@ internal static class PluginCoreTests
       "long"
     );
     Assert(RoslynExecutor.LastTimeLimit == TimeSpan.FromSeconds(900), "the limit must reach the executor");
+    Assert(RoslynExecutor.LastReadOnly == false, "a write reaches the executor as a write");
 
     AssertResult(
       await SendAsync(WithTimeLimit(CreateRequest("limit-query", readOnly: true, code: "query"), 1)),
       "query"
     );
     Assert(RoslynExecutor.LastTimeLimit == TimeSpan.FromSeconds(1), "queries accept the limit too");
+    Assert(RoslynExecutor.LastReadOnly == true, "a query reaches the executor as read-only, for the query-only guard");
 
     foreach (var invalid in new JsonNode?[] { 0, -5, 1801, 1.5, "600", true })
     {

@@ -110,6 +110,35 @@ function classifyPluginCode(code: string): {
   }
 }
 
+/**
+ * Advice added to a plugin message when it points to a known Civil 3D
+ * situation. Kept on the server, so it also reaches older plugins.
+ */
+export function pluginErrorHint(code: string, message: string): string | undefined {
+  if (code === "CIVIL3D.COMMAND_CONTEXT_TIMEOUT" && !message.includes("C3DMCPRESET")) {
+    return (
+      "Hint: Civil 3D was busy: a running command, an open dialog, a data shortcut sync, or the moment " +
+      "right after a save. Ask the user to press Esc or click into the drawing, then send the call again " +
+      "once; do not resend it in a loop."
+    );
+  }
+  if (code === "CIVIL3D.SAVE_FAILED" && /eFileAccessErr/i.test(message)) {
+    return (
+      "Hint: eFileAccessErr means another program holds the drawing file, for example another Civil 3D " +
+      "instance refreshing data shortcuts from this drawing. The change is only in the open drawing: do not " +
+      "close the drawing and do not repeat the change; ask the user to save once the other instance is done."
+    );
+  }
+  if (code === "CIVIL3D.TRANSACTION_FAILED" && /eNotOpenForWrite/i.test(message)) {
+    return (
+      "Hint: eNotOpenForWrite means the script changed an object, or called a method that needs write " +
+      "access, on an object opened for read. Open it with OpenMode.ForWrite in civil3d_execute; use " +
+      "preview: true to try it without keeping anything."
+    );
+  }
+  return undefined;
+}
+
 export function civil3dErrorFromPlugin(error: unknown): Civil3dMcpError {
   const candidate =
     typeof error === "object" && error !== null
@@ -119,10 +148,12 @@ export function civil3dErrorFromPlugin(error: unknown): Civil3dMcpError {
     typeof candidate?.code === "string" && CIVIL3D_ERROR_CODE.test(candidate.code)
       ? candidate.code
       : "CIVIL3D.PLUGIN_ERROR";
-  const message =
+  const pluginMessage =
     typeof candidate?.message === "string" && candidate.message.length > 0
       ? candidate.message
       : "Unknown error from Civil 3D plugin";
+  const hint = pluginErrorHint(code, pluginMessage);
+  const message = hint ? `${pluginMessage} ${hint}` : pluginMessage;
   const classification = classifyPluginCode(code);
 
   return new Civil3dMcpError(

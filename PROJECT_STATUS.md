@@ -8,6 +8,20 @@ This repository contains the accepted runtime, six focused engineering recipes w
 
 The catalogue contains **43 skills** with **44 C# templates**; **42** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
 
+## Field findings from a street renovation project (2026-11-24)
+
+Twelve findings from live Civil 3D 2025 work in another project were sorted into guide text, a guard and error hints. No recipe changed.
+
+- **Guide topic `civil`** (`civil3d_skills` `action: "guide"`, `topic: "civil"`): when Civil 3D raises the modified flag by itself, the section source list, data shortcuts (no synchronisation call in the .NET API, a file locked by another instance's refresh, stale and duplicate keys after a rename), long operations one per call, section view labels and projection, K-value vertical curves, corridor targets after a rebuild.
+- **Guard:** `civil3d_query` refuses a script that calls `SampleLineGroup.GetSectionSources()` (`CIVIL3D.SANDBOX_VIOLATION`, nothing runs); `civil3d_execute` and `preview: true` still run it. The check reads what the compiler resolved and runs on every query, also for a script already cached from a write. A catalog test makes sure that no read-only recipe calls it.
+- **Error hints**, added by the MCP server so they also reach older plugins: `CIVIL3D.COMMAND_CONTEXT_TIMEOUT` (Civil 3D busy; ask for Esc or a click, then send once more), `CIVIL3D.SAVE_FAILED` with `eFileAccessErr` (another instance holds the file; do not close the drawing or repeat the change), `CIVIL3D.TRANSACTION_FAILED` with `eNotOpenForWrite` (open the object for write).
+
+Evidence boundaries:
+
+- **Proven offline:** the guard with stub types (refused query, allowed write, cached script, method group, compile error first, look-alikes allowed); the hints in the Node error tests; the plugin compiles against the Civil 3D 2025 assemblies, and the member names quoted in the guide exist in them.
+- **Reported from the field, not reproduced here:** every behaviour in the `civil` topic. The guide marks the unverified causes (stale reference, missing code set labels, freezes from several heavy operations in one call).
+- **Not yet run in Civil 3D:** the guard inside the plugin.
+
 ## What a write changed, preview, and a token on the local connection (2026-11-24)
 
 Three additions around `civil3d_execute`, taken from a comparison with other Civil 3D MCP projects. Live-tested in two rounds on Civil 3D 2025 on disposable drawing copies; the record is `docs/validation/change-list-preview-token-7bc79cd-2026-11-24.md`.

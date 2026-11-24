@@ -42,7 +42,7 @@ How an assistant works with the server (status first, identifying the target dra
 The server hands the guide to the assistant itself, so nothing else has to be installed:
 
 - its first part is sent as the MCP server `instructions` when a client connects;
-- `civil3d_skills` with `action: "guide"` returns the same part, and with `topic` (`drawing`, `writing`, `errors`, `csharp`) the details;
+- `civil3d_skills` with `action: "guide"` returns the same part, and with `topic` (`drawing`, `writing`, `errors`, `csharp`, `civil`) the details;
 - the descriptions of `civil3d_query` and `civil3d_execute` name the first step and point to the guide, because not every client shows server instructions;
 - the `status` reply ends with a `guide` line that says the same.
 
@@ -421,7 +421,7 @@ Before a script runs, the plugin refuses it (`CIVIL3D.SANDBOX_VIOLATION`) when i
 - Native calls (`DllImport`, `Marshal`, `NativeLibrary`)
 - Ending the process (`Environment.Exit`, `Environment.FailFast`)
 
-All Civil 3D API operations are allowed.
+All Civil 3D API operations are allowed, with one exception in `civil3d_query` only: `SampleLineGroup.GetSectionSources()` needs the group opened for write and has closed Civil 3D 2025 in a read-only call, so a query that calls it is refused with the same code. The same script runs in `civil3d_execute`, where `preview: true` keeps nothing.
 
 The check reads what the compiler resolved, not the script text. A comment, a string or a name that only looks similar (`process.StartStation`, `styleRegistry.Add`) is therefore not refused, and a short name behind a `using` line (`File.Delete`) is. The error names the type or member and its script line.
 

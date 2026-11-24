@@ -171,6 +171,48 @@ test("command-context start timeout is not confused with an uncertain running sc
   assert.equal(readOnlyDrawing.outcome, "not_started");
 });
 
+test("known Civil 3D situations add a hint to the plugin message", () => {
+  const busy = civil3dErrorFromPlugin({
+    code: "CIVIL3D.COMMAND_CONTEXT_TIMEOUT",
+    message: "Civil 3D command context was not entered within 15 seconds; the script did not run.",
+  });
+  assert.match(busy.message, /^Civil 3D command context was not entered/);
+  assert.match(busy.message, /Hint: Civil 3D was busy/);
+  assert.match(busy.message, /Esc or click into the drawing/);
+  assert.equal(busy.outcome, "not_started");
+
+  const released = civil3dErrorFromPlugin({
+    code: "CIVIL3D.COMMAND_CONTEXT_TIMEOUT",
+    message: "The waiting request was released in Civil 3D with C3DMCPRESET before it started; the script did not run.",
+  });
+  assert.doesNotMatch(released.message, /Hint:/);
+
+  const locked = civil3dErrorFromPlugin({
+    code: "CIVIL3D.SAVE_FAILED",
+    message: "Drawing changes were committed in memory, but saving the active drawing failed: eFileAccessErr",
+  });
+  assert.match(locked.message, /Hint: eFileAccessErr means another program holds the drawing file/);
+  assert.match(locked.message, /do not\s+close the drawing/);
+  assert.equal(locked.outcome, "reported_error");
+
+  const otherSave = civil3dErrorFromPlugin({
+    code: "CIVIL3D.SAVE_FAILED",
+    message: "Drawing changes were committed in memory, but saving the active drawing failed: eDiskFull",
+  });
+  assert.doesNotMatch(otherSave.message, /Hint:/);
+
+  const readOpen = civil3dErrorFromPlugin({
+    code: "CIVIL3D.TRANSACTION_FAILED",
+    message: "Autodesk.AutoCAD.Runtime.Exception: eNotOpenForWrite at script line 4",
+  });
+  assert.match(readOpen.message, /Hint: eNotOpenForWrite/);
+  assert.match(readOpen.message, /OpenMode\.ForWrite/);
+
+  const structured = createStructuredToolErrorResult(locked);
+  assert.equal(structured.content[0].text, locked.message);
+  assert.equal(structured.structuredContent.error.message, locked.message);
+});
+
 test("a command can opt into a longer timeout for a synchronous drawing save", async () => {
   const connection = new ApplicationClientConnection("127.0.0.1", 65535);
   connection.isConnected = true;
