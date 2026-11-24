@@ -16,6 +16,10 @@ parameters:
     type: bool
     required: false
     description: Read each source drawing in a side database and check that the key's handle still points to an object of that name (default true)
+  - name: useAbsolutePaths
+    type: bool
+    required: false
+    description: When a key's relative path finds no file, use the absolute path stored in the key; false keeps every read inside the folder tree of the project, e.g. for a copied project (default true)
   - name: maxSourceDrawings
     type: int
     required: false
@@ -36,6 +40,7 @@ parameters:
 var shortcutsFolder = "";
 var checkSources = true;
 var maxSourceDrawings = 20;
+var useAbsolutePaths = true;
 var onlyProblems = true;
 var limit = 200;
 
@@ -104,8 +109,11 @@ else
 }
 var projectFolder = System.IO.Path.GetDirectoryName(folderPath.TrimEnd('\\', '/'));
 
-// Read every shortcut XML by element and attribute names, whatever the namespace.
-string[] wanted = { "Name", "Description", "SourceFileName", "SourceLocation", "HandleHigh", "HandleLow", "Handle" };
+// Read every shortcut XML. Civil 3D 2025 writes one <Shortcut> per file: its source as File@name (absolute)
+// and DwgRelPath@path (relative), the object as Object@name, @type, @handleLow, @handleHigh, @parentAlignmentShortcutName.
+// Elements and attributes are matched by local name, whatever the namespace or letter case.
+string Attr(System.Xml.XmlNode node, string name) => node?.Attributes?.Cast<System.Xml.XmlAttribute>()
+    .FirstOrDefault(a => string.Equals(a.LocalName, name, StringComparison.OrdinalIgnoreCase))?.Value?.Trim();
 Dictionary<string, string> ReadFields(string file, out string problem)
 {
     problem = null;
@@ -115,14 +123,21 @@ Dictionary<string, string> ReadFields(string file, out string problem)
         var xml = new System.Xml.XmlDocument();
         xml.XmlResolver = null;
         xml.Load(file);
-        foreach (System.Xml.XmlNode node in xml.SelectNodes("//*|//@*"))
-        {
-            var key = wanted.FirstOrDefault(w => string.Equals(w, node.LocalName, StringComparison.OrdinalIgnoreCase));
-            if (key == null || fields.ContainsKey(key)) continue;
-            var value = node is System.Xml.XmlAttribute attribute ? attribute.Value : node.InnerText;
-            if (node is System.Xml.XmlElement element && element.HasChildNodes && element.ChildNodes.OfType<System.Xml.XmlElement>().Any()) continue;
-            fields[key] = (value ?? "").Trim();
-        }
+        var elements = xml.SelectNodes("//*").Cast<System.Xml.XmlNode>().ToList();
+        System.Xml.XmlNode First(string localName) => elements.FirstOrDefault(e => string.Equals(e.LocalName, localName, StringComparison.OrdinalIgnoreCase));
+        void Put(string key, string value) { if (!string.IsNullOrEmpty(value)) fields[key] = value; }
+        var shortcut = First("Shortcut");
+        var obj = First("Object");
+        Put("shortcutName", Attr(shortcut, "name"));
+        Put("sourceFile", Attr(First("File"), "name"));
+        Put("relativePath", Attr(First("DwgRelPath"), "path"));
+        Put("objectName", Attr(obj, "name"));
+        Put("objectType", Attr(obj, "type"));
+        Put("handleLow", Attr(obj, "handleLow"));
+        Put("handleHigh", Attr(obj, "handleHigh"));
+        Put("parentAlignment", Attr(obj, "parentAlignmentShortcutName"));
+        var count = elements.Count(e => string.Equals(e.LocalName, "Shortcut", StringComparison.OrdinalIgnoreCase));
+        if (count != 1) fields["shortcutCount"] = count.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
     catch (System.Exception error) { problem = "UNREADABLE_XML: " + error.GetType().Name; }
     return fields;
@@ -130,41 +145,38 @@ Dictionary<string, string> ReadFields(string file, out string problem)
 
 long? HandleOf(Dictionary<string, string> f)
 {
+    // handleLow and handleHigh are decimal numbers in the files.
     var styles = System.Globalization.NumberStyles.Integer;
     var culture = System.Globalization.CultureInfo.InvariantCulture;
-    if (f.TryGetValue("HandleLow", out var lowText) && long.TryParse(lowText, styles, culture, out var low))
-    {
-        long high = 0;
-        if (f.TryGetValue("HandleHigh", out var highText)) long.TryParse(highText, styles, culture, out high);
-        return (high << 32) | (low & 0xFFFFFFFFL);
-    }
-    if (f.TryGetValue("Handle", out var handleText)
-        && long.TryParse(handleText, System.Globalization.NumberStyles.HexNumber, culture, out var hex)) return hex;
-    return null;
+    if (!f.TryGetValue("handleLow", out var lowText) || !long.TryParse(lowText, styles, culture, out var low)) return null;
+    long high = 0;
+    if (f.TryGetValue("handleHigh", out var highText)) long.TryParse(highText, styles, culture, out high);
+    return (high << 32) | (low & 0xFFFFFFFFL);
 }
 
-string ResolveSource(Dictionary<string, string> f, string xmlFolder, out string basis)
+// The relative path first (it follows a copied project), against the project folder and its parent;
+// then the absolute path stored in the key, unless useAbsolutePaths is false.
+string ResolveSource(Dictionary<string, string> f, out string basis)
 {
     basis = null;
-    f.TryGetValue("SourceFileName", out var fileName);
-    f.TryGetValue("SourceLocation", out var location);
-    if (string.IsNullOrWhiteSpace(fileName)) return null;
-    location = (location ?? "").Trim();
+    f.TryGetValue("relativePath", out var relative);
+    f.TryGetValue("sourceFile", out var absolute);
     var candidates = new List<(string basis, string path)>();
-    if (System.IO.Path.IsPathRooted(fileName)) candidates.Add(("absolute", fileName));
-    if (System.IO.Path.IsPathRooted(location)) candidates.Add(("absolute", System.IO.Path.Combine(location, fileName)));
-    else
+    if (!string.IsNullOrWhiteSpace(relative) && !System.IO.Path.IsPathRooted(relative))
     {
-        candidates.Add(("projectFolder", System.IO.Path.Combine(projectFolder, location, fileName)));
-        candidates.Add(("xmlFolder", System.IO.Path.Combine(xmlFolder, location, fileName)));
-        candidates.Add(("shortcutsFolder", System.IO.Path.Combine(folderPath, location, fileName)));
+        candidates.Add(("relativeToProjectFolder", System.IO.Path.Combine(projectFolder, relative)));
+        var parent = System.IO.Path.GetDirectoryName(projectFolder);
+        if (!string.IsNullOrEmpty(parent)) candidates.Add(("relativeToProjectParent", System.IO.Path.Combine(parent, relative)));
     }
+    if (useAbsolutePaths && !string.IsNullOrWhiteSpace(absolute) && System.IO.Path.IsPathRooted(absolute)) candidates.Add(("absolute", absolute));
+    if (candidates.Count == 0) return null;
     foreach (var c in candidates)
     {
         string full;
         try { full = System.IO.Path.GetFullPath(c.path); } catch (System.Exception) { continue; }
         if (System.IO.File.Exists(full)) { basis = c.basis; return full; }
     }
+    basis = "notFound";
     try { return System.IO.Path.GetFullPath(candidates[0].path); } catch (System.Exception) { return candidates[0].path; }
 }
 
@@ -179,15 +191,20 @@ foreach (var typeDir in System.IO.Directory.GetDirectories(folderPath).OrderBy(d
         var fields = ReadFields(file, out var problem);
         if (firstFields == null && problem == null) { firstFields = fields; firstFile = file; }
         var fileKey = System.IO.Path.GetFileNameWithoutExtension(file);
-        fields.TryGetValue("Name", out var keyName);
-        var source = problem == null ? ResolveSource(fields, System.IO.Path.GetDirectoryName(file), out var basis) : null;
+        fields.TryGetValue("objectName", out var keyName);
+        string basis = null;
+        var source = problem == null ? ResolveSource(fields, out basis) : null;
         var row = new Dictionary<string, object>
         {
             ["type"] = typeName,
             ["file"] = System.IO.Path.GetRelativePath(folderPath, file),
             ["name"] = string.IsNullOrEmpty(keyName) ? fileKey : keyName,
+            ["shortcutName"] = fields.TryGetValue("shortcutName", out var shortcutName) ? shortcutName : null,
+            ["objectType"] = fields.TryGetValue("objectType", out var objectType) ? objectType : null,
             ["sourceDrawing"] = source,
+            ["sourceBasis"] = basis,
             ["sourceExists"] = source != null && System.IO.File.Exists(source),
+            ["parentAlignment"] = fields.TryGetValue("parentAlignment", out var parentAlignment) ? parentAlignment : null,
             ["handle"] = HandleOf(fields)?.ToString("X"),
             ["findings"] = new List<string>()
         };
@@ -195,14 +212,27 @@ foreach (var typeDir in System.IO.Directory.GetDirectories(folderPath).OrderBy(d
         if (problem != null) findings.Add(problem);
         else
         {
+            if (fields.ContainsKey("shortcutCount")) findings.Add("SHORTCUT_COUNT_" + fields["shortcutCount"]);
             if (string.IsNullOrEmpty(keyName)) findings.Add("NO_NAME_FIELD");
-            else if (!string.Equals(keyName, fileKey, StringComparison.OrdinalIgnoreCase)) findings.Add("FILE_NAME_DIFFERS_FROM_KEY_NAME");
+            else if (!fileKey.StartsWith(keyName, StringComparison.OrdinalIgnoreCase)) findings.Add("FILE_NAME_DIFFERS_FROM_KEY_NAME");
             if (source == null) findings.Add("NO_SOURCE_FIELD");
             else if (!(bool)row["sourceExists"]) findings.Add("SOURCE_MISSING");
             if (row["handle"] == null) findings.Add("NO_HANDLE_FIELD");
         }
         keys.Add(row);
     }
+}
+
+// A profile key whose parent alignment key is not in the folder.
+var alignmentKeys = new HashSet<string>(keys.Where(k => string.Equals((string)k["type"], "Alignments", StringComparison.OrdinalIgnoreCase))
+    .SelectMany(k => new[] { (string)k["name"], (string)k["shortcutName"] }).Where(n => !string.IsNullOrEmpty(n)), StringComparer.OrdinalIgnoreCase);
+foreach (var k in keys)
+{
+    var parent = (string)k["parentAlignment"];
+    if (string.IsNullOrEmpty(parent) || alignmentKeys.Contains(parent)) continue;
+    var colon = parent.LastIndexOf(':');
+    if (colon > 1 && alignmentKeys.Contains(parent.Substring(colon + 1))) continue;
+    ((List<string>)k["findings"]).Add("PARENT_ALIGNMENT_KEY_MISSING");
 }
 
 // Collisions between keys of one type folder.
@@ -268,6 +298,7 @@ return new
     keysWithFindings = keys.Count(k => ((List<string>)k["findings"]).Count > 0),
     byType = keys.GroupBy(k => (string)k["type"]).ToDictionary(g => g.Key, g => g.Count()),
     findingCounts,
+    sourceBasis = keys.GroupBy(k => (string)k["sourceBasis"] ?? "none").ToDictionary(g => g.Key, g => g.Count()),
     sourcesChecked = checkSources,
     sourcesRead,
     sourcesSkipped,
@@ -283,7 +314,8 @@ return new
 
 - Read-only: the XML files are only read, and each source drawing is read once in a separate database with shared access, so a drawing open in another Civil 3D instance can still be checked. Nothing in the folder or in any drawing changes.
 - Findings per key: `DUPLICATE_KEY` (two files of one type folder with the same key name; creating a reference then fails), `SAME_OBJECT_HAS_SEVERAL_KEYS` (two keys point to the same object of the same source drawing, typically a key left behind after the object was renamed), `SOURCE_OBJECT_HAS_OTHER_NAME` (the object behind the handle now has another name), `HANDLE_NOT_FOUND_IN_SOURCE`, `SOURCE_MISSING`, `FILE_NAME_DIFFERS_FROM_KEY_NAME`, and `NO_..._FIELD` or `UNREADABLE_XML` when a file could not be read as expected.
-- The shortcut files are read by field name (`Name`, `SourceFileName`, `SourceLocation`, `HandleHigh`/`HandleLow`), whatever their XML namespace. `firstFileFields` shows what was read from the first file; when every key reports `NO_HANDLE_FIELD` or `NO_SOURCE_FIELD`, compare it with a file in the folder before trusting the result.
-- A relative source location is tried against the project folder, the XML file's folder and the `_Shortcuts` folder; the first existing file wins.
+- The files are read as Civil 3D 2025 writes them: `Shortcut@name`, `File@name` (absolute source path), `DwgRelPath@path` (relative source path) and `Object@name`, `@type`, `@handleLow`, `@handleHigh` (decimal), `@parentAlignmentShortcutName`. `firstFileFields` shows what was read from the first file; when every key reports `NO_HANDLE_FIELD` or `NO_SOURCE_FIELD`, compare it with a file in the folder before trusting the result.
+- The source is found by the relative path first, against the project folder (the one holding `_Shortcuts`) and its parent, then by the absolute path; `sourceBasis` says which one was used. For a copied project pass `useAbsolutePaths: false`, so that no drawing of the original project is read.
+- The file name of a key is the object name plus an identifier, so `FILE_NAME_DIFFERS_FROM_KEY_NAME` means the file name does not start with the object name. `PARENT_ALIGNMENT_KEY_MISSING` marks a profile key whose parent alignment key is not in the folder.
 - The recipe only reports. Removing or renaming a stale key is a decision for the user, done in the Civil 3D user interface or the file system after a backup; synchronising references is a user action too (usage guide topic `civil`).
 - Found in field use (Civil 3D 2025): after a published object was renamed, the old key stayed in the folder and pointed to another object, and duplicate keys made creating references fail.
