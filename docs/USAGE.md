@@ -76,6 +76,9 @@ Details: `civil3d_skills` with `action: "guide"` and a `topic`:
 - Identify again after the user switches windows or drawings, after a drawing is closed or
   reopened, and after Civil 3D restarts. Object references kept from before (an `ObjectId`, a
   cached object) are no longer valid then; look the objects up again.
+- Do not switch drawings for the user. A script must not open, close or activate a document
+  (`DocumentManager.Open`, `MdiActiveDocument`, closing or saving another drawing). When another
+  drawing is active, ask the user to bring the target drawing to the front, then identify again.
 
 ### Reading
 
@@ -237,6 +240,7 @@ server never repeats a call by itself.
 6. While the state is uncertain, do not reload the plugin, restart Civil 3D, or overwrite or
    restore files. Restore from the unchanged backup only when damage is proven or the user asks.
    Evidence from outside the MCP can help the comparison but does not close a pending operation.
+   A stuck call is no reason to `NETLOAD` another plugin or helper.
 
 ### After a crash of Civil 3D
 
@@ -308,7 +312,11 @@ are imported. Keep it synchronous: a script that uses `await` is rejected.
 - A development checkout of this repository can compile a code body without Civil 3D:
   `dotnet run --project tests/skills/Civil3dMcp.SkillTests.csproj --configuration Release -- --code <file.cs>`
   (exit code 0 compiled, 1 compile errors, 2 bad arguments or missing Autodesk references). It
-  needs the Autodesk reference assemblies and is not part of an installed server.
+  compiles the body as the plugin does (own `using` lines, declared classes, the default names)
+  and applies the `await` rule and the script guard. Success is exit code 0 together with the
+  line `... compilation passed: <file>`; without `--code` the command checks the catalog skills,
+  not your code. It needs the Autodesk reference assemblies and is not part of an installed
+  server.
 - A successful compile proves neither run-time behaviour nor geometry, and it is not a
   permission to write.
 
@@ -319,7 +327,8 @@ Checked against the Civil 3D 2025 assemblies:
 | Symptom | Cause | Do this |
 | --- | --- | --- |
 | `SurfaceStyle` is not found | The type is in `Autodesk.Civil.DatabaseServices.Styles`. | Add the `using` line or write the full name. |
-| `foreach` does not compile on a surface definition collection | `SurfaceDefinitionBreaklines` and `SurfaceDefinitionDrawingObjects` have no enumerator. | Loop with `.Count` and `[i]`. |
+| `foreach` or LINQ does not compile on a surface collection | `SurfaceDefinitionBreaklines`, `SurfaceDefinitionDrawingObjects` and `Surface.Operations` (`SurfaceOperationCollection`) have no enumerator. | Loop with `.Count` and `[i]`. |
+| `using var` at the top of a script does not compile | Top-level script code does not allow a `using` declaration. | Use `using (...) { }`, or put the declaration inside a block. |
 | The `FINGERPRINTGUID` system variable cannot be read | The fingerprint is a database property. | Use `Database.FingerprintGuid`. |
 | A returned Civil object is refused | `DBObject` instances are not returnable. | Return the fields you need. |
 
@@ -334,5 +343,9 @@ Reported from field use, not covered by this repository's tests; treat them as w
   transaction has failed with `eNoDatabase`. Use separate calls and read back in between.
 - `Assembly.AddSubassembly` does not re-attach an existing subassembly. After copying, check the
   new object, its attachment point and the rebuilt result separately.
-- The COM and the .NET interfaces do not expose the same properties as writable. Check with
-  `api_lookup` that the setter exists before planning a write around it.
+- Find a subassembly parameter by `KeyName`, not by `DisplayName`, which follows the language of
+  the installation. Check `ValueType` and that the parameter is an `AppliedSubassemblyParam<T>` of
+  that type before setting `Value`.
+- The COM and the .NET interfaces do not expose the same properties as writable; through COM, for
+  example, a baseline region's start and end stations and computed point coordinates were
+  read-only. Check with `api_lookup` that the setter exists before planning a write around it.

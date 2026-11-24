@@ -309,6 +309,8 @@ C3DMCPRESET  → release an operation that is stuck while Civil 3D is idle
 
 To try a server build without installing it, a client can start `<source folder>\build\index.js` directly; switch it back to the installed copy afterwards.
 
+Rules for development tests against a live Civil 3D are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Versions and installing a build
 
 Both halves say which source state they were built from. `npm run build` writes the commit and build time next to the compiled server, and the plugin build stamps them into the DLL. The server reports itself to MCP clients as `1.0.0+<short commit>`.
@@ -392,7 +394,7 @@ The skill test runner can check an individual UTF-8 `.cs` code body against loca
 dotnet run --project tests/skills/Civil3dMcp.SkillTests.csproj --configuration Release -- --code (Resolve-Path ./probe.cs).Path
 ```
 
-The file contains a method body that uses the provided `Document`, `CivilDoc`, `Database`, `Transaction` and `Editor` parameters. This checks compilation diagnostics only; it does not execute the code or connect to Civil 3D. Exit codes are `0` for success, `1` for compilation errors, and `2` for invalid arguments, a missing input file or missing Autodesk references. Calling the runner without arguments still checks every skill template and its input tests. A successful compile is not live behavior evidence.
+The file contains a script body as it would be sent to `civil3d_query` or `civil3d_execute`. It is compiled the way the plugin compiles it: as a script with the same imports, the default names for `Surface`, `Section`, `Entity` and the others, the globals `Document`, `CivilDoc`, `Database`, `Transaction` and `Editor`, and the picture helpers; the body may start with its own `using` lines and declare classes or records. The plugin's `await` rule and script guard are applied too. This checks diagnostics only; it does not execute the code or connect to Civil 3D. Success is exit code `0` together with the line `Civil 3D single C# code-body compilation passed: <file>`; `1` means compile errors, an `await` or a guard refusal, and `2` invalid arguments, a missing input file or missing Autodesk references. Calling the runner without arguments checks every skill template and its input tests instead, not your file. A successful compile is not live behavior evidence.
 
 ## Private TCP framing (phase 2C.1)
 

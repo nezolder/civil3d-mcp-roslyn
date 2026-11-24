@@ -56,62 +56,7 @@ var references = trustedPlatformAssemblies
 
 if (singleCodePath is not null)
 {
-  var code = File.ReadAllText(singleCodePath);
-  var source = $$"""
-    #nullable disable
-    using System;
-    using System.Linq;
-    using System.Collections.Generic;
-    using System.Text;
-    using Autodesk.AutoCAD.ApplicationServices;
-    using Autodesk.AutoCAD.DatabaseServices;
-    using Autodesk.AutoCAD.EditorInput;
-    using Autodesk.AutoCAD.Geometry;
-    using Autodesk.AutoCAD.Runtime;
-    using Autodesk.Civil;
-    using Autodesk.Civil.ApplicationServices;
-    using Autodesk.Civil.DatabaseServices;
-    using Autodesk.Civil.Settings;
-
-    public static class SingleCivilCodeProbe
-    {
-      // Stand-ins for the script helpers of the plugin (ScriptContext).
-      static object ImageFile(string path) => path;
-      static string NewImagePath(string extension = "png") => extension;
-
-      public static object Run(
-        Document Document,
-        CivilDocument CivilDoc,
-        Database Database,
-        Transaction Transaction,
-        Editor Editor)
-      {
-    {{code}}
-      }
-    }
-    """;
-
-  var singleCompilation = CSharpCompilation.Create(
-    "Civil3dSingleCodeProbe",
-    new[] { CSharpSyntaxTree.ParseText(
-      source,
-      new CSharpParseOptions(LanguageVersion.Latest),
-      singleCodePath
-    ) },
-    references,
-    new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
-  );
-  var singleErrors = singleCompilation.GetDiagnostics()
-    .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
-    .ToArray();
-  if (singleErrors.Length > 0)
-  {
-    Console.Error.WriteLine(string.Join(Environment.NewLine, singleErrors.Select(error => error.ToString())));
-    Environment.ExitCode = 1;
-    return;
-  }
-
-  Console.WriteLine($"Civil 3D single C# code-body compilation passed: {singleCodePath}");
+  Environment.ExitCode = SingleCodeCheck.Run(File.ReadAllText(singleCodePath), singleCodePath, references);
   return;
 }
 
@@ -235,6 +180,7 @@ try
     trustedPlatformAssemblies.Select(path => MetadataReference.CreateFromFile(path)));
   EngineeringSkillInputTests.Run(repositoryRoot,
     trustedPlatformAssemblies.Select(path => MetadataReference.CreateFromFile(path)));
+  SingleCodeCheck.SelfTest(references);
 }
 catch (Exception error)
 {
