@@ -179,6 +179,8 @@ Fields: `drawing` (`databaseFilename`, `fingerprintGuid`), `dbmodBefore`, `dbmod
 - The receipt and a clean state do not prove that the geometry is right. Read the result back
   with a targeted query: the requested objects, their values and extents. If that is not
   possible, report the check as missing.
+- To check the saved file itself rather than the open drawing, run the skill
+  `saved_drawing_readback` with the handles from the receipt.
 - Do not automatically repeat a readback method that hung before.
 
 ### Older plugin

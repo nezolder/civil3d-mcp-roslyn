@@ -202,9 +202,9 @@ test("category and search filters are applied before pagination", async () => {
       category: "surfaces",
       query: "elevation",
     });
-    assert.equal(intersection.total, 2);
+    assert.equal(intersection.total, 3);
     assert.deepEqual(intersection.results.map(result => result.name), [
-      "compare_surface_elevations", "surface_elevation",
+      "compare_surface_elevations", "delete_tin_surface_points", "surface_elevation",
     ]);
 
     const emptyIntersection = await callSkills(client, {
