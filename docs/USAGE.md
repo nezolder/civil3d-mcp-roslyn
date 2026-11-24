@@ -112,8 +112,8 @@ Details: `civil3d_skills` with `action: "guide"` and a `topic`:
 <!-- topic: writing -->
 ## Writing
 
-A write is one `civil3d_execute` call. The call does the checks around the write itself; do not
-replace them with separate calls.
+A write is one `civil3d_execute` call, which does its own checks; do not replace them with
+separate calls.
 
 | Input | Effect |
 | --- | --- |
@@ -124,7 +124,7 @@ replace them with separate calls.
 | `saveDrawing: true` | The call saves the named drawing after the transaction and the document lock are closed. A read-only or unnamed drawing is refused before anything runs. |
 | `preview: true` | The script runs with write access, then its transaction is abandoned: no commit, no save, no backup, and `idempotencyKey` is not used up. Leave the other inputs as the real call will have them; their checks still run. The receipt lists what the script would change. |
 | `changeItems` | How many objects the receipt lists by handle and name in each group, 0 to 100, default 10. |
-| `description` | One line about the change. Shown on the Civil 3D command line and kept in the write journal; it is how the call is found later. |
+| `description` | One line about the change. Shown on the Civil 3D command line and kept in the write journal, where the call is found later. |
 | `timeoutSeconds` | Script time limit for this call, 1 to 1800 seconds, default 120. Set it in advance for a known long operation. |
 | `idempotencyKey` | Optional. See the `errors` topic. |
 
@@ -136,13 +136,13 @@ Rules for the script:
   the call commits. Do not start parallel work and do not send two writes at once.
 - Check the postcondition inside the script and throw when it does not hold. The transaction is
   then rolled back, so a successful reply never hides a half-made change.
-- Split a risky change with several steps (clone, move to another layer, delete; remove and
-  recreate a data reference) into small separate calls and read the state back between them.
+- Split a risky change with several steps (clone, move to another layer, delete) into small
+  separate calls and read the state back between them.
 
 In a series of writes to one drawing, request the backup on the first call only: every
 `backup: true` makes another full copy. `requireClean` can stay on a later call only when the
 previous call also saved; after a write without a save the drawing is not clean. Civil 3D can
-also mark a saved drawing as modified by itself (topic `civil`).
+mark a saved drawing modified by itself (topic `civil`).
 
 ### Several drawings
 
@@ -179,6 +179,8 @@ Fields: `drawing` (`databaseFilename`, `fingerprintGuid`), `dbmodBefore`, `dbmod
 - The receipt and a clean state do not prove that the geometry is right. Read the result back
   with a targeted query: the requested objects, their values and extents. If that is not
   possible, report the check as missing.
+- To check the saved file itself rather than the open drawing, run the skill
+  `saved_drawing_readback` with the handles from the receipt.
 - Do not automatically repeat a readback method that hung before.
 
 ### Older plugin
@@ -187,8 +189,8 @@ Fields: `drawing` (`databaseFilename`, `fingerprintGuid`), `dbmodBefore`, `dbmod
 the call; the message names it. Do not silently drop the input. Tell the user. Until the plugin
 is updated, replace `requireClean` and `backup` by hand: a read-only query of
 `Application.GetSystemVariable("DBMOD")` before the write, an unchanged file copy checked by size
-before the first write, and another `DBMOD` check after the save. Do not start writing when the
-file is locked or the copy cannot be verified. Nothing replaces `preview`: never send the write
+before the first write, and another `DBMOD` check after the save. Do not write when the file
+is locked or the copy is unverified. Nothing replaces `preview`: never send the write
 itself as a trial.
 
 <!-- topic: errors -->
@@ -364,7 +366,8 @@ Seen in live Civil 3D 2025 work. A point not proven by this repository's own tes
 - `DBMOD` shows that the open drawing differs from its file, not that the user has unsaved work.
   Civil 3D raises it by itself: some time after a save while section views and other dynamic
   objects regenerate (about 30 seconds was seen), when opening a drawing synchronises data
-  references, and after a layout switch, a plot or a screen capture.
+  references, and after a layout switch, a plot or a screen capture. Right after a save it can
+  still update dependents (profile views, corridors); a second save then clears it.
 - Compare `dbmodBefore` and `dbmodAfter` in the receipt; do not infer user edits from a 1 alone.
   When `requireClean` refuses a drawing the user says has no unsaved work, ask the user to save
   it. Do not save it from a script, and do not drop the switch without telling the user.

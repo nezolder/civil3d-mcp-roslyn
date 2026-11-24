@@ -181,6 +181,7 @@ try
   EngineeringSkillInputTests.Run(repositoryRoot,
     trustedPlatformAssemblies.Select(path => MetadataReference.CreateFromFile(path)));
   SingleCodeCheck.SelfTest(references);
+  SingleCodeCheck.CheckLiveSmokeScripts(repositoryRoot, references);
 }
 catch (Exception error)
 {

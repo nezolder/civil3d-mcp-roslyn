@@ -51,3 +51,5 @@ jobs:
         run: node --test "tests/skills/*.test.mjs"
       - name: MCP smoke test
         run: npm run test:mcp
+      - name: Live smoke runner (offline part)
+        run: npm run test:smoke
