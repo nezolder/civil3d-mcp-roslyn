@@ -29,7 +29,7 @@ A local test surface `MCP_TIN_TESZT` was made with the catalogue recipe `create_
 | After the saved surface creation, handles of both surfaces and one unknown handle | `found` for both, `found: false` for the unknown one; `handlesDiffering` empty, `sameModelSpaceCounts` true, `fingerprintMatches` true, `dbmodOpen` 0; Civil list: 2 surfaces, 1 alignment, 0 corridors. |
 | After the unsaved corner delete (surface fields added) | `handlesDiffering` = the test surface: file 23 points / 2 operations, open drawing 22 / 3; `dbmodOpen` 1. |
 | After saving that change | `handlesDiffering` empty; file and open drawing both 22 points / 3 operations; the 133,504-point data reference surface read from the side database as well. |
-| `filePath` = the time-stamped backup made before the first write (early-return-free subset) | `isActiveFile` false; the test surface not found in the backup, so it is flagged. |
+| `filePath` = the time-stamped backup made before the first write (a trimmed body: the same side-database read, identity and surface fields only) | `isActiveFile` false; the test surface not found in the backup, so it is flagged. |
 
 Every query left `DBMOD` at 0 on a clean drawing, and each save after a readback succeeded, so the side database did not keep the file locked.
 
