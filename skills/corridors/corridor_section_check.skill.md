@@ -156,6 +156,8 @@ string SubassemblyName(ObjectId id)
 
 var codesSeen = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 var checkedStations = 0;
+var notCorridorStations = new List<object>();
+var notCorridorStationCount = 0;
 var stationsWithoutAssembly = 0;
 var truncated = false;
 var baselineRows = new List<object>();
@@ -178,6 +180,14 @@ foreach (Baseline baseline in corridor.Baselines)
         checkedHere++;
         AppliedAssembly applied;
         try { applied = baseline.GetAppliedAssemblyAtStation(station); }
+        catch (System.ArgumentException)
+        {
+            // "Station not processed": not a station of the built corridor, so no section was built there.
+            applied = null;
+            if (notCorridorStations.Count < limit) notCorridorStations.Add(new { baseline = baseline.Name, station = Math.Round(station, 4) });
+            notCorridorStationCount++;
+            continue;
+        }
         catch (System.Exception) { applied = null; }
         if (applied == null) { stationsWithoutAssembly++; continue; }
 
@@ -271,6 +281,9 @@ return new
     baselines = baselineRows,
     stationsChecked = checkedStations,
     stationsWithoutAssembly,
+    // Sample line stations where the corridor has no station: nothing was checked there.
+    notCorridorStationCount,
+    notCorridorStations,
     stationLimitReached = truncated,
     findingCounts,
     // Codes given in a parameter that no checked link carries: such a check found nothing because it had nothing to look at.
@@ -287,6 +300,7 @@ return new
 - Read-only: it reads the corridor as it was last built and changes nothing. With `corridorOutOfDate` true the result describes the old build; ask the user to rebuild first.
 - Stations: by default the corridor's own stations of each matching baseline; with `sampleLineGroupHandle` exactly the sample line stations, on baselines that follow the group's alignment, which is what the section sheets will show. Offset baselines are not checked.
 - Checks, each switched on by its input: `uniqueLinkCodes` (links with a code, such as a curb's, that form two or more separate runs on the same side; links sharing an end point are one run: `REPEATED_CODE_ON_ONE_SIDE`), `overlapLinkCodes` (links with the code covering the same offsets, also inside one subassembly; `sameSubassembly` in the detail tells which: `OVERLAPPING_LINKS`), `requiredShapeCodes` (`MISSING_SHAPE_CODE` at a station without such a shape), `minLinkLength` with `shortLinkCodes` (`SHORT_LINK`; a short link often gives an unreadable label).
+- A sample line station that is not a station of the built corridor has no section to check (Civil 3D answers "Station not processed"); it is counted in `notCorridorStationCount` and listed in `notCorridorStations`, not checked. Seen live: 23 of 30 junction sample lines. `add_sample_line_stations_to_corridor` adds such stations; rebuild the corridor and check again.
 - Side is by offset sign: negative is left. A link is placed by the middle of its offset range; length is measured along its points in the section plane (offset and elevation).
 - Codes and lengths are the caller's: the recipe holds no office or standard values, and the default `Top` is only the stock subassemblies' code. `linkCodesSeen` lists the codes of the checked links with counts and `codesNotSeen` the given codes that no link carries; a check whose code is not seen found nothing because it had nothing to look at, so run once, read `linkCodesSeen` and run again with the drawing's own codes. Which findings matter is an engineering decision; the result lists where to look.
 - One assembly built from a single Subassembly Composer subassembly with all links (seen live: 8 to 42 links per station) is checked the same way as one built from several stock subassemblies.
