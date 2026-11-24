@@ -39,6 +39,9 @@ internal sealed class DrawingChangeTracker : IDisposable
   /// <summary>Fills the list of the next tracked write; null means nothing changed.</summary>
   public static Action<ChangeList>? Changes { get; set; }
   public static bool FailToStart { get; set; }
+  /// <summary>What the check after a failed script finds; null means the check itself failed.</summary>
+  public static int? LeftAfterFailure { get; set; } = 0;
+  public static int FailedCount { get; private set; }
   public static int StartCount { get; private set; }
   public static int DisposeCount { get; private set; }
   public static int? LastItemLimit { get; private set; }
@@ -84,10 +87,19 @@ internal sealed class DrawingChangeTracker : IDisposable
     return list;
   }
 
+  internal ChangeList FinishFailed()
+  {
+    FailedCount++;
+    ActiveTransactionsAtFinish = _database.TransactionManager.ActiveCount;
+    return ChangeList.AfterFailure(LeftAfterFailure);
+  }
+
   public void Dispose() => DisposeCount++;
 
   public static void Reset()
   {
+    LeftAfterFailure = 0;
+    FailedCount = 0;
     Changes = null;
     FailToStart = false;
     StartCount = 0;
@@ -97,6 +109,30 @@ internal sealed class DrawingChangeTracker : IDisposable
     LastCommitted = null;
     ActiveTransactionsAtCapture = null;
     ActiveTransactionsAtFinish = null;
+  }
+}
+
+/// <summary>
+/// Stand-in for the plugin's DrawingModifiedFlag: takes the test drawing's
+/// DBMOD back to zero and counts the calls.
+/// </summary>
+internal static class DrawingModifiedFlag
+{
+  public static int ClearCount { get; private set; }
+  public static bool Fail { get; set; }
+
+  internal static bool TryClear(Autodesk.AutoCAD.DatabaseServices.Database database)
+  {
+    ClearCount++;
+    if (Fail) return false;
+    Autodesk.AutoCAD.ApplicationServices.Application.DbMod = 0;
+    return true;
+  }
+
+  public static void Reset()
+  {
+    ClearCount = 0;
+    Fail = false;
   }
 }
 

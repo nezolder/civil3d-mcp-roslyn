@@ -162,14 +162,14 @@ Fields: `drawing` (`databaseFilename`, `fingerprintGuid`), `dbmodBefore`, `dbmod
 - `changes` is what the write did to the drawing, read back after the commit and not taken from
   the script: `added`, `modified` and `erased`, each with `count`, `byType` and the first `items`
   (`type`, `handle`, `name`, `layer`; `more` counts the rest). `containers` counts tables,
-  dictionaries and layout blocks apart. `complete: false` comes with a `note` on what can be
-  missing. An unexpected type or count is a reason to stop, also after a script that reported
-  success.
+  dictionaries, layout blocks and draw order lists apart. `complete: false` comes with a `note`
+  on what can be missing. An unexpected type or count is a reason to stop, also after a script
+  that reported success. After a failed script `changes` has no list, only `rolledBack`.
 - A preview has `preview: true`, `committed: false` and `rolledBack` in `changes`. On
   `rolledBack: false` objects stayed behind: stop and tell the user. Handles of new objects in a
   preview result do not exist afterwards. A preview shows what the script does, not what Civil 3D
-  updates by itself once a change is kept, and it can leave the drawing marked as modified
-  (`dbmodAfter`).
+  updates by itself once a change is kept. A clean drawing stays clean after it (`dbmodAfter: 0`),
+  so the real call can keep `requireClean` and `backup`.
 - In Civil 3D each write, and each preview, is one Undo step; a query adds none.
 - The receipt and a clean state do not prove that the geometry is right. Read the result back
   with a targeted query: the requested objects, their values and extents. If that is not

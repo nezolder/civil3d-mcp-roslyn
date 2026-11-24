@@ -13,6 +13,7 @@ internal static class ChangeListTests
       ("change list says when it is not complete, and why", GapsAreNamed),
       ("change list of a preview reports whether everything was taken back", PreviewRollback),
       ("an unavailable change list says so without numbers", Unavailable),
+      ("after a failed script the list only says whether anything was left behind", AfterFailure),
     };
 
     foreach (var (name, run) in tests)
@@ -122,6 +123,31 @@ internal static class ChangeListTests
       && json["reason"]!.GetValue<string>() == "InvalidOperationException: eWasOpenForWrite"
       && json.Count == 2,
       "an unavailable list carries its reason and nothing that looks like a result");
+  }
+
+  private static void AfterFailure()
+  {
+    var clean = ChangeList.AfterFailure(0);
+    var cleanJson = clean.ToJson();
+    Assert(!clean.IsAvailable && clean.NothingLeft && cleanJson["available"]!.GetValue<bool>() == false
+      && cleanJson["rolledBack"]!.GetValue<bool>() && cleanJson.Count == 3,
+      "a failed script that left nothing says so and gives no counts");
+
+    var dirty = ChangeList.AfterFailure(4);
+    var dirtyJson = dirty.ToJson();
+    Assert(!dirty.NothingLeft && dirtyJson["rolledBack"]!.GetValue<bool>() == false
+      && dirtyJson["leftBehind"]!.GetValue<int>() == 4,
+      "objects a failed script left behind are counted");
+
+    var unknown = ChangeList.AfterFailure(null);
+    Assert(!unknown.NothingLeft && !unknown.ToJson().ContainsKey("rolledBack"),
+      "without the check nothing is claimed either way");
+
+    Assert(new ChangeList(3) { Preview = true, LeftAfterPreview = 0 }.NothingLeft
+      && !new ChangeList(3) { Preview = true, LeftAfterPreview = 1 }.NothingLeft
+      && !new ChangeList(3) { Preview = true }.NothingLeft
+      && !new ChangeList(3).NothingLeft && !ChangeList.Unavailable("x").NothingLeft,
+      "only a preview or a failure whose check found nothing counts as nothing left");
   }
 
   private static void Assert(bool condition, string message)

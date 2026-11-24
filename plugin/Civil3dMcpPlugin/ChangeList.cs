@@ -42,6 +42,17 @@ internal sealed class ChangeList
   internal static ChangeList Unavailable(string reason)
     => new(0) { UnavailableReason = ExecutionRecord.ToSingleLine(reason, 200) ?? "unknown reason" };
 
+  /// <summary>
+  /// The script or its commit failed, so nothing was read. What can still be
+  /// said is whether anything the script added is left in the drawing.
+  /// </summary>
+  internal static ChangeList AfterFailure(int? left)
+    => new(0)
+    {
+      UnavailableReason = "the script failed, so its changes were not read",
+      LeftAfterFailure = left,
+    };
+
   internal string? UnavailableReason { get; private init; }
   internal bool IsAvailable => UnavailableReason == null;
 
@@ -54,6 +65,18 @@ internal sealed class ChangeList
   /// Null when the check has not run.
   /// </summary>
   internal int? LeftAfterPreview { get; set; }
+
+  /// <summary>
+  /// After a failed script: objects it added that still exist. Null when the
+  /// check did not run or does not apply.
+  /// </summary>
+  internal int? LeftAfterFailure { get; private init; }
+
+  /// <summary>
+  /// True when nothing was kept and the check after the abandoned transaction
+  /// found nothing left: the drawing is as it was before the request.
+  /// </summary>
+  internal bool NothingLeft => (Preview ? LeftAfterPreview : LeftAfterFailure) == 0;
 
   /// <summary>More new handles were given out than the scan looks at.</summary>
   internal bool AddedScanTruncated { get; set; }
@@ -102,11 +125,17 @@ internal sealed class ChangeList
   {
     if (!IsAvailable)
     {
-      return new JsonObject
+      var unavailable = new JsonObject
       {
         ["available"] = false,
         ["reason"] = UnavailableReason,
       };
+      if (LeftAfterFailure is int leftBehind)
+      {
+        unavailable["rolledBack"] = leftBehind == 0;
+        if (leftBehind != 0) unavailable["leftBehind"] = leftBehind;
+      }
+      return unavailable;
     }
 
     var json = new JsonObject

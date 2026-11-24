@@ -117,6 +117,7 @@ public static class CivilExecution
               var changeTracker = writeRecord == null
                 ? null
                 : DrawingChangeTracker.Start(database, writeRecord.ChangeItemLimit);
+              var commitStarted = false;
               try
               {
                 T actionResult;
@@ -136,6 +137,7 @@ public static class CivilExecution
                       progress?.RecordCommit(null);
                       try
                       {
+                        commitStarted = true;
                         transaction.Commit();
                         operationCommitted = true;
                         progress?.RecordCommit(true);
@@ -158,8 +160,23 @@ public static class CivilExecution
                 if (changeTracker != null)
                 {
                   writeRecord!.Changes = changeTracker.Finish(operationCommitted, preview);
+                  RestoreCleanMark(writeRecord, database, operationCommitted);
                 }
                 return actionResult;
+              }
+              catch (Exception) when (changeTracker != null && !operationCommitted)
+              {
+                // The script or the commit failed and the transaction is gone.
+                // Say whether anything was left behind; the failure itself is
+                // reported by the caller of this method.
+                if (writeRecord!.Changes == null)
+                {
+                  writeRecord.Changes = changeTracker.FinishFailed();
+                  // After a commit that broke off half way nobody can say
+                  // what the drawing holds, so the mark stays.
+                  if (!commitStarted) RestoreCleanMark(writeRecord, database, operationCommitted);
+                }
+                throw;
               }
               finally
               {
@@ -313,6 +330,19 @@ public static class CivilExecution
   }
 
   /// <summary>DBMOD is 0 when the drawing has no unsaved changes. Null when it cannot be read.</summary>
+  /// <summary>
+  /// A preview or a failed write keeps nothing, yet AutoCAD marks the drawing
+  /// as modified. When the drawing was clean before and the check found
+  /// nothing left behind, the mark is taken off again, so that the real write
+  /// can still ask for a clean drawing or a backup.
+  /// </summary>
+  private static void RestoreCleanMark(ExecutionRecord record, Database database, bool committed)
+  {
+    if (committed || record.DbmodBefore != 0 || record.Changes is not { NothingLeft: true }) return;
+    if (TryReadDbmod() is not int now || now == 0) return;
+    DrawingModifiedFlag.TryClear(database);
+  }
+
   private static int? TryReadDbmod()
   {
     try

@@ -2149,23 +2149,72 @@ internal static class PluginCoreTests
     AssertResult(await SendAsync(CreateRequest("changes-plain-query", readOnly: true, code: "query")), "query");
     Assert(DrawingChangeTracker.StartCount == 0, "a query is not tracked");
 
-    // A failed script has no change list: nothing was committed.
+    // A failed script has no change list: nothing was committed. The receipt
+    // still says whether anything was left behind, checked after the
+    // transaction was gone. AutoCAD marks the drawing as modified although
+    // nothing was kept; on a drawing that was clean the mark is taken off.
     ResetEnvironment(actualPath: drawingPath);
-    RoslynExecutor.Handler = (_, _) => throw new InvalidOperationException("script failed");
+    RoslynExecutor.Handler = (_, _) =>
+    {
+      Application.DbMod = 1;
+      throw new InvalidOperationException("script failed");
+    };
     var failed = JsonNode.Parse(await SendAsync(Write("changes-failed", "changes-failed")))!.AsObject();
+    var failedChanges = failed["receipt"]?["changes"]?.AsObject();
     Assert(failed["error"] != null && failed["receipt"]?["committed"]?.GetValue<bool>() == false
-      && !failed["receipt"]!.AsObject().ContainsKey("changes"),
-      "a rolled back write reports no changes");
+      && failedChanges != null && failedChanges["available"]!.GetValue<bool>() == false
+      && failedChanges["rolledBack"]!.GetValue<bool>() && failedChanges.Count == 3,
+      "a rolled back write reports no changes, only that nothing was left behind");
+    Assert(DrawingChangeTracker.FailedCount == 1 && DrawingChangeTracker.ActiveTransactionsAtFinish == 0,
+      "what a failed script left behind is checked after its transaction is gone");
     Assert(DrawingChangeTracker.DisposeCount == 1, "the tracker is released after a failure as well");
+    Assert(DrawingModifiedFlag.ClearCount == 1 && failed["receipt"]?["dbmodBefore"]?.GetValue<int>() == 0
+      && failed["receipt"]?["dbmodAfter"]?.GetValue<int>() == 0,
+      "a failed write that kept nothing leaves a clean drawing clean");
 
-    // A failed commit is the same.
+    // Something stayed behind: it is reported and the drawing stays marked.
     ResetEnvironment(actualPath: drawingPath);
-    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    DrawingChangeTracker.LeftAfterFailure = 2;
+    RoslynExecutor.Handler = (_, _) =>
+    {
+      Application.DbMod = 1;
+      throw new InvalidOperationException("script failed");
+    };
+    var leftBehind = JsonNode.Parse(await SendAsync(Write("changes-left", "changes-left")))!["receipt"]!.AsObject();
+    Assert(leftBehind["changes"]!["rolledBack"]!.GetValue<bool>() == false
+      && leftBehind["changes"]!["leftBehind"]!.GetValue<int>() == 2
+      && DrawingModifiedFlag.ClearCount == 0 && leftBehind["dbmodAfter"]?.GetValue<int>() == 1,
+      "objects a failed script left behind are reported and the drawing stays marked as modified");
+
+    // A failed commit is reported the same way, but the drawing stays marked
+    // as modified: a commit that broke off half way is not trusted.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
     CurrentDatabase.TransactionManager.CommitException = new InvalidOperationException("commit failed");
     var commitFailed = JsonNode.Parse(await SendAsync(Write("changes-commit-failed", "x")))!.AsObject();
-    Assert(commitFailed["error"] != null && !commitFailed["receipt"]!.AsObject().ContainsKey("changes")
+    Assert(commitFailed["error"] != null
+      && commitFailed["receipt"]!["changes"]!["available"]!.GetValue<bool>() == false
+      && commitFailed["receipt"]!["changes"]!["rolledBack"]!.GetValue<bool>()
       && DrawingChangeTracker.DisposeCount == 1,
       "a failed commit reports no changes and releases the tracker");
+    Assert(DrawingModifiedFlag.ClearCount == 0 && commitFailed["receipt"]!["dbmodAfter"]?.GetValue<int>() == 1,
+      "after a failed commit the drawing stays marked as modified");
+
+    // A committed write is never marked clean again.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
+    var kept = JsonNode.Parse(await SendAsync(Write("changes-kept", "kept")))!["receipt"]!.AsObject();
+    Assert(kept["committed"]?.GetValue<bool>() == true && DrawingModifiedFlag.ClearCount == 0
+      && kept["dbmodAfter"]?.GetValue<int>() == 1,
+      "a committed write leaves the drawing marked as modified");
 
     // The list is an extra: when it cannot be made, the write still succeeds.
     ResetEnvironment(actualPath: drawingPath);
@@ -2190,8 +2239,14 @@ internal static class PluginCoreTests
     File.WriteAllText(drawingPath, "saved drawing content");
 
     // The full call a real write would use, with preview switched on.
+    // AutoCAD marks the drawing as modified as soon as the script touches it,
+    // also when the transaction is abandoned afterwards.
     ResetEnvironment(actualPath: drawingPath);
-    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
     DrawingChangeTracker.Changes = list =>
     {
       list.Add(ChangeKind.Added, new ChangedObject("Corridor", "5001", "Korridor-1"));
@@ -2232,6 +2287,9 @@ internal static class PluginCoreTests
     Assert(DrawingChangeTracker.LastPreview == true && DrawingChangeTracker.LastCommitted == false
       && DrawingChangeTracker.ActiveTransactionsAtCapture == 1 && DrawingChangeTracker.ActiveTransactionsAtFinish == 0,
       "the preview is described inside the transaction and checked after it was abandoned");
+    Assert(DrawingModifiedFlag.ClearCount == 1 && receipt["dbmodBefore"]?.GetValue<int>() == 0
+      && receipt["dbmodAfter"]?.GetValue<int>() == 0 && Application.DbMod == 0,
+      "a preview that kept nothing leaves a clean drawing clean, so the real write can ask for a clean drawing");
     var message = CurrentDocument.Editor.Messages.Single(text => text.Contains("[Civil 3D MCP]", StringComparison.Ordinal));
     Assert(message.Trim() == "[Civil 3D MCP] (preview, nothing is kept) Korridor létrehozása",
       $"the person at the computer is told that it is a preview, got: {message}");
@@ -2295,15 +2353,63 @@ internal static class PluginCoreTests
       "CIVIL3D.INVALID_INPUT");
     AssertNoCivilResourcesOpened();
 
+    // The mark is only taken off when the drawing was clean before and the
+    // check found nothing left. A drawing with unsaved changes stays marked.
+    ResetEnvironment(actualPath: drawingPath);
+    Application.DbMod = 4;
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 5;
+      return Task.FromResult<object?>(code);
+    };
+    var onDirty = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "preview-on-dirty", "preview-on-dirty", drawingPath, p => p["preview"] = true)))!["receipt"]!.AsObject();
+    Assert(DrawingModifiedFlag.ClearCount == 0 && onDirty["dbmodBefore"]?.GetValue<int>() == 4
+      && onDirty["dbmodAfter"]?.GetValue<int>() == 5,
+      "a preview on a drawing with unsaved changes never marks it clean");
+    // Something stayed behind: the drawing did change.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
+    DrawingChangeTracker.Changes = list => list.LeftAfterPreview = 1;
+    var leftover = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "preview-leftover", "preview-leftover", drawingPath, p => p["preview"] = true)))!["receipt"]!.AsObject();
+    Assert(leftover["changes"]!["rolledBack"]!.GetValue<bool>() == false && DrawingModifiedFlag.ClearCount == 0
+      && leftover["dbmodAfter"]?.GetValue<int>() == 1,
+      "a preview that left something behind keeps the drawing marked as modified");
+    // The mark cannot be taken off: the preview is still a preview.
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.Handler = (code, _) =>
+    {
+      Application.DbMod = 1;
+      return Task.FromResult<object?>(code);
+    };
+    DrawingModifiedFlag.Fail = true;
+    var stillMarked = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
+      "preview-still-marked", "preview-still-marked", drawingPath, p => p["preview"] = true)))!.AsObject();
+    Assert(stillMarked["result"]?.GetValue<string>() == "preview-still-marked"
+      && stillMarked["receipt"]!["changes"]!["rolledBack"]!.GetValue<bool>()
+      && stillMarked["receipt"]!["dbmodAfter"]?.GetValue<int>() == 1,
+      "when the mark cannot be taken off the preview still succeeds and the receipt shows the mark");
+
     // A script that fails in a preview is an ordinary failure with nothing kept.
     ResetEnvironment(actualPath: drawingPath);
-    RoslynExecutor.Handler = (_, _) => throw new InvalidOperationException("script failed");
+    RoslynExecutor.Handler = (_, _) =>
+    {
+      Application.DbMod = 1;
+      throw new InvalidOperationException("script failed");
+    };
     var failed = JsonNode.Parse(await SendAsync(CreateSafetyWriteRequest(
       "preview-failed", "preview-failed", drawingPath, p => p["preview"] = true)))!.AsObject();
     Assert(failed["error"] != null && failed["receipt"]?["preview"]?.GetValue<bool>() == true
       && failed["receipt"]?["committed"]?.GetValue<bool>() == false
-      && !failed["receipt"]!.AsObject().ContainsKey("changes"),
-      "a failed preview reports the failure and no changes");
+      && failed["receipt"]!["changes"]!["available"]!.GetValue<bool>() == false
+      && failed["receipt"]!["changes"]!["rolledBack"]!.GetValue<bool>()
+      && failed["receipt"]!["dbmodAfter"]?.GetValue<int>() == 0,
+      "a failed preview reports the failure, that nothing was left behind, and leaves a clean drawing clean");
     Assert(CurrentDatabase.TransactionManager.CommittedCount == 0 && CurrentDatabase.TransactionManager.ActiveCount == 0,
       "a failed preview leaves no transaction open");
     ResetEnvironment();
@@ -3322,6 +3428,7 @@ internal static class PluginCoreTests
     CivilApplication.ActiveDocument = new CivilDocument();
     RoslynExecutor.Reset();
     DrawingChangeTracker.Reset();
+    DrawingModifiedFlag.Reset();
   }
 
   private static JsonObject Guard(string databaseFilename, Guid fingerprintGuid)

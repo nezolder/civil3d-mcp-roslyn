@@ -184,10 +184,11 @@ Every write that reached the drawing returns a **receipt** next to its result. T
 - **`added`** is every object that exists after the write and did not before. The plugin notes the drawing's next free handle before the script runs and looks at every handle given out since. This also finds objects Civil 3D creates by itself, for example the parts of a new surface.
 - **`modified`** and **`erased`** come from two sources: the objects the script opened for write in its transaction whose modified or erased flag is set, and the drawing's own notifications, which arrive when an object is closed. For a committed write the second source also shows what Civil 3D updated by itself during the commit, such as dependent objects.
 - Each group has `count`, `byType` (the .NET type name a script would use, most frequent first) and the first `items` with `type`, `handle`, `name` and `layer`; `more` counts the ones not listed.
-- **`containers`** counts symbol tables, dictionaries and layout blocks apart. They change whenever something is put into them and would otherwise hide the objects the write was about.
+- **`containers`** counts symbol tables, dictionaries, layout blocks and draw order lists apart. They change whenever something is put into them and would otherwise hide the objects the write was about.
 - For a committed write the list is made after the commit, by reading the drawing again in a separate short transaction, so it shows what is in the drawing and not what the script intended.
 - **`complete`** is false, with a `note`, when the list can miss something: a preview (see below), more than 2,000,000 new handles, more than 200,000 touched objects, or the notifications switched off with `CIVIL3D_MCP_CHANGE_EVENTS=0`.
 - When the list cannot be made, `changes` is `{"available": false, "reason": "…"}`. The write itself is never failed or changed by the list.
+- After a script or a commit that failed there is no list either, but the plugin checks that nothing the script added is left in the drawing: `{"available": false, "reason": "…", "rolledBack": true}`; with `rolledBack: false`, `leftBehind` counts what stayed.
 
 The list tells which objects were touched, not whether their geometry is right; reading the result back with a query stays necessary.
 
@@ -200,7 +201,7 @@ A preview has limits that follow from how it works:
 - It shows what the script itself does. What Civil 3D would update when the change is kept (dependent objects, rebuilds on commit) is not in the list, so `complete` is always false.
 - Handles of new objects in the script's result do not exist afterwards, and handle numbers are used up: the real call gives other handles.
 - Only the drawing is taken back. A file the script wrote, a system variable it set or a command it queued stays.
-- Civil 3D can mark the drawing as modified although nothing was kept (`dbmodAfter`); `requireClean` then refuses the next call until the drawing is saved.
+- AutoCAD marks the drawing as modified (`DBMOD`) as soon as a script touches it, also when nothing is kept. When the drawing was clean before the preview and the check found nothing left behind, the plugin takes the mark off again, so the real call can still ask for `requireClean` or `backup`; `dbmodAfter` shows the outcome. The same is done after a script that failed before its commit. A drawing that already had unsaved changes, a preview with `rolledBack: false` and a failed commit keep the mark.
 - It is one Undo step in Civil 3D, like a write, and runs under the same command.
 
 The plugin also appends one line per write request to a local **journal**, `%LOCALAPPDATA%\Civil3dMcpRoslyn\journal\<year>-<month>.jsonl` (override with `CIVIL3D_MCP_JOURNAL_DIR` in the Civil 3D process): time, Civil 3D session, drawing, description, SHA-256 and size of the code, success or error code, preview, committed, saved, backup path, `DBMOD` before and after, the number of objects added, modified and erased, duration and plugin commit. It never contains the code, the result or an object name. A journal that cannot be written does not change the outcome of the write.

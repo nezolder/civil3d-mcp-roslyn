@@ -159,6 +159,25 @@ internal sealed class DrawingChangeTracker : IDisposable
     }
   }
 
+  /// <summary>
+  /// Call when the script or the commit failed and the transaction is gone.
+  /// There is no list then, but the receipt can still say whether anything the
+  /// script added is left in the drawing.
+  /// </summary>
+  internal ChangeList FinishFailed()
+  {
+    Unsubscribe();
+    try
+    {
+      var scanEnd = Math.Min(_database.Handseed.Value, _firstNewHandle + MaxHandleScan);
+      return ChangeList.AfterFailure(CountLiveNewHandles(scanEnd) + CountStillErased());
+    }
+    catch (System.Exception)
+    {
+      return ChangeList.AfterFailure(null);
+    }
+  }
+
   public void Dispose() => Unsubscribe();
 
   private void Subscribe()
@@ -289,6 +308,7 @@ internal sealed class DrawingChangeTracker : IDisposable
 
     if (IsKindOf(objectClass, SymbolTableClass)
       || IsKindOf(objectClass, DictionaryClass)
+      || IsKindOf(objectClass, DrawOrderTableClass)
       || (checkLayout && opened is BlockTableRecord { IsLayout: true }))
     {
       list.AddContainer(type);
@@ -379,13 +399,21 @@ internal sealed class DrawingChangeTracker : IDisposable
   /// After a preview nothing the script added may exist and nothing it erased
   /// may still be erased. Returns how many objects break that rule.
   /// </summary>
-  private int CountLeftAfterPreview()
+  private int CountLeftAfterPreview() => CountLiveNewHandles(_previewScanEnd) + CountStillErased();
+
+  private int CountLiveNewHandles(long scanEnd)
   {
     var left = 0;
-    for (var value = _firstNewHandle; value < _previewScanEnd; value++)
+    for (var value = _firstNewHandle; value < scanEnd; value++)
     {
       if (TryGetLiveId(value, out _)) left++;
     }
+    return left;
+  }
+
+  private int CountStillErased()
+  {
+    var left = 0;
     foreach (var id in _erasedInTransaction)
     {
       try
@@ -415,9 +443,13 @@ internal sealed class DrawingChangeTracker : IDisposable
   private static RXClass? SymbolTableClass => _symbolTableClass ??= TryGetClass(typeof(SymbolTable));
   private static RXClass? DictionaryClass => _dictionaryClass ??= TryGetClass(typeof(DBDictionary));
   private static RXClass? BlockTableRecordClass => _blockTableRecordClass ??= TryGetClass(typeof(BlockTableRecord));
+  // The draw order list of a block changes with almost every entity put into
+  // or taken out of it (seen live), so it is bookkeeping like the block itself.
+  private static RXClass? DrawOrderTableClass => _drawOrderTableClass ??= TryGetClass(typeof(DrawOrderTable));
   private static RXClass? _symbolTableClass;
   private static RXClass? _dictionaryClass;
   private static RXClass? _blockTableRecordClass;
+  private static RXClass? _drawOrderTableClass;
 
   private static RXClass? TryGetClass(Type type)
   {
