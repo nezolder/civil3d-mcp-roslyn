@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["tervezett hossz-szelvény létrehozása jóváhagyott PVIkből", "create design profile from ordered PVIs and curve lengths", "hossz-szelvény készítése megadott töréspontokból", "lekerekítés K-értékkel kerek sugárral", "vertical curve by K value fixed radius"]
 workflow_tags: ["modeling"]
 tested_civil_version: "2025"
-validation_summary: "Offline + live: three PVIs and one symmetric parabola, save and independent reopen. Broader curves and engineering compliance unverified."
+validation_summary: "Offline + live: three PVIs and one symmetric parabola, save and reopen; curveMode k live: K 150 gave radius 15000 and the expected length 144.027 m. Engineering compliance unverified. Report: docs/validation/street-recipes-d6eb7e8-2026-11-24.md."
 parameters:
   - name: alignmentHandle
     type: string

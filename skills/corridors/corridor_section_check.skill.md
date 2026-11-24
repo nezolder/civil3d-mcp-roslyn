@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["korridor keresztszelvények ellenőrzése dupla szegély átfedő link hiányzó réteg", "corridor section check duplicate codes overlapping links missing shapes", "nyomterv szelvényellenőrző rövid linkek", "corridor cross section quality check by station"]
 workflow_tags: ["audit"]
 tested_civil_version: "2025"
-validation_summary: "Offline: compiles against the Civil 3D 2025 assemblies. Not yet run in Civil 3D."
+validation_summary: "Live (Civil 3D 2025, copy of a real project): 30 sample line stations checked, snapped to corridor stations; no finding fired on that data, so the finding kinds are proven offline only. Report: docs/validation/street-recipes-d6eb7e8-2026-11-24.md."
 parameters:
   - name: corridorHandle
     type: string

@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["terep töréspontvonalak felmért hosszirányú pontsorokból", "survey point strings to 3D polylines and surface breaklines", "geodéziai pontok összekötése 3D vonallá pontkód szerint", "breaklines from surveyed longitudinal point strings"]
 workflow_tags: ["modeling", "source_state"]
 tested_civil_version: "2025"
-validation_summary: "Offline: compiles against the Civil 3D 2025 assemblies. Not yet run in Civil 3D."
+validation_summary: "Live (Civil 3D 2025, copy of a real project): 196 strings from 2,683 survey blocks in an xref, drawn and added to a TIN surface as one operation, read back. Weeding angle unit unverified. Report: docs/validation/street-recipes-d6eb7e8-2026-11-24.md."
 parameters:
   - name: alignmentHandle
     type: string
@@ -368,6 +368,7 @@ return new
 - Write recipe: run it first with `preview: true` and read `stringsDrawn`, `byCode` and the polylines (station range, mean offset, length); adjust the codes, `maxTieLength` and `maxLateralJump`; then run it for real with `requireClean`, `backup` and `saveDrawing`.
 - Points are grouped by the surveyor's code (`codeAttributeTag`, or a COGO point's raw description) or, without a tag, by layer. Inside a group, points are taken in station order along the alignment; a point continues the open string whose last point is closest in offset, when the plan distance is at most `maxTieLength` and the offset changes by at most `maxLateralJump`. So two kerbs with the same code on the two sides of the road become two strings, and a gap in the survey (a gate, a missing stretch) starts a new string instead of a long straight tie.
 - A point without a height is left out (`withoutHeight`); with `elevationAttributeTag` the height is the number in that attribute, for a survey drawn flat. Points on the same spot count once.
+- Run a preview first and read the per-code counts: on a real survey most codes (fences, trees, symbols) give short strings that are dropped, and the useful ones (curb top and bottom, pavement edge) are best named in `codeFilter`. `maxLateralJump` 0.8 still lets a string step 0.5 to 0.7 m sideways and back at a driveway; check such places against the survey.
 - Civil 3D refuses a mid-ordinate distance of 0 (`ArgumentException: midOrdinateDistance`, seen live); the defaults keep every surveyed vertex and add none.
 - With `surfaceHandle` all new polylines go into the TIN surface as one standard breakline operation with `breaklineDescription`, kept apart from the surface's other breaklines, so it can be removed in one step. The surface is rebuilt by Civil 3D as usual; read it back with `surface_definition_summary` or `saved_drawing_readback`.
 - Nothing is changed in xrefs or in the survey points; only new 3D polylines (and the layer when missing) are added in this drawing. Which codes form a terrain break is the caller's engineering decision.

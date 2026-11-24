@@ -6,7 +6,7 @@ requires_write: true
 aliases: ["mintavonal-szelvények hozzáadása a korridor alapvonalaihoz", "add sample line stations to corridor baselines", "korridor kiegészítő szelvények a mintavonalak metszésénél", "corridor frequency stations at sample lines"]
 workflow_tags: ["modeling"]
 tested_civil_version: "2025"
-validation_summary: "Offline: compiles against the Civil 3D 2025 assemblies. Not yet run in Civil 3D."
+validation_summary: "Live (Civil 3D 2025, copy of a real project): 2 stations added from a sample line group in another drawing, rebuilt, read back as built sections; a second run planned 0. Offset baselines untested. Report: docs/validation/street-recipes-d6eb7e8-2026-11-24.md."
 parameters:
   - name: corridorHandle
     type: string

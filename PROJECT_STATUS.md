@@ -10,7 +10,7 @@ The catalogue contains **47 skills** with **48 C# templates**; **46** of the ski
 
 ## Recipes from the street renovation findings (2026-11-24)
 
-Four new recipes and one new option, for the steps that the field project had done with ad hoc scripts. All compile against the Civil 3D 2025 assemblies; none has run in Civil 3D yet.
+Four new recipes and one new option, for the steps that the field project had done with ad hoc scripts. All five were run live on copies of that project in Civil 3D 2025 and fixed on the way (report: `docs/validation/street-recipes-d6eb7e8-2026-11-24.md`).
 
 - `data_shortcut_folder_audit` (read-only): duplicate keys, two keys on one object, keys whose source object has another name or is gone, missing sources; source drawings are read in side databases.
 - `corridor_section_check` (read-only): built corridor sections at the corridor's or a sample line group's stations; repeated codes on one side, overlapping links, missing shape codes, short links. Codes and lengths are inputs.
@@ -20,8 +20,9 @@ Four new recipes and one new option, for the steps that the field project had do
 
 Evidence boundaries:
 
-- **Proven offline:** each template compiles as a script against the Civil 3D 2025 assemblies; the catalogue tests bind them by name.
-- **Unverified in Civil 3D:** everything else, including the shortcut XML field names, how `AddStation` shows in `SortedStations` before a rebuild, the K-value unit and the breakline operation count.
+- **Proven live (copies of one real project):** the shortcut audit found two duplicate keys; the section check read 30 sample line stations snapped to corridor stations; two stations were added, built and read back; a K 150 curve got the length K × |Δg| × 100; 196 survey strings became one breakline operation on a TIN surface.
+- **Not seen firing on real data:** the section check's finding kinds (that project had none). **Unverified:** offset baselines, the weeding-angle unit.
+- **Found on the way:** a script using the short type name `Subassembly` fails (CS0118) once a corridor drawing is open; recipes write it in full, and the guide and an error hint say so. A preview that created 3D polylines got a wrong `leftAfterPreview` in its receipt (plugin; not fixed here).
 
 ## Field findings from a street renovation project (2026-11-24)
 

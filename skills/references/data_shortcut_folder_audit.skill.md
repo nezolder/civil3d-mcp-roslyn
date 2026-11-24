@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["adatparancsikon mappa ellenőrzése régi és ütköző kulcsokra", "data shortcut folder audit stale and duplicate keys", "adatkapcsolat kulcsok ellenőrzése átnevezés után", "shortcuts folder key collision check"]
 workflow_tags: ["audit", "source_state"]
 tested_civil_version: "2025"
-validation_summary: "Offline: compiles against the Civil 3D 2025 assemblies. Not yet run in Civil 3D; the shortcut XML fields are read by name and the first file's fields are reported for review."
+validation_summary: "Live (Civil 3D 2025, copy of a real project): 487 keys of a _Shortcuts folder read, sources checked in side databases; found two duplicate keys and 8 renamed keys. Report: docs/validation/street-recipes-d6eb7e8-2026-11-24.md."
 parameters:
   - name: shortcutsFolder
     type: string
