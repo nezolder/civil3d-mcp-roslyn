@@ -78,6 +78,22 @@ At the end of round 2 the user looked at both windows: the file tab of B (previe
 
 The write journal had one line per write request of round 2 (13), each with the plugin commit, the process, `preview`, `committed`, DBMOD before and after and the counts; none for the read-only calls and none for the input the server refused.
 
+## Saved run after the merge (`23b0fe2`)
+
+The same afternoon, with the merged build installed on the work PC (server and plugin `23b0fe2`), one run on a fresh disposable copy covered the full working order with a save. A second instance was running on the same PC; it received only the health part of one `status` call, and the test client was pinned to the test instance's port.
+
+| Step | Expected | Observed | Result |
+|---|---|---|---|
+| Start | DBMOD 0 | DBMOD 0, 9 model space entities, file equal to the source by hash | Pass |
+| Preview with `requireClean`, `backup`, `backupDirectory`, `saveDrawing` | Nothing committed or saved, no backup, DBMOD 0 | `committed` false, `saved` false, `rolledBack` true, `dbmodAfter` 0; no backup file; file hash unchanged | Pass |
+| The same call without `preview`: 2 lines and a circle | Committed, saved, backup of the pre-write file | `saved` true, `dbmodAfter` 0, added 3 (`Line` 2, `Circle` 1), `complete` true; the backup's hash equals the file before the call; the file on disk changed | Pass |
+| Readback | The three handles on layer 0 | Present, DBMOD 0 | Pass |
+| A second write with `requireClean`: 1 line | Accepted after the save | Accepted, `saved` true, `dbmodAfter` 0; the second backup equals the file after the first write | Pass |
+| The user closes the test instance | No save question | None (observed by the user); file hash unchanged by closing | Pass |
+| Reopen the copy | Both writes in the file, nothing of the preview | The 3 lines and the circle on layer 0, DBMOD 0; none of the preview's handles exist | Pass |
+
+AutoCAD wrote a `.bak` next to the drawing on save. The save creates an Xrecord in memory that is not in the file after reopening; it is not in the change list because the save runs after the transaction. The draw order table appeared under `containers` for the first write and not for the second.
+
 ## Observations
 
 - A preview, and a failed script, leave the new objects as erased stubs: their handles resolve, `IsErased` is true. Model space iteration skips them.
