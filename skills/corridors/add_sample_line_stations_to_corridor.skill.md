@@ -31,7 +31,7 @@ parameters:
   - name: stationTolerance
     type: double
     required: false
-    description: A station closer than this to an existing corridor station of the region is not added, in drawing units (default 0.02; Civil 3D itself ignores an added station about 1.5 cm or closer to an existing one)
+    description: A station closer than this to an existing corridor station of the region is not added, in drawing units (default 0.02; sample line and corridor stations often differ by a fraction of a millimetre)
   - name: rebuild
     type: bool
     required: false
@@ -182,7 +182,7 @@ foreach (Baseline baseline in corridor.Baselines)
                     var name = region.OffsetBaselines[o].Name;
                     if (!offsetBaselines.Contains(baseline.Name + " / " + name)) offsetBaselines.Add(baseline.Name + " / " + name);
                 }
-                if (region.SortedStations().Any(s => Math.Abs(s - station) < stationTolerance)
+                if (region.SortedStations().Concat(region.AdditionalStations()).Any(s => Math.Abs(s - station) < stationTolerance)
                     || plan.Any(p => p.baseline == baseline.Name && p.regionIndex == r && Math.Abs(p.station - station) < stationTolerance))
                 { existing++; continue; }
                 plan.Add((baseline.Name, r, region.Name, station, (descriptionPrefix + line.name).Trim(), line.name));
@@ -196,7 +196,6 @@ foreach (Baseline baseline in corridor.Baselines)
 if (plan.Count > maxStations)
     return new { success = false, error = $"{plan.Count} stations would be added, more than maxStations {maxStations}.", baselines = report };
 
-var keptExisting = new List<object>();
 var missing = new List<(string baseline, int regionIndex, string region, double station, string description, string line)>();
 if (plan.Count > 0)
 {
@@ -209,19 +208,12 @@ if (plan.Count > 0)
         throw new InvalidOperationException($"Baseline {baselineName} is no longer in the corridor.");
     }
     foreach (var item in plan) RegionOf(item.baseline, item.regionIndex).AddStation(item.station, item.description);
-    // Postcondition: every planned station is now a station of its region. Civil 3D silently keeps an
-    // existing station a few millimetres away instead of adding one (seen live up to 15 mm); that is reported, not an error.
+    // Postcondition: every planned station is now an additional station of its region. SortedStations lists
+    // the built stations and changes only when the corridor is rebuilt; AdditionalStations changes at once.
     foreach (var item in plan)
-    {
-        var stations = RegionOf(item.baseline, item.regionIndex).SortedStations();
-        var nearest = stations.Length == 0 ? double.NaN : stations.OrderBy(s => Math.Abs(s - item.station)).First();
-        var distance = double.IsNaN(nearest) ? double.PositiveInfinity : Math.Abs(nearest - item.station);
-        if (distance < 1e-6) continue;
-        if (distance <= 0.05) { keptExisting.Add(new { baseline = item.baseline, region = item.region, station = Math.Round(item.station, 4), existing = Math.Round(nearest, 4), sampleLine = item.line }); continue; }
-        missing.Add(item);
-    }
+        if (!RegionOf(item.baseline, item.regionIndex).AdditionalStations().Any(s => Math.Abs(s - item.station) < 1e-6)) missing.Add(item);
     if (missing.Count > 0)
-        throw new InvalidOperationException($"{missing.Count} added stations are not listed by their region afterwards (first: {missing[0].baseline} at {missing[0].station:0.###}).");
+        throw new InvalidOperationException($"{missing.Count} added stations are not among the additional stations of their region afterwards (first: {missing[0].baseline} at {missing[0].station:0.###}).");
     if (rebuild) writable.Rebuild();
 }
 
@@ -232,9 +224,7 @@ return new
     sampleLineGroup = groupName,
     sampleLineDrawing = sideDrawing ?? "this drawing",
     sampleLines = lines.Count,
-    stationsAdded = plan.Count - keptExisting.Count,
-    // Planned stations where Civil 3D kept an existing station within 5 cm instead.
-    keptExisting,
+    stationsAdded = plan.Count,
     rebuilt = rebuild && plan.Count > 0,
     baselines = report,
     planned = plan.Take(200).Select(p => new { baseline = p.baseline, region = p.region, station = Math.Round(p.station, 4), sampleLine = p.line }).ToList(),
@@ -249,6 +239,6 @@ return new
 - For every main baseline the station is where the sample line's plan polyline crosses the baseline's alignment, so side streets and other baselines get their own station, not the sample line's station number. A crossing is added to every region of that baseline that contains it, unless the region already has a station within `stationTolerance`.
 - Offset baselines are listed in `offsetBaselinesNotChanged`: the .NET API has no call that adds a station to an offset baseline. Their sections follow the main baseline's stations in their region; check them in Civil 3D.
 - The corridor is not rebuilt unless `rebuild` is true. For a large corridor rebuild in a separate call (or from the user interface), as the usage guide's topic `civil` advises for long operations. After rebuilding, `corridor_section_check` with the same `sampleLineGroupHandle` checks the sections at these stations.
-- Civil 3D does not add a station within about 1.5 cm of an existing one and gives no error (seen live: 10 of 10 stations 2 to 15 mm from existing ones were left out). Such crossings are counted as already present with the default `stationTolerance` 0.02, and any left out after adding are listed in `keptExisting`.
+- A crossing within `stationTolerance` of a built station (`SortedStations`) or of an additional station of the region counts as already present. Added stations appear in the region's `AdditionalStations` at once, but in `SortedStations` (and as sections) only after the corridor is rebuilt; the recipe checks the former. Seen live: sample line stations 0.1 to 15 mm from corridor stations that had been added earlier with rounded values.
 - Feature line based baselines and data reference corridors are skipped or refused. The recipe changes nothing when every crossing is already present.
 - In field use (Civil 3D 2025) sections between corridor stations did not match the sample lines until these stations were added to all affected baselines by hand or by ad hoc scripts.
