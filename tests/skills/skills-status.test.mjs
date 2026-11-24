@@ -109,6 +109,51 @@ test("status says so when nothing runs or a plugin is too old to report its buil
   assert.match(failed.content[0].text, /discovery failed/);
 });
 
+test("status calls out an instance that refused the session token or asks for none", async () => {
+  const status = JSON.parse(
+    (
+      await readStatus(async () => [
+        instance({ pluginBuild: { ...SERVER_BUILD, dirty: false }, authorized: true, tokenRequired: true }),
+        instance({
+          instanceId: SECOND_INSTANCE,
+          processId: 41002,
+          pluginBuild: { ...SERVER_BUILD, dirty: false },
+          authorized: false,
+          tokenRequired: true,
+          activeDrawingKnown: false,
+          activeDrawing: null,
+        }),
+      ])
+    ).content[0].text
+  );
+  const refused = status.warnings.filter((warning) => warning.includes(SECOND_INSTANCE));
+  assert.equal(refused.length, 1);
+  assert.match(refused[0], /session token/);
+  assert.match(refused[0], /CIVIL3D\.UNAUTHORIZED/);
+  assert.equal(status.warnings.some((warning) => warning.includes(FIRST_INSTANCE)), false,
+    "an instance that accepted the token is not mentioned");
+  assert.equal(status.instances[1].authorized, false);
+
+  const open = JSON.parse(
+    (
+      await readStatus(async () => [
+        instance({ pluginBuild: { ...SERVER_BUILD, dirty: false }, authorized: true, tokenRequired: false }),
+      ])
+    ).content[0].text
+  );
+  assert.ok(open.warnings.some((warning) => /CIVIL3D_MCP_REQUIRE_TOKEN=0/.test(warning)));
+
+  // A plugin from before the token says nothing about it and gets no remark.
+  const older = JSON.parse(
+    (
+      await readStatus(async () => [
+        instance({ pluginBuild: { ...SERVER_BUILD, dirty: false }, authorized: true, tokenRequired: null }),
+      ])
+    ).content[0].text
+  );
+  assert.equal(older.warnings.some((warning) => /token/.test(warning)), false);
+});
+
 test("the version label carries the commit only when it is known", () => {
   const known = { commit: OTHER_COMMIT, dirty: false, builtAtUtc: null };
   const unknown = { commit: "unknown", dirty: null, builtAtUtc: null };

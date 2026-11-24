@@ -30,6 +30,76 @@ public sealed class RpcTcpServer
   public void Stop() { }
 }
 
+/// <summary>
+/// Stands in for the tracker that reads the drawing through the Autodesk API.
+/// A test says what the "script" changed; the double records how it was used.
+/// </summary>
+internal sealed class DrawingChangeTracker : IDisposable
+{
+  /// <summary>Fills the list of the next tracked write; null means nothing changed.</summary>
+  public static Action<ChangeList>? Changes { get; set; }
+  public static bool FailToStart { get; set; }
+  public static int StartCount { get; private set; }
+  public static int DisposeCount { get; private set; }
+  public static int? LastItemLimit { get; private set; }
+  public static bool? LastPreview { get; private set; }
+  public static bool? LastCommitted { get; private set; }
+  /// <summary>Transactions that were open when the tracker was told the script had ended.</summary>
+  public static int? ActiveTransactionsAtCapture { get; private set; }
+  /// <summary>Transactions still open when the result was read back; must be zero.</summary>
+  public static int? ActiveTransactionsAtFinish { get; private set; }
+
+  private readonly Autodesk.AutoCAD.DatabaseServices.Database _database;
+  private readonly int _itemLimit;
+
+  private DrawingChangeTracker(Autodesk.AutoCAD.DatabaseServices.Database database, int itemLimit)
+  {
+    _database = database;
+    _itemLimit = itemLimit;
+  }
+
+  internal static DrawingChangeTracker? Start(
+    Autodesk.AutoCAD.DatabaseServices.Database database, int itemLimit)
+  {
+    StartCount++;
+    LastItemLimit = itemLimit;
+    return FailToStart ? null : new DrawingChangeTracker(database, itemLimit);
+  }
+
+  internal void BeforeTransactionEnds(
+    Autodesk.AutoCAD.DatabaseServices.Transaction transaction, bool preview)
+  {
+    LastPreview = preview;
+    ActiveTransactionsAtCapture = _database.TransactionManager.ActiveCount;
+  }
+
+  internal ChangeList? Finish(bool committed, bool preview)
+  {
+    LastCommitted = committed;
+    ActiveTransactionsAtFinish = _database.TransactionManager.ActiveCount;
+    if (!committed && !preview) return null;
+    var list = new ChangeList(_itemLimit) { Preview = preview };
+    Changes?.Invoke(list);
+    if (preview) list.LeftAfterPreview ??= 0;
+    return list;
+  }
+
+  public void Dispose() => DisposeCount++;
+
+  public static void Reset()
+  {
+    Changes = null;
+    FailToStart = false;
+    StartCount = 0;
+    DisposeCount = 0;
+    LastItemLimit = null;
+    LastPreview = null;
+    LastCommitted = null;
+    ActiveTransactionsAtCapture = null;
+    ActiveTransactionsAtFinish = null;
+  }
+}
+
 public static class RoslynExecutor
 {
   private static int _activeCount;

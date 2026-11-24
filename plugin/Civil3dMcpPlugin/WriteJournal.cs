@@ -55,6 +55,7 @@ internal static class WriteJournal
         ["codeBytes"] = record.CodeBytes,
         ["ok"] = errorCode == null,
         ["errorCode"] = errorCode,
+        ["preview"] = record.Preview,
         ["committed"] = record.Committed,
         ["saveRequested"] = record.SaveRequested,
         ["saved"] = record.Saved,
@@ -62,6 +63,9 @@ internal static class WriteJournal
         ["backupPath"] = record.BackupPath,
         ["dbmodBefore"] = record.DbmodBefore,
         ["dbmodAfter"] = record.DbmodAfter,
+        ["added"] = record.Changes is { IsAvailable: true } added ? added.AddedCount : null,
+        ["modified"] = record.Changes is { IsAvailable: true } modified ? modified.ModifiedCount : null,
+        ["erased"] = record.Changes is { IsAvailable: true } erased ? erased.ErasedCount : null,
         ["durationMs"] = Math.Round(durationMs),
       }.ToJsonString(JsonOptions) + "\n";
 

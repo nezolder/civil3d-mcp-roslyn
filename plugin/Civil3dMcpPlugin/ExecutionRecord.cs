@@ -21,6 +21,13 @@ internal sealed class ExecutionRecord
   internal bool Backup { get; set; }
   internal string? BackupDirectory { get; set; }
   internal bool SaveRequested { get; set; }
+  /// <summary>
+  /// The script runs with write access, but its transaction is abandoned: no
+  /// commit, no save, no backup. The receipt lists what it would have changed.
+  /// </summary>
+  internal bool Preview { get; private set; }
+  /// <summary>How many objects of each kind the receipt lists by handle and name.</summary>
+  internal int ChangeItemLimit { get; set; } = ChangeList.DefaultItemLimit;
   internal string? Description { get; private set; }
   internal string? CodeSha256 { get; private set; }
   internal int CodeBytes { get; private set; }
@@ -33,6 +40,8 @@ internal sealed class ExecutionRecord
   internal bool Committed { get; set; }
   internal bool Saved { get; set; }
   internal string? BackupPath { get; set; }
+  /// <summary>What the write added, modified and erased; null when it was not looked at.</summary>
+  internal ChangeList? Changes { get; set; }
   internal DateTimeOffset? FileLastWriteUtc { get; private set; }
   internal long? FileBytes { get; private set; }
 
@@ -55,6 +64,10 @@ internal sealed class ExecutionRecord
         && readOnlyValue.TryGetValue<bool>(out var parsedReadOnly)
         && parsedReadOnly;
       record.IsWrite = !readOnly;
+      record.Preview = !readOnly
+        && parameters?["preview"] is JsonValue previewValue
+        && previewValue.TryGetValue<bool>(out var parsedPreview)
+        && parsedPreview;
       if (parameters?["code"] is JsonValue codeValue && codeValue.TryGetValue<string>(out var code) && code != null)
       {
         var bytes = Encoding.UTF8.GetBytes(code);
@@ -97,21 +110,27 @@ internal sealed class ExecutionRecord
     }
   }
 
-  internal JsonObject ToReceipt() => new()
+  internal JsonObject ToReceipt()
   {
-    ["drawing"] = new JsonObject
+    var receipt = new JsonObject
     {
-      ["databaseFilename"] = DatabaseFilename,
-      ["fingerprintGuid"] = FingerprintGuid,
-    },
-    ["dbmodBefore"] = DbmodBefore,
-    ["dbmodAfter"] = DbmodAfter,
-    ["committed"] = Committed,
-    ["saved"] = Saved,
-    ["fileLastWriteUtc"] = FileLastWriteUtc?.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-    ["fileBytes"] = FileBytes,
-    ["backupPath"] = BackupPath,
-  };
+      ["drawing"] = new JsonObject
+      {
+        ["databaseFilename"] = DatabaseFilename,
+        ["fingerprintGuid"] = FingerprintGuid,
+      },
+      ["dbmodBefore"] = DbmodBefore,
+      ["dbmodAfter"] = DbmodAfter,
+      ["preview"] = Preview,
+      ["committed"] = Committed,
+      ["saved"] = Saved,
+      ["fileLastWriteUtc"] = FileLastWriteUtc?.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
+      ["fileBytes"] = FileBytes,
+      ["backupPath"] = BackupPath,
+    };
+    if (Changes != null) receipt["changes"] = Changes.ToJson();
+    return receipt;
+  }
 
   /// <summary>Collapses line breaks and control characters, trims, and cuts to the limit.</summary>
   internal static string? ToSingleLine(string? value, int maxLength)

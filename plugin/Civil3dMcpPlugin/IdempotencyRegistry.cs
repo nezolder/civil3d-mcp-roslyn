@@ -98,7 +98,7 @@ internal sealed class IdempotencyRegistry
     }
   }
 
-  private static string? ParseOptionalKey(JsonObject? parameters)
+  internal static string? ParseOptionalKey(JsonObject? parameters)
   {
     if (parameters == null || !parameters.ContainsKey("idempotencyKey")) return null;
     if (parameters["idempotencyKey"] is not JsonValue value ||

@@ -33,8 +33,9 @@ attempts are allowed, how results are reported) are not part of it.
 5. Write with one `civil3d_execute` call that carries its own checks: `expectedDrawing`,
    `requireClean: true`, `backup: true`, `saveDrawing: true` when the change should reach the file,
    and a one-line `description`. The script must not save by itself (`Database.SaveAs`, `QSAVE`).
-6. Read the `receipt` in the reply (`committed`, `saved`, `dbmodAfter`, `backupPath`), then read
-   the changed objects back with a separate query.
+   Send a large or unfamiliar change with `preview: true` first.
+6. Read the `receipt` in the reply (`committed`, `saved`, `dbmodAfter`, `backupPath`, `changes`),
+   then read the changed objects back with a separate query.
 7. On an error read `outcome`: `not_started` means nothing ran, `reported_error` means the
    operation ended and the receipt says whether the change went in, `unknown` means stop. Never
    resend a write whose outcome is unknown.
@@ -63,6 +64,10 @@ Details: `civil3d_skills` with `action: "guide"` and a `topic`:
 - These do not identify the target: a window title, the active document seen through COM, a file
   time stamp, or the user's statement about what is open. The visible window and the MCP
   connection can belong to different instances.
+- An instance listed with `authorized: false` did not accept this server's session token. It
+  tells nothing about its drawing, and a call to it ends with `CIVIL3D.UNAUTHORIZED`
+  (`not_started`). The server and the plugin are of different versions or use different endpoint
+  folders; tell the user.
 - With several instances running, `expectedDrawing` selects the instance whose active drawing
   matches. A call without it is refused with `CIVIL3D.INSTANCE_SELECTION_REQUIRED`, which lists
   the candidates; pass `instanceId` for that one bootstrap query.
@@ -113,6 +118,8 @@ replace them with separate calls.
 | `backup: true` | Before the script runs, the saved DWG file is copied to a time-stamped file, checked by size, never over an existing file. It needs a named drawing and asks for a clean one unless `requireClean: false` is set explicitly. If the copy fails nothing runs (`CIVIL3D.BACKUP_FAILED`). |
 | `backupDirectory` | Absolute folder for that copy. Without it the copy goes to a per-user folder on the computer that runs Civil 3D. Ask the user where backups belong. |
 | `saveDrawing: true` | The call saves the named drawing after the transaction and the document lock are closed. A read-only or unnamed drawing is refused before anything runs. |
+| `preview: true` | The script runs with write access, then its transaction is abandoned: no commit, no save, no backup, and `idempotencyKey` is not used up. Leave the other inputs as the real call will have them; their checks still run. The receipt lists what the script would change. |
+| `changeItems` | How many objects the receipt lists by handle and name in each group, 0 to 100, default 10. |
 | `description` | One line about the change. Shown on the Civil 3D command line and kept in the write journal; it is how the call is found later. |
 | `timeoutSeconds` | Script time limit for this call, 1 to 1800 seconds, default 120. Set it in advance for a known long operation. |
 | `idempotencyKey` | Optional. See the `errors` topic. |
@@ -144,29 +151,40 @@ per drawing which ones were changed and saved.
 
 Every write that reached the drawing returns a receipt as a second text block,
 `{"receipt": {...}}`; a failed or refused write has it too, also in `structuredContent.receipt`.
-Fields: `drawing` (`databaseFilename`, `fingerprintGuid`), `dbmodBefore`, `dbmodAfter`,
-`committed`, `saved`, `fileLastWriteUtc`, `fileBytes`, `backupPath`.
+Fields: `drawing` (`databaseFilename`, `fingerprintGuid`), `dbmodBefore`, `dbmodAfter`, `preview`,
+`committed`, `saved`, `fileLastWriteUtc`, `fileBytes`, `backupPath`, `changes`.
 
 - `committed` says whether the change is in the open drawing, `saved` whether this call wrote the
   file. Take the save state (`saved: true`, `dbmodAfter: 0`) and the backup location from the
   receipt, not from a separate `DBMOD` query.
 - After a failed save the receipt shows `committed: true`, `saved: false`: the change is in the
   open drawing and not in the file.
-- In Civil 3D each write is one Undo step; a query adds none.
-- The receipt, a file size and a clean state do not prove that the geometry is right. Read the
-  result back independently with a targeted query: the requested objects, counts, extents, and
-  that objects outside the scope are unchanged. If that is not possible, report the check as
-  missing.
+- `changes` is what the write did to the drawing, read back after the commit and not taken from
+  the script: `added`, `modified` and `erased`, each with `count`, `byType` and the first `items`
+  (`type`, `handle`, `name`, `layer`; `more` counts the rest). `containers` counts tables,
+  dictionaries and layout blocks apart. `complete: false` comes with a `note` on what can be
+  missing. An unexpected type or count is a reason to stop, also after a script that reported
+  success.
+- A preview has `preview: true`, `committed: false` and `rolledBack` in `changes`. On
+  `rolledBack: false` objects stayed behind: stop and tell the user. Handles of new objects in a
+  preview result do not exist afterwards. A preview shows what the script does, not what Civil 3D
+  updates by itself once a change is kept, and it can leave the drawing marked as modified
+  (`dbmodAfter`).
+- In Civil 3D each write, and each preview, is one Undo step; a query adds none.
+- The receipt and a clean state do not prove that the geometry is right. Read the result back
+  with a targeted query: the requested objects, their values and extents. If that is not
+  possible, report the check as missing.
 - Do not automatically repeat a readback method that hung before.
 
 ### Older plugin
 
-`CIVIL3D.PLUGIN_UPDATE_REQUIRED` (`not_started`) means the running plugin predates `requireClean`,
-`backup` and `backupDirectory`. Do not silently drop the inputs. Tell the user, and until the
-plugin is updated provide the same guarantees by hand: a read-only query of
+`CIVIL3D.PLUGIN_UPDATE_REQUIRED` (`not_started`) means the running plugin predates an input of
+the call; the message names it. Do not silently drop the input. Tell the user. Until the plugin
+is updated, replace `requireClean` and `backup` by hand: a read-only query of
 `Application.GetSystemVariable("DBMOD")` before the write, an unchanged file copy checked by size
 before the first write, and another `DBMOD` check after the save. Do not start writing when the
-file is locked or the copy cannot be verified.
+file is locked or the copy cannot be verified. Nothing replaces `preview`: never send the write
+itself as a trial.
 
 <!-- topic: errors -->
 ## Errors, time limits and uncertain outcomes

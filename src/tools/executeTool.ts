@@ -37,6 +37,13 @@ import { imageContentBlocks, readResultImages, type ResultImage } from "./result
 const log = createLogger("ExecuteTool");
 /** Plugin ability behind requireClean and backup; an older plugin would ignore them. */
 const WRITE_SAFETY_FEATURE = "writeSafety";
+/**
+ * Plugin ability behind preview. An older plugin would ignore the input and
+ * commit the write, so a preview is never sent to one.
+ */
+const PREVIEW_FEATURE = "preview";
+/** Plugin ability behind the change list in the receipt (and its changeItems input). */
+const CHANGE_LIST_FEATURE = "changeList";
 
 /** The plugin's account of what happened to the drawing, sent next to the result. */
 function readReceipt(response: Record<string, unknown>): Record<string, unknown> | undefined {
@@ -89,9 +96,11 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
       "expectedDrawing must come from a prior read-only identity query. " +
       "Instead of code you can pass skill and params to run a skill whose run_by_name is true. " +
       "To persist the drawing file, set saveDrawing=true; do not call Database.SaveAs or queue QSAVE from the C# code. " +
-      "Safety switches: requireClean=true refuses a drawing with unsaved changes, backup=true first copies the saved DWG. " +
-      "The reply has a second text block {\"receipt\": {...}} with DBMOD before/after, committed, saved, the file time and the backup path, " +
-      "so no separate checks are needed around a write.",
+      "Safety switches: requireClean=true refuses a drawing with unsaved changes, backup=true first copies the saved DWG, " +
+      "preview=true runs the same call without keeping anything (no commit, no save, no backup) and reports what it would change. " +
+      "The reply has a second text block {\"receipt\": {...}} with DBMOD before/after, preview, committed, saved, the file time, the backup path " +
+      "and changes: the objects the write added, modified and erased, counted by type and listed by handle and name, " +
+      "read back from the drawing after the commit. So no separate checks are needed around a write.",
     {
       code: z.string().optional().describe(
         "C# code to execute. Has access to Document, CivilDoc, Database, Transaction, Editor. " +
@@ -127,6 +136,26 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
         .describe(
           "When true, copy the saved DWG file to a time-stamped backup before the script runs; the receipt " +
             "returns its path. Needs a named drawing, and a clean one unless requireClean is explicitly false."
+        ),
+      preview: z
+        .boolean()
+        .optional()
+        .describe(
+          "When true, run the script with write access but abandon its transaction: nothing is committed, saved " +
+            "or backed up, and idempotencyKey is not used up. The receipt's changes block lists what the script " +
+            "would add, modify and erase, and rolledBack says that nothing stayed behind. Handles of new objects " +
+            "in the result do not exist afterwards. Use it before a large or unfamiliar write, then repeat the " +
+            "same call without preview."
+        ),
+      changeItems: z
+        .number()
+        .int()
+        .min(0)
+        .max(100)
+        .optional()
+        .describe(
+          "How many objects the receipt's changes block lists by handle and name in each of its added, " +
+            "modified and erased groups (default 10; 0 leaves only the counts by type)."
         ),
       backupDirectory: z
         .string()
@@ -169,6 +198,11 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
       const audit = createOperationAuditContext("civil3d_execute", code, performance.now());
       const usesWriteSafety =
         args.requireClean === true || args.backup === true || args.backupDirectory !== undefined;
+      const requiredFeatures = [
+        ...(usesWriteSafety ? [WRITE_SAFETY_FEATURE] : []),
+        ...(args.preview === true ? [PREVIEW_FEATURE] : []),
+        ...(args.changeItems !== undefined ? [CHANGE_LIST_FEATURE] : []),
+      ];
       let receipt: Record<string, unknown> | undefined;
       let images: ResultImage[] = [];
       try {
@@ -187,6 +221,8 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
                 requireClean: args.requireClean,
                 backup: args.backup,
                 backupDirectory: args.backupDirectory,
+                preview: args.preview,
+                changeItems: args.changeItems,
               },
               benchmarkTrace,
               commandWaitMs(
@@ -203,7 +239,7 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
             expectedDrawing: args.expectedDrawing,
             instanceId: args.instanceId,
             signal: extra.signal,
-            requiredFeatures: usesWriteSafety ? [WRITE_SAFETY_FEATURE] : undefined,
+            requiredFeatures: requiredFeatures.length > 0 ? requiredFeatures : undefined,
           }
         );
         const result = benchmarkTrace
