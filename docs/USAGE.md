@@ -136,12 +136,13 @@ Rules for the script:
   the call commits. Do not start parallel work and do not send two writes at once.
 - Check the postcondition inside the script and throw when it does not hold. The transaction is
   then rolled back, so a successful reply never hides a half-made change.
-- Split a risky change with several steps (clone, move to another layer, delete) into small
-  separate calls and read the state back between them.
+- Split a risky change with several steps (clone, move to another layer, delete; remove and
+  recreate a data reference) into small separate calls and read the state back between them.
 
 In a series of writes to one drawing, request the backup on the first call only: every
 `backup: true` makes another full copy. `requireClean` can stay on a later call only when the
-previous call also saved; after a write without a save the drawing is not clean.
+previous call also saved; after a write without a save the drawing is not clean. Civil 3D can
+also mark a saved drawing as modified by itself (topic `civil`).
 
 ### Several drawings
 
