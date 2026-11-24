@@ -52,7 +52,7 @@ function param(code, name) {
 }
 
 /** A simulated Civil 3D with just enough behaviour for the smoke run. */
-function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = null } = {}) {
+function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = null, pluginCommit = "abc" } = {}) {
   const civil = {
     calls: [],
     dbmod: 0,
@@ -197,7 +197,7 @@ function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = n
       return ok({
         server: { commit: "abc" },
         instances: [{
-          port: PORT, processId: 7, pluginBuild: { commit: "abc" }, buildMatchesServer: true,
+          port: PORT, processId: 7, pluginBuild: { commit: pluginCommit }, buildMatchesServer: pluginCommit === "abc",
           authorized: !wrongToken, tokenRequired: true, operationInProgress: false,
         }],
       });
@@ -249,7 +249,7 @@ test("a full run against the simulated Civil 3D passes every case", async () => 
   assert.equal(report.ok, true);
   assert.deepEqual(
     report.steps.map((step) => step.id),
-    ["S1", "S2", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
+    ["S1", "S1b", "S2", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
       "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "G1", "G2", "E1"]
   );
   // Every write names the drawing and carries a description.
@@ -273,7 +273,7 @@ test("a drawing that is not the run's own fixture gets no write", async () => {
   assert.equal(report.ok, false);
   assert.match(report.stopped, /not this run's mcp_smoke/);
   assert.equal(civil.calls.filter((item) => item.name === "civil3d_execute").length, 0);
-  assert.ok(report.steps.slice(2).every((step) => step.status === "skip"));
+  assert.ok(report.steps.slice(3).every((step) => step.status === "skip"));
 });
 
 test("an attached run accepts only a drawing named mcp_smoke*.dwg", async () => {
@@ -298,6 +298,14 @@ test("a corridor without the stock subassembly is a warning, not a failure", asy
   const civil = simulatedCivil({ corridorWarning: "Exception: not found" });
   const report = await run(civil);
   assert.equal(report.steps.find((step) => step.id === "F7").status, "warn");
+  assert.equal(report.counts.fail, 0);
+  assert.equal(report.ok, true);
+});
+
+test("a plugin from another build is a warning, not a stop", async () => {
+  const civil = simulatedCivil({ pluginCommit: "def" });
+  const report = await run(civil);
+  assert.equal(report.steps.find((step) => step.id === "S1b").status, "warn");
   assert.equal(report.counts.fail, 0);
   assert.equal(report.ok, true);
 });

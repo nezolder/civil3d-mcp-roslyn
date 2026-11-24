@@ -242,7 +242,7 @@ export async function runSmoke(deps) {
   const log = deps.log ?? (() => {});
   const startedAt = now();
   const steps = [];
-  const state = { expectedDrawing: null, handles: {}, styles: {}, corridor: false, marker: null };
+  const state = { instance: null, expectedDrawing: null, handles: {}, styles: {}, corridor: false, marker: null };
   let stopReason = null;
 
   async function callTool(client, name, args, timeoutMs) {
@@ -338,11 +338,23 @@ export async function runSmoke(deps) {
     details.pluginCommit = instance?.pluginBuild?.commit;
     check(instance, `no instance on port ${deps.port}`, problems);
     if (!instance) return;
-    check(instance.buildMatchesServer === true, "plugin and server builds differ", problems);
+    state.instance = instance;
     check(instance.authorized === true, "the plugin did not accept the server's token", problems);
     check(instance.tokenRequired === true, "the plugin runs requests without a token", problems);
     check(instance.operationInProgress !== true, "an operation is running in this instance", problems);
   });
+
+  // A development run uses a server built from a branch next to the installed
+  // plugin, so differing builds are a warning here, not a stop.
+  await step(
+    "S1b",
+    "Plugin and server from the same build",
+    async ({ problems, details }) => {
+      details.pluginCommit = state.instance?.pluginBuild?.commit;
+      check(state.instance?.buildMatchesServer === true, "plugin and server builds differ", problems);
+    },
+    { optional: true }
+  );
 
   await required("S2", "Target drawing identified and still empty", async ({ problems, details }) => {
     const result = await query({ code: script("discover") });
