@@ -334,7 +334,7 @@ test("generated geometry stays inside the surface and the profile fits", () => {
 
 test("Civil 3D start helpers", () => {
   const script = startupScript("C:\\Temp\\s\\mcp_smoke.dwg");
-  assert.equal(script, 'FILEDIA\r\n0\r\n_.SAVEAS\r\n\r\n"C:\\Temp\\s\\mcp_smoke.dwg"\r\nFILEDIA\r\n1\r\n');
+  assert.equal(script, 'FILEDIA\r\n0\r\n_.SAVEAS\r\n\r\n"C:\\Temp\\s\\mcp_smoke.dwg"\r\nFILEDIA\r\n1\r\n_.QUIT\r\n');
   assert.throws(() => startupScript('C:\\a"b.dwg'), /quotes/);
   const args = acadArguments({
     acadPath: "C:\\Program Files\\Autodesk\\AutoCAD 2025\\acad.exe",
@@ -347,6 +347,10 @@ test("Civil 3D start helpers", () => {
     "/ld", "C:\\Program Files\\Autodesk\\AutoCAD 2025\\AecBase.dbx",
     "/p", "C3D_Hungary", "/product", "C3D",
   ]);
+  assert.deepEqual(
+    acadArguments({ acadPath: "C:\\A\\acad.exe", drawing: "C:\\Temp\\s\\mcp_smoke.dwg", template: "C:\\t.dwt", scriptPath: "x" }),
+    ["C:\\Temp\\s\\mcp_smoke.dwg", "/ld", "C:\\A\\AecBase.dbx", "/product", "C3D"]
+  );
   const status = { instances: [
     { processId: 1, startedAtUtc: "2026-11-24T08:00:00Z" },
     { processId: 2, startedAtUtc: "2026-11-24T15:00:05Z" },

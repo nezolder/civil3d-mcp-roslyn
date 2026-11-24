@@ -110,7 +110,19 @@ function defaultTemplate() {
   return null;
 }
 
-/** Starts Civil 3D on a new drawing saved at once as the fixture; returns its instance. */
+function isRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Makes the fixture drawing with a first Civil 3D start (template, save as,
+ * quit), then opens it in a second start and returns that instance.
+ */
 async function startCivil(options, outDir, drawingPath) {
   if (process.platform !== "win32") throw new Error("--start-civil works on Windows only.");
   const acadPath = options.acad ?? process.env.CIVIL3D_ACAD_EXE ?? DEFAULT_ACAD;
@@ -119,23 +131,45 @@ async function startCivil(options, outDir, drawingPath) {
   if (!template || !fs.existsSync(template)) {
     throw new Error("No template was found; give one with --template.");
   }
+  const deadline = Date.now() + options.waitMinutes * 60_000;
+  const common = { acadPath, profile: options.profile, language: options.language };
+  const launch = (args) => {
+    console.log(`Starting Civil 3D: ${acadPath} ${args.map((arg) => JSON.stringify(arg)).join(" ")}`);
+    const child = spawn(acadPath, args, { detached: true, stdio: "ignore", windowsHide: false });
+    child.unref();
+    return child.pid;
+  };
+
+  // 1. New drawing from the template, saved as the fixture, then quit.
   const scriptPath = path.join(outDir, "mcp_smoke_start.scr");
   fs.writeFileSync(scriptPath, startupScript(drawingPath), "utf8");
-  const args = acadArguments({ acadPath, template, profile: options.profile, language: options.language, scriptPath });
-  console.log(`Starting Civil 3D: ${acadPath} ${args.map((arg) => JSON.stringify(arg)).join(" ")}`);
-  const launchedAt = Date.now();
-  const child = spawn(acadPath, args, { detached: true, stdio: "ignore", windowsHide: false });
-  child.unref();
-  console.log("Once its window is open, click into it once: the first command can wait for that.");
+  const makerPid = launch(acadArguments({ ...common, template, scriptPath }));
+  console.log("This first Civil 3D only saves the new test drawing and closes itself.");
+  let savedAt = null;
+  while (Date.now() < deadline) {
+    if (savedAt === null && fs.existsSync(drawingPath)) savedAt = Date.now();
+    if (savedAt !== null && !isRunning(makerPid)) break;
+    // acad.exe can linger without a window after it quit (Autodesk's own
+    // InsightCore); the file is complete by then, so go on after a while.
+    if (savedAt !== null && Date.now() - savedAt > 90_000) {
+      console.log(`The first Civil 3D (process ${makerPid}) has not ended; going on with the saved file.`);
+      break;
+    }
+    await pause(2_000);
+  }
+  if (savedAt === null) throw new Error(`The first Civil 3D did not save the test drawing in time: ${drawingPath}`);
 
+  // 2. The fixture opened from its file, as a drawing is normally opened.
+  const launchedAt = Date.now();
+  const pid = launch(acadArguments({ ...common, drawing: drawingPath }));
+  console.log("Once its window is open, click into it once: the first command can wait for that.");
   const client = await connect({});
   try {
-    const deadline = launchedAt + options.waitMinutes * 60_000;
     let instance = null;
     while (Date.now() < deadline) {
       const current = await status(client);
-      instance = pickStartedInstance(current, child.pid, launchedAt);
-      if (instance && fs.existsSync(drawingPath)) {
+      instance = pickStartedInstance(current, pid, launchedAt);
+      if (instance) {
         const active = instance.activeDrawing?.databaseFilename;
         if (!instance.activeDrawingKnown || samePath(active, drawingPath)) return { instance, template, acadPath };
       }
@@ -143,8 +177,8 @@ async function startCivil(options, outDir, drawingPath) {
     }
     throw new Error(
       instance
-        ? `Civil 3D started (port ${instance.port}) but the fixture drawing was not saved in time: ${drawingPath}`
-        : "The started Civil 3D did not register its MCP plugin in time."
+        ? `Civil 3D started (port ${instance.port}) but did not report the test drawing as active in time.`
+        : "The second Civil 3D did not register its MCP plugin in time."
     );
   } finally {
     await client.close();

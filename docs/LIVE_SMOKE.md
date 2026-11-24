@@ -14,11 +14,12 @@ code `0` when every case passed, `1` when a case failed and `2` when it could no
 
 ## What it does
 
-1. **Start** (`--start-civil`, Windows): starts `acad.exe` with Civil 3D on a new drawing from the
-   template and a startup script that saves it at once as `<out>\mcp_smoke.dwg`, so the drawing is
-   named and clean before the first call. It waits until the plugin of that process registers
-   (by process id) and its active drawing is that file. Click into the new window once if nothing
-   happens; Civil 3D may wait for that before it runs the first command.
+1. **Start** (`--start-civil`, Windows): a first `acad.exe` start makes a new drawing from the
+   template, saves it as `<out>\mcp_smoke.dwg` and quits. A second start opens that file, the way a
+   drawing is normally opened, and the run waits until the plugin of that process registers (by
+   process id) with that drawing active. (In the first live run a drawing named by SAVEAS in the
+   same session failed its second saved write with `eFileAccessErr`.) Click into the new window
+   once if nothing happens; Civil 3D may wait for that before it runs the first command.
 2. **Target check**: `civil3d_skills` `status` must show the instance with the session token
    accepted and nothing running (differing plugin and server builds are a warning). A read must then show that the active drawing is
    this run's `mcp_smoke*.dwg`, still holds no surface, alignment, corridor or assembly, and has no

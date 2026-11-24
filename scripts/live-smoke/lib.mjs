@@ -126,19 +126,29 @@ export function fixtureDrawingPath(outDir) {
 }
 
 /**
- * Startup script for acad.exe /b: names the new drawing at once, so that the
- * plugin can save it and it is clean (DBMOD 0) before the first call.
+ * Startup script for the first acad.exe start (/b): saves the new drawing at
+ * once under the fixture name and quits. The run then opens that file in a
+ * second start, the way a drawing is normally opened: in the first live run a
+ * drawing named by SAVEAS in the same session failed its second saved write
+ * (eFileAccessErr).
  */
 export function startupScript(drawingPath) {
   if (/["\r\n]/.test(drawingPath)) throw new Error("The drawing path cannot hold quotes or line breaks.");
-  return ["FILEDIA", "0", "_.SAVEAS", "", `"${drawingPath}"`, "FILEDIA", "1", ""].join("\r\n");
+  return ["FILEDIA", "0", "_.SAVEAS", "", `"${drawingPath}"`, "FILEDIA", "1", "_.QUIT", ""].join("\r\n");
 }
 
-/** acad.exe arguments for a new drawing from the template, running the startup script. */
-export function acadArguments({ acadPath, template, profile, language, scriptPath }) {
+/**
+ * acad.exe arguments: with scriptPath a new drawing from the template running
+ * the startup script, with drawing that existing file opened.
+ */
+export function acadArguments({ acadPath, template, profile, language, scriptPath, drawing }) {
   const args = [];
-  if (template) args.push("/t", template);
-  args.push("/b", scriptPath);
+  if (drawing) {
+    args.push(drawing);
+  } else {
+    if (template) args.push("/t", template);
+    args.push("/b", scriptPath);
+  }
   args.push("/ld", path.win32.join(path.win32.dirname(acadPath), "AecBase.dbx"));
   if (profile) args.push("/p", profile);
   args.push("/product", "C3D");
