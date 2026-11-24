@@ -11,6 +11,8 @@ The fork preserves the central design: a small MCP tool surface delegates task-s
 - [SantosSjba/mcp-to-c3d](https://github.com/SantosSjba/mcp-to-c3d) was evaluated as a related continuation of the same public lineage. Ideas are considered individually and, where used, are adapted in small changes with local tests. Its codebase has not been merged wholesale into this fork.
 - [Sacred-G/Civil3D-mcp](https://github.com/Sacred-G/Civil3D-mcp) was reviewed only for architectural, packaging, and security ideas. No source code from that repository is intentionally copied into this fork.
 
+- [ctrlxbruce/Autocad-Civil3D-MCP, 8673c21](https://github.com/ctrlxbruce/Autocad-Civil3D-MCP/tree/8673c21cf695436801ad62b85346bf1b3627cbec) (MIT): the way the change list of a write finds its objects, the drawing's handle seed before and after for added objects and the modified and erased flags of the objects in the script's transaction for a preview, follows its `civil3d-plugin/Util/ChangeLog.cs`. The code here (`DrawingChangeTracker.cs`, `ChangeList.cs`) is written for this plugin and adds the database notifications, the readback after the commit and the check after a preview. The per-session token on the local connection is a common pattern among the reviewed projects and is implemented independently.
+
 These references do not imply feature parity or compatibility with their current releases.
 
 ## Licensing and proprietary dependencies

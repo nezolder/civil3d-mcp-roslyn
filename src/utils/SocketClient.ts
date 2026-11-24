@@ -76,10 +76,13 @@ export class ApplicationClientConnection {
   private responseChunks: Buffer[] = [];
   private responseByteLength = 0;
   private commandSent = false;
+  /** The plugin session's token from its endpoint record; never logged. */
+  private readonly token?: string;
 
-  constructor(host: string, port: number) {
+  constructor(host: string, port: number, token?: string) {
     this.host = host;
     this.port = port;
+    this.token = token;
     this.socket = new net.Socket();
     this.setupSocketListeners();
   }
@@ -328,6 +331,8 @@ export class ApplicationClientConnection {
           method: command,
           params: commandParams,
           id: requestId,
+          // The plugin runs a request only when it presents the session token.
+          ...(this.token ? { auth: this.token } : {}),
         };
 
         const commandString = JSON.stringify(commandObj);

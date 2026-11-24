@@ -18,6 +18,8 @@ const ENDPOINT_SCHEMA_VERSION = 1;
 const MAX_ENDPOINT_RECORDS = 64;
 const MAX_ENDPOINT_RECORD_BYTES = 4_096;
 const INSTANCE_ID_PATTERN = /^[0-9a-f]{32}$/i;
+// The plugin writes 64 hexadecimal characters; anything else is not sent on.
+const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{16,256}$/;
 // A refused loopback connection means nothing listens on that port. Windows
 // takes about a second to report each refusal, so remember it for a while.
 const REFUSED_ENDPOINT_TTL_MS = 30_000;
@@ -63,6 +65,11 @@ interface EndpointRecord {
   processId: number;
   port: number;
   startedAtUtc: string;
+  /**
+   * The session token the plugin asks for with every request. Absent in the
+   * record of a plugin from before the token existed.
+   */
+  token?: string;
 }
 
 /** What the plugin's health reply says beyond "alive". Older plugins leave most of it empty. */
@@ -76,6 +83,13 @@ interface EndpointHealth {
   operationInProgress: boolean;
   queueDepth: number | null;
   executionBackend: string | null;
+  /**
+   * False when the plugin did not accept the session token and answered with
+   * its short health reply only. Plugins without the token never say false.
+   */
+  authorized: boolean;
+  /** Whether the plugin asks for the token; null for a plugin that cannot say. */
+  tokenRequired: boolean | null;
 }
 
 interface LiveEndpoint {
@@ -85,6 +99,8 @@ interface LiveEndpoint {
   processId: number | null;
   startedAtUtc: string | null;
   legacy: boolean;
+  /** Session token from the endpoint record, sent with every request. */
+  token?: string;
   /** Present once the endpoint answered a health probe. */
   health?: EndpointHealth;
 }
@@ -117,6 +133,9 @@ export interface InstanceStatus {
   queueDepth: number | null;
   executionBackend: string | null;
   features: string[];
+  /** False when this server could not present the session token the plugin asks for. */
+  authorized: boolean;
+  tokenRequired: boolean | null;
 }
 
 /**
@@ -145,7 +164,7 @@ export async function listInstances(): Promise<InstanceStatus[]> {
   const settings = getConnectionSettings();
   let endpoints: LiveEndpoint[];
   if (settings.explicitPort || !isLocalHost(settings.host)) {
-    const live = await probeEndpoint(fixedEndpoint(settings.host, settings.port), settings);
+    const live = await probeEndpoint(await fixedEndpoint(settings), settings);
     endpoints = live ? [live] : [];
   } else {
     endpoints = await discoverLiveEndpoints(settings);
@@ -166,6 +185,8 @@ export async function listInstances(): Promise<InstanceStatus[]> {
       queueDepth: health?.queueDepth ?? null,
       executionBackend: health?.executionBackend ?? null,
       features: health?.features ?? [],
+      authorized: health?.authorized ?? true,
+      tokenRequired: health?.tokenRequired ?? null,
     };
   });
 }
@@ -272,7 +293,7 @@ async function selectEndpoint(
   target: ApplicationConnectionTarget
 ): Promise<LiveEndpoint> {
   if (settings.explicitPort || !isLocalHost(settings.host)) {
-    const directEndpoint = fixedEndpoint(settings.host, settings.port);
+    const directEndpoint = await fixedEndpoint(settings);
     if (target.instanceId) {
       const live = await probeEndpoint(directEndpoint, settings);
       if (!live || live.instanceId !== target.instanceId) {
@@ -288,7 +309,7 @@ async function selectEndpoint(
     if (target.instanceId) throw instanceNotFound(target.instanceId, []);
     if (!settings.defaultPortFallback) throw noInstanceFound(settings);
     // Backward-compatible final attempt for a pre-registry plugin.
-    return fixedEndpoint(settings.host, settings.port);
+    return await fixedEndpoint(settings);
   }
 
   if (target.instanceId) {
@@ -347,7 +368,7 @@ async function discoverLiveEndpoints(
     !registered.some((endpoint) => endpoint.port === settings.port) &&
     !wasRecentlyRefused(settings.host, settings.port, null)
   ) {
-    const fixed = await probeEndpoint(fixedEndpoint(settings.host, settings.port), settings, null);
+    const fixed = await probeEndpoint(await fixedEndpoint(settings, records), settings, null);
     if (fixed && !registered.some((endpoint) => endpoint.instanceId === fixed.instanceId)) {
       registered.push(fixed);
     }
@@ -376,6 +397,7 @@ async function probeRecords(
             processId: record.processId,
             startedAtUtc: record.startedAtUtc,
             legacy: false,
+            token: record.token,
           },
           settings,
           record.instanceId
@@ -433,7 +455,14 @@ async function readEndpointRecords(directory: string): Promise<EndpointRecord[]>
       const contents = await fs.readFile(path.join(directory, name));
       if (contents.length > MAX_ENDPOINT_RECORD_BYTES) continue;
       const candidate = JSON.parse(contents.toString("utf8"));
-      if (isEndpointRecord(candidate)) records.push(candidate);
+      if (isEndpointRecord(candidate)) {
+        // A token of an unexpected form is dropped, not passed on.
+        const token =
+          typeof candidate.token === "string" && SESSION_TOKEN_PATTERN.test(candidate.token)
+            ? candidate.token
+            : undefined;
+        records.push({ ...candidate, token });
+      }
     } catch {
       // A partial, invalid, or stale local record is ignored and never trusted.
     }
@@ -570,6 +599,8 @@ function readEndpointHealth(payload: Record<string, unknown>): EndpointHealth {
     operationInProgress: payload.operationInProgress === true,
     queueDepth: Number.isInteger(payload.queueDepth) ? (payload.queueDepth as number) : null,
     executionBackend: typeof payload.executionBackend === "string" ? payload.executionBackend : null,
+    authorized: payload.authorized !== false,
+    tokenRequired: typeof payload.tokenRequired === "boolean" ? payload.tokenRequired : null,
   };
 }
 
@@ -725,14 +756,37 @@ function formatCandidates(candidates: EndpointWithIdentity[]): string {
     .join("\n");
 }
 
-function fixedEndpoint(host: string, port: number): LiveEndpoint {
+/**
+ * An endpoint named by host and port alone (CIVIL3D_PORT, or the default
+ * port). Its session token is the CIVIL3D_MCP_TOKEN setting, else the token
+ * of the newest endpoint record of a running process on that port.
+ */
+async function fixedEndpoint(
+  settings: ConnectionSettings,
+  knownRecords?: EndpointRecord[]
+): Promise<LiveEndpoint> {
+  const configured = process.env.CIVIL3D_MCP_TOKEN;
+  let token =
+    configured !== undefined && SESSION_TOKEN_PATTERN.test(configured) ? configured : undefined;
+  if (configured !== undefined && token === undefined) {
+    log.warn("Ignoring CIVIL3D_MCP_TOKEN: not a valid session token");
+  }
+  if (token === undefined && isLocalHost(settings.host)) {
+    // Records come newest first. A record of a running process wins; a
+    // record whose process cannot be seen from here is still better than none.
+    const records = (knownRecords ?? (await readEndpointRecords(settings.endpointDirectory))).filter(
+      (record) => record.port === settings.port && record.token
+    );
+    token = (records.find((record) => isProcessAlive(record.processId)) ?? records[0])?.token;
+  }
   return {
-    host,
-    port,
-    instanceId: `legacy-${port}`,
+    host: settings.host,
+    port: settings.port,
+    instanceId: `legacy-${settings.port}`,
     processId: null,
     startedAtUtc: null,
     legacy: true,
+    token,
   };
 }
 
@@ -742,11 +796,11 @@ function isLocalHost(host: string): boolean {
 }
 
 async function withDirectConnection<T>(
-  endpoint: Pick<LiveEndpoint, "host" | "port">,
+  endpoint: Pick<LiveEndpoint, "host" | "port" | "token">,
   operation: (client: ApplicationClientConnection) => Promise<T>,
   connectTimeoutMs: number
 ): Promise<T> {
-  const appClient = new ApplicationClientConnection(endpoint.host, endpoint.port);
+  const appClient = new ApplicationClientConnection(endpoint.host, endpoint.port, endpoint.token);
 
   try {
     await new Promise<void>((resolve, reject) => {

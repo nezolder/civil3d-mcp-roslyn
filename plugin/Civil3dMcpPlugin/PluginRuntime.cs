@@ -57,6 +57,10 @@ public static class PluginRuntime
   private static readonly IdempotencyRegistry Idempotency = new();
   private static RpcTcpServer? _server;
   private static EndpointRegistration? _endpointRegistration;
+  private static string? _sessionToken;
+
+  /// <summary>Whether requests over the listener must present the session token.</summary>
+  public static bool TokenRequired => SessionAuth.IsRequired;
 
   public static void StartServer()
   {
@@ -67,7 +71,10 @@ public static class PluginRuntime
       EndpointRegistration? registration = null;
       try
       {
-        server = new RpcTcpServer(DefaultPort, HandleRawRequestAsync);
+        // A new token for every listener start; it lives as long as the record.
+        var token = SessionAuth.CreateToken();
+        Volatile.Write(ref _sessionToken, token);
+        server = new RpcTcpServer(DefaultPort, HandleTransportRequestAsync);
         try
         {
           server.Start();
@@ -75,12 +82,12 @@ public static class PluginRuntime
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
         {
           server.Stop();
-          server = new RpcTcpServer(0, HandleRawRequestAsync);
+          server = new RpcTcpServer(0, HandleTransportRequestAsync);
           server.Start();
         }
 
         var boundPort = server.BoundPort;
-        registration = EndpointRegistration.Create(InstanceId, boundPort, StartedAtUtc);
+        registration = EndpointRegistration.Create(InstanceId, boundPort, StartedAtUtc, token);
         Port = boundPort;
         _server = server;
         _endpointRegistration = registration;
@@ -90,6 +97,7 @@ public static class PluginRuntime
         registration?.Dispose();
         server?.Stop();
         Port = DefaultPort;
+        Volatile.Write(ref _sessionToken, null);
         throw;
       }
     }
@@ -104,6 +112,7 @@ public static class PluginRuntime
       _server = null;
       _endpointRegistration = null;
       Port = DefaultPort;
+      Volatile.Write(ref _sessionToken, null);
     }
   }
 
@@ -135,10 +144,26 @@ public static class PluginRuntime
 
   /// <summary>
   /// Parses a raw JSON-RPC request string, dispatches to the appropriate
-  /// command handler, and returns the serialized JSON-RPC response.
+  /// command handler, and returns the serialized JSON-RPC response. This is
+  /// the in-process entry; it asks for no token.
   /// </summary>
-  public static async Task<string> HandleRawRequestAsync(
+  public static Task<string> HandleRawRequestAsync(
     string rawRequest,
+    CancellationToken cancellationToken)
+    => HandleRequestAsync(rawRequest, requireToken: false, cancellationToken);
+
+  /// <summary>
+  /// What the TCP listener calls: the same handling, but a request must
+  /// present this session's token (see <see cref="SessionAuth"/>).
+  /// </summary>
+  internal static Task<string> HandleTransportRequestAsync(
+    string rawRequest,
+    CancellationToken cancellationToken)
+    => HandleRequestAsync(rawRequest, SessionAuth.IsRequired, cancellationToken);
+
+  private static async Task<string> HandleRequestAsync(
+    string rawRequest,
+    bool requireToken,
     CancellationToken cancellationToken)
   {
     JsonNode? parsed;
@@ -164,6 +189,17 @@ public static class PluginRuntime
     if (string.IsNullOrWhiteSpace(method))
     {
       return SerializeError(id, "CIVIL3D.INVALID_INPUT", "JSON-RPC request is missing method.");
+    }
+
+    if (requireToken
+      && !SessionAuth.Matches(Volatile.Read(ref _sessionToken), request[SessionAuth.RequestPropertyName]))
+    {
+      // Health still says that a plugin is here and which build it is, so the
+      // caller can tell "wrong token" from "no Civil 3D". Nothing else runs,
+      // and nothing about the drawing is told.
+      return method == "getCivil3DHealth"
+        ? SerializeResult(id, CommandDispatcher.GetLimitedHealth())
+        : SerializeError(id, SessionAuth.RefusalCode, SessionAuth.RefusalMessage);
     }
 
     // Receipt and journal data of an executeCode request; unused for the rest.
@@ -247,6 +283,13 @@ public static class PluginRuntime
 
     var readOnly = GetOptionalBool(parameters, "readOnly") ?? false;
     if (parameters?.ContainsKey("idempotencyKey") != true) return IdempotencyReservation.None;
+    if (!readOnly && (GetOptionalBool(parameters, "preview") ?? false))
+    {
+      // A preview commits nothing, so it must not use up the key that the
+      // real write will carry. The key is still checked for its form.
+      IdempotencyRegistry.ParseOptionalKey(parameters);
+      return IdempotencyReservation.None;
+    }
     if (readOnly)
     {
       throw new JsonRpcDispatchException(

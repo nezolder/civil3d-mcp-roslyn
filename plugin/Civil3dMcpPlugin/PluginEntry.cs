@@ -61,7 +61,8 @@ public sealed class PluginEntry : IExtensionApplication
       $"Civil3D MCP listener running: {status.IsRunning}; " +
       $"pending: {status.QueueDepth}; " +
       $"active: {status.OperationInProgress}; " +
-      $"current: {status.CurrentOperation ?? "<none>"}"
+      $"current: {status.CurrentOperation ?? "<none>"}; " +
+      $"session token required: {PluginRuntime.TokenRequired}"
     );
   }
 

@@ -1,12 +1,27 @@
 # Published development status
 
-Updated: 2026-11-15
+Updated: 2026-11-24
 
 This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
 
 ## Current catalogue
 
 The catalogue contains **41 skills** with **42 C# templates**; **40** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+
+## What a write changed, preview, and a token on the local connection (2026-11-24)
+
+Three additions around `civil3d_execute`, taken from a comparison with other Civil 3D MCP projects. Live-tested in two rounds on Civil 3D 2025 on disposable drawing copies; the record is `docs/validation/change-list-preview-token-7bc79cd-2026-11-24.md`.
+
+- **Change list in the receipt.** Every committed write now reports, next to `committed` and `saved`, which objects it added, modified and erased: counts by type and the first objects by handle, name and layer (`changes`; `changeItems` sets how many are named). The plugin finds added objects by the handles the drawing gave out during the script, modified and erased ones by the flags of the objects in the script's transaction and by the drawing's own notifications, and reads the drawing again after the commit, so the list does not depend on what the script says about itself. Symbol tables, dictionaries and layout blocks are counted apart. The journal keeps the three counts.
+- **Preview.** `preview: true` runs the same call and keeps nothing: the transaction is abandoned, nothing is saved or backed up, and an `idempotencyKey` is not used up. The checks of the real call still run. The receipt lists what the script would change and says whether everything was taken back (`rolledBack`). The MCP server never sends a preview to a plugin that does not report the feature `preview`, because such a plugin would commit the write.
+- **Session token.** Each plugin session makes up a random 256-bit token, writes it into its endpoint record in the user's profile and runs a request only when the request presents it; the MCP server reads the record and sends the token by itself. A request without it is refused with `CIVIL3D.UNAUTHORIZED` before the drawing is looked at. Health without the token gets a short reply without drawing data, and the status action shows such an instance as `authorized: false`. `CIVIL3D_MCP_REQUIRE_TOKEN=0` in Civil 3D's environment switches the requirement off for an older MCP server.
+
+Evidence boundaries:
+
+- **Proven live (Civil 3D 2025, `7bc79cd`, disposable copies, every write read back):** the list names the right objects for plain entities, layers and Civil 3D objects (alignment, profile from a surface, TIN surface), including what Civil 3D adds by itself (label groups, a hidden feature style) and, for a real write, what it updates at commit (display sets, the settings node, a dependent profile). A preview took back everything, also changes a script made beside its transaction through open-close transactions and `ObjectId.Open`, and a clean drawing stayed clean afterwards, so the real write could still ask for `requireClean` and `backup`. A drawing with unsaved changes kept its mark. A failed script reports `rolledBack: true` and leaves a clean drawing clean. The draw order table is counted under `containers`. The token: refused without it, with a wrong one and with the other instance's token; two instances each served their own drawing. 20000 lines added about 0.6 s to the call.
+- **Fixed after the first live round (`b2e70dc`):** a preview had marked a clean drawing as modified; the draw order table had shown up as modified on most writes; a failed script's receipt had no `changes`.
+- **Unverified in Civil 3D:** corridors and sample lines in the list; Undo after a preview; a failed commit; `CIVIL3D_MCP_REQUIRE_TOKEN=0` and `CIVIL3D_MCP_CHANGE_EVENTS=0`; how much of the overhead is the tracking itself.
+- **Known limits by design:** a preview cannot show what Civil 3D updates only when a change is kept; side effects outside the drawing (files, system variables, queued commands) are not taken back; handle numbers used by a preview are not given back; the token does not separate programs that run as the same user.
 
 ## Measured heights and slopes of survey rows (2026-11-15)
 
