@@ -149,7 +149,7 @@ string SubassemblyName(ObjectId id)
 {
     if (id.IsNull) return null;
     if (subassemblyNames.TryGetValue(id, out var name)) return name;
-    try { name = (Transaction.GetObject(id, OpenMode.ForRead) as Subassembly)?.Name; } catch (System.Exception) { name = null; }
+    try { name = (Transaction.GetObject(id, OpenMode.ForRead) as Autodesk.Civil.DatabaseServices.Subassembly)?.Name; } catch (System.Exception) { name = null; }
     subassemblyNames[id] = name;
     return name;
 }

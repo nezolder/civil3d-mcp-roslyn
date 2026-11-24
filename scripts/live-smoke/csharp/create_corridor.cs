@@ -28,7 +28,7 @@ try
 {
     var laneId = CivilDoc.SubassemblyCollection.ImportStockSubassembly(
         assemblyName + "_Lane", "Subassembly.BasicLane", location);
-    var lane = (Subassembly)Transaction.GetObject(laneId, OpenMode.ForWrite);
+    var lane = (Autodesk.Civil.DatabaseServices.Subassembly)Transaction.GetObject(laneId, OpenMode.ForWrite);
     lane.Side = SubassemblySideType.Right;
     assembly.AddSubassembly(laneId);
     subassemblies.Add(lane.Name);
