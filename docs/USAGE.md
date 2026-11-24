@@ -140,7 +140,9 @@ Rules for the script:
 
 In a series of writes to one drawing, request the backup on the first call only: every
 `backup: true` makes another full copy. `requireClean` can stay on a later call only when the
-previous call also saved; after a write without a save the drawing is not clean.
+previous call also saved; after a write without a save the drawing is not clean. Civil 3D
+may mark it modified just after a save while it updates dependents (profile views, corridors):
+then save once more.
 
 ### Several drawings
 

@@ -370,6 +370,10 @@ Choosing between instances runs no command in any of them. Each plugin remembers
 
 Leave `CIVIL3D_PORT` unset for automatic selection. Setting it deliberately pins the MCP server to that one port for compatibility or diagnostics.
 
+## Live smoke test
+
+`npm run smoke:live -- --start-civil` starts Civil 3D on a new generated test drawing and runs a fixed list of read and write cases through this checkout's server, with a report at the end. Details and safety rules: [`docs/LIVE_SMOKE.md`](docs/LIVE_SMOKE.md).
+
 ## Benchmarking
 
 The phase 2A host-independent recorder, the phase 2A.1 opt-in internal live trace contract, and the phase 2A.2 read-only live runner are documented in [`benchmark/README.md`](benchmark/README.md). None adds an MCP tool, queue, or retry; the 2A.2 runner can invoke only its fixed read-only query when explicitly started.

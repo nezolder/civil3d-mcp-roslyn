@@ -15,6 +15,8 @@ modify a real work project:
   independently.
 - Do not close or restart Civil 3D sessions that someone else is working in.
 - Record what was proven, and on which commit, in `docs/validation/`.
+- The live smoke test ([docs/LIVE_SMOKE.md](docs/LIVE_SMOKE.md)) builds its own test drawing and
+  needs no copy of a work drawing; run it after installing a new plugin and server.
 
 ## Checks before a pull request
 
@@ -22,3 +24,4 @@ modify a real work project:
 - `npm run test:skills` compiles every recipe against the Civil 3D 2025 reference assemblies
   (see [C_References/README.md](C_References/README.md)).
 - `npm run test:mcp`
+- `npm run test:smoke` (the live smoke runner against a simulated Civil 3D)
