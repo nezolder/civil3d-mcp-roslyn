@@ -19,6 +19,8 @@
     "test:transport": "npm run build && node --test tests/transport/*.test.mjs && dotnet run --project tests/transport/Civil3dMcpPlugin.TransportTests.csproj --configuration Release",
     "benchmark": "node build/benchmark/cli.js",
     "test:mcp": "node scripts/mcp-smoke-test.mjs",
+    "test:smoke": "node --test tests/live-smoke/*.test.mjs",
+    "smoke:live": "node scripts/live-smoke.mjs",
     "install:server": "node scripts/install.mjs --server",
     "install:plugin": "node scripts/install.mjs --plugin"
   },

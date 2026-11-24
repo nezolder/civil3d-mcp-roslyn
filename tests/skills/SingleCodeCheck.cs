@@ -90,6 +90,26 @@ internal static class SingleCodeCheck
     Console.WriteLine($"Single code-body check passed {cases.Length} host-free cases (compile only).");
   }
 
+  /// <summary>
+  /// Checks the C# bodies the live smoke test sends (scripts/live-smoke/csharp)
+  /// like any other script body, so they are known to compile before a run.
+  /// </summary>
+  public static void CheckLiveSmokeScripts(string repositoryRoot, IReadOnlyList<MetadataReference> references)
+  {
+    var directory = Path.Combine(repositoryRoot, "scripts", "live-smoke", "csharp");
+    var paths = Directory.EnumerateFiles(directory, "*.cs")
+      .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+      .ToArray();
+    if (paths.Length == 0)
+      throw new InvalidOperationException($"No live smoke test scripts were found in {directory}.");
+    foreach (var path in paths)
+    {
+      if (Check(File.ReadAllText(path), path, references, out var message) != 0)
+        throw new InvalidOperationException("A live smoke test script does not pass the check: " + message);
+    }
+    Console.WriteLine($"The {paths.Length} live smoke test scripts pass the single code check.");
+  }
+
   private static int Check(string code, string path, IReadOnlyList<MetadataReference> references, out string message)
   {
     if (string.IsNullOrWhiteSpace(code))
