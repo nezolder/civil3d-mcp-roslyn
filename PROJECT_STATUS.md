@@ -6,7 +6,22 @@ This repository contains the accepted runtime, six focused engineering recipes w
 
 ## Current catalogue
 
-The catalogue contains **43 skills** with **44 C# templates**; **42** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+The catalogue contains **47 skills** with **48 C# templates**; **46** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+
+## Recipes from the street renovation findings (2026-11-24)
+
+Four new recipes and one new option, for the steps that the field project had done with ad hoc scripts. All compile against the Civil 3D 2025 assemblies; none has run in Civil 3D yet.
+
+- `data_shortcut_folder_audit` (read-only): duplicate keys, two keys on one object, keys whose source object has another name or is gone, missing sources; source drawings are read in side databases.
+- `corridor_section_check` (read-only): built corridor sections at the corridor's or a sample line group's stations; repeated codes on one side, overlapping links, missing shape codes, short links. Codes and lengths are inputs.
+- `add_sample_line_stations_to_corridor` (write): where each sample line crosses each main baseline, a station in every region that holds it. Offset baselines are only listed; the .NET API has no call for them.
+- `create_breaklines_from_survey_strings` (write): surveyed points along the road joined into 3D polylines by code or layer, ties limited in length and sideways jump, optionally one breakline group on a TIN surface.
+- `create_design_profile_from_pvis` has `curveMode: "k"` and `minCurveLength`: curves set by K keep their radius when a tangent moves. Its postcondition refuses a curve whose length does not follow from the K-value, in case Civil 3D reads K in another unit.
+
+Evidence boundaries:
+
+- **Proven offline:** each template compiles as a script against the Civil 3D 2025 assemblies; the catalogue tests bind them by name.
+- **Unverified in Civil 3D:** everything else, including the shortcut XML field names, how `AddStation` shows in `SortedStations` before a rebuild, the K-value unit and the breakline operation count.
 
 ## Field findings from a street renovation project (2026-11-24)
 

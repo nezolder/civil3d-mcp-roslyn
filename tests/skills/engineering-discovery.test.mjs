@@ -11,7 +11,7 @@ test("engineering recipes are discoverable with complete arguments and correct w
   registerSkillsTool(server);
   const client = new Client({ name: "engineering-discovery-client", version: "1" });
   const expected = {
-    create_design_profile_from_pvis: [true, "profiles", ["alignmentHandle", "profileName", "profileStyleName", "profileLabelSetName", "pviData"]],
+    create_design_profile_from_pvis: [true, "profiles", ["alignmentHandle", "profileName", "profileStyleName", "profileLabelSetName", "pviData", "curveMode", "minCurveLength"]],
     create_section_views: [true, "sections", ["groupHandle", "startStation", "endStation", "viewNamePrefix", "styleName", "bandSetStyleName", "originX", "originY", "columns", "gapX", "gapY", "viewLimit"]],
     material_quantity_report: [false, "sections", ["groupHandle", "materialListGuid", "startStation", "endStation", "limit"]],
     compare_surface_elevations: [false, "surfaces", ["surfaceAHandle", "surfaceBHandle", "samplePoints", "tolerance", "detailLimit"]],

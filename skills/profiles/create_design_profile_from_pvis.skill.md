@@ -1,9 +1,9 @@
 ---
 name: create_design_profile_from_pvis
 category: profiles
-description: Create one local design profile from explicit ordered PVIs and optional symmetric parabolic curves
+description: Create one local design profile from explicit ordered PVIs and optional symmetric parabolic curves, each set by its length or by a K-value that keeps its radius when a tangent moves
 requires_write: true
-aliases: ["tervezett hossz-szelvény létrehozása jóváhagyott PVIkből", "create design profile from ordered PVIs and curve lengths", "hossz-szelvény készítése megadott töréspontokból"]
+aliases: ["tervezett hossz-szelvény létrehozása jóváhagyott PVIkből", "create design profile from ordered PVIs and curve lengths", "hossz-szelvény készítése megadott töréspontokból", "lekerekítés K-értékkel kerek sugárral", "vertical curve by K value fixed radius"]
 workflow_tags: ["modeling"]
 tested_civil_version: "2025"
 validation_summary: "Offline + live: three PVIs and one symmetric parabola, save and independent reopen. Broader curves and engineering compliance unverified."
@@ -27,7 +27,15 @@ parameters:
   - name: pviData
     type: array
     required: true
-    description: 2 to 200 ordered station/elevation/curveLength tuples in drawing units
+    description: 2 to 200 ordered station/elevation/curveLength tuples in drawing units; with curveMode k the third value is the K-value instead of the length
+  - name: curveMode
+    type: string
+    required: false
+    description: length (third PVI value is the curve length) or k (third value is the K-value, length per percent of grade change; radius = 100 x K) (default length)
+  - name: minCurveLength
+    type: double
+    required: false
+    description: Refuse any curve shorter than this, in drawing units, including a length that results from a K-value; 0 switches the check off (default 0.0)
 ---
 
 ## Code Template
@@ -38,7 +46,27 @@ var profileName = "NEW_DESIGN_PROFILE_NAME";
 var profileStyleName = "PROFILE_STYLE_NAME";
 var profileLabelSetName = "PROFILE_LABEL_SET_NAME";
 var pviData = new (double station, double elevation, double curveLength)[] { };
+var curveMode = "length";
+var minCurveLength = 0.0;
 var tolerance = 1e-6;
+
+curveMode = (curveMode ?? "").Trim().ToLowerInvariant();
+if (curveMode != "length" && curveMode != "k")
+    return new { success = false, error = "curveMode must be length or k." };
+if (!Double.IsFinite(minCurveLength) || minCurveLength < 0)
+    return new { success = false, error = "minCurveLength must be finite and not negative." };
+var byK = curveMode == "k";
+// With K-values the third value is K; the curve length follows from the grade change in percent.
+var lengths = new double[pviData?.Length ?? 0];
+if (pviData != null)
+    for (var i = 0; i < pviData.Length; i++)
+    {
+        var value = pviData[i].curveLength;
+        if (!byK || value <= 0 || i == 0 || i == pviData.Length - 1) { lengths[i] = value; continue; }
+        var gIn = (pviData[i].elevation - pviData[i - 1].elevation) / (pviData[i].station - pviData[i - 1].station);
+        var gOut = (pviData[i + 1].elevation - pviData[i].elevation) / (pviData[i + 1].station - pviData[i].station);
+        lengths[i] = value * Math.Abs(gOut - gIn) * 100.0;
+    }
 
 var isHandle = new Func<string, bool>(value =>
     !string.IsNullOrWhiteSpace(value)
@@ -61,7 +89,7 @@ for (var i = 0; i < pviData.Length; i++)
     var p = pviData[i];
     if (!Double.IsFinite(p.station) || !Double.IsFinite(p.elevation)
         || !Double.IsFinite(p.curveLength) || p.curveLength < 0)
-        return new { success = false, error = "PVI coordinates and nonnegative curve lengths must be finite." };
+        return new { success = false, error = "PVI coordinates and nonnegative curve lengths or K-values must be finite." };
     if ((i == 0 || i == pviData.Length - 1) && p.curveLength != 0)
         return new { success = false, error = "Endpoint PVIs cannot have vertical curves." };
     if (i > 0)
@@ -71,16 +99,18 @@ for (var i = 0; i < pviData.Length; i++)
         var grade = (p.elevation - previous.elevation) / span;
         if (!Double.IsFinite(span) || span <= tolerance || !Double.IsFinite(grade))
             return new { success = false, error = "PVI stations must be strictly increasing with finite tangent grades." };
-        if (previous.station + previous.curveLength / 2 >= p.station - p.curveLength / 2 - tolerance)
+        if (previous.station + lengths[i - 1] / 2 >= p.station - lengths[i] / 2 - tolerance)
             return new { success = false, error = "Adjacent vertical curves must leave a positive tangent gap." };
     }
     if (p.curveLength > 0 && i > 0 && i < pviData.Length - 1)
     {
         var before = pviData[i - 1];
         var after = pviData[i + 1];
-        if (p.station - p.curveLength / 2 <= before.station + tolerance
-            || p.station + p.curveLength / 2 >= after.station - tolerance)
-            return new { success = false, error = "A symmetric curve must fit strictly between its neighboring PVIs." };
+        if (!Double.IsFinite(lengths[i]) || p.station - lengths[i] / 2 <= before.station + tolerance
+            || p.station + lengths[i] / 2 >= after.station - tolerance)
+            return new { success = false, error = $"The symmetric curve at station {p.station} ({lengths[i]:0.###} long) must fit strictly between its neighboring PVIs." };
+        if (minCurveLength > 0 && lengths[i] < minCurveLength - tolerance)
+            return new { success = false, error = $"The curve at station {p.station} would be {lengths[i]:0.###} long, shorter than minCurveLength {minCurveLength}." };
         var gradeIn = (p.elevation - before.elevation) / (p.station - before.station);
         var gradeOut = (after.elevation - p.elevation) / (after.station - p.station);
         if (!Double.IsFinite(gradeIn) || !Double.IsFinite(gradeOut) || Math.Abs(gradeOut - gradeIn) <= 1e-12)
@@ -121,7 +151,8 @@ if (profile == null) throw new InvalidOperationException("Design-profile creatio
 foreach (var p in pviData) profile.PVIs.AddPVI(p.station, p.elevation);
 for (var i = 1; i < pviData.Length - 1; i++)
     if (pviData[i].curveLength > 0)
-        profile.Entities.AddFreeSymmetricParabolaByPVIAndCurveLength(profile.PVIs[i], pviData[i].curveLength);
+        if (byK) profile.Entities.AddFreeSymmetricParabolaByPVIAndK(profile.PVIs[i], pviData[i].curveLength);
+        else profile.Entities.AddFreeSymmetricParabolaByPVIAndCurveLength(profile.PVIs[i], pviData[i].curveLength);
 
 if (profile.ProfileType != ProfileType.FG || profile.AlignmentId != alignmentId
     || profile.StyleId != styleId || profile.PVIs.Count != pviData.Length
@@ -136,21 +167,28 @@ for (var i = 0; i < pviData.Length; i++)
     var actual = profile.PVIs[i];
     if (Math.Abs(actual.Station - expected.station) > tolerance || Math.Abs(actual.Elevation - expected.elevation) > tolerance)
         throw new InvalidOperationException("The saved geometry would not match the requested PVI coordinates.");
+    double? kValue = null, radius = null;
     if (expected.curveLength > 0)
     {
         var curve = actual.VerticalCurve as ProfileParabolaSymmetric;
-        if (curve == null || Math.Abs(curve.StartStation - (expected.station - expected.curveLength / 2)) > tolerance
-            || Math.Abs(curve.EndStation - (expected.station + expected.curveLength / 2)) > tolerance)
-            throw new InvalidOperationException("A vertical curve failed its type/extent postconditions.");
+        // A K-value read in another unit gives another length; refuse rather than keep a wrong curve.
+        var lengthTolerance = byK ? Math.Max(tolerance, lengths[i] * 1e-6) : tolerance;
+        if (curve == null || Math.Abs(curve.StartStation - (expected.station - lengths[i] / 2)) > lengthTolerance
+            || Math.Abs(curve.EndStation - (expected.station + lengths[i] / 2)) > lengthTolerance)
+            throw new InvalidOperationException(
+                $"The vertical curve at station {expected.station} failed its type/extent postconditions"
+                + (curve == null ? "." : $": expected {lengths[i]:0.######} long, Civil 3D made {curve.EndStation - curve.StartStation:0.######}."));
+        kValue = curve.K;
+        radius = curve.Radius;
     }
-    points.Add(new { station = actual.Station, elevation = actual.Elevation, curveLength = expected.curveLength });
+    points.Add(new { station = actual.Station, elevation = actual.Elevation, curveLength = lengths[i], k = kValue, radius });
 }
 return new {
     success = true, handle = profile.Handle.ToString(), name = profile.Name,
     alignmentHandle = alignment.Handle.ToString(), type = profile.ProfileType.ToString(),
     style = profile.StyleName, units = CivilDoc.Settings.DrawingSettings.UnitZoneSettings.DrawingUnits.ToString(),
     startStation = profile.StartingStation, endStation = profile.EndingStation,
-    pviCount = profile.PVIs.Count, curveCount = pviData.Count(p => p.curveLength > 0), pvis = points
+    pviCount = profile.PVIs.Count, curveCount = pviData.Count(p => p.curveLength > 0), curveMode, pvis = points
 };
 ```
 
@@ -161,4 +199,6 @@ return new {
 - The first scope is a new local FG profile, with straight grades and optional symmetric parabolas. Endpoint curves, coincident grades with curves, touching/overlapping curves and station equations are refused. This does not change an existing profile, corridor, profile view or source alignment.
 - The host owns transaction/rollback/save. A failed postcondition throws before commit. After success, independently query the returned profile handle, PVI coordinates, curve extents, styles, range and `DBMOD=0`; reopen a saved test copy when validating the recipe. Reconcile an uncertain outcome before another write.
 - The PVI/curve API idea is informed by [Mmpasta00's MIT recipe](https://github.com/Mmpasta00/civil3d-mcp/blob/618fe787ca414f551e359eac02cc9fe6c6af61ad/skills/profiles/create_design_profile_from_pvis.skill.md). This implementation is independently written with explicit 2025 API members, preflight and postconditions; it copies no upstream code body.
+- `curveMode: "k"` makes each curve with `AddFreeSymmetricParabolaByPVIAndK`. A curve set by its length keeps the length when a tangent is moved later, so its radius changes; a curve set by K keeps K and the radius (radius = 100 x K, K in length per percent of grade change). The length that follows from K is checked against the neighbouring PVIs and against `minCurveLength` before anything is created, and checked again on the created curve; rounding K to a round radius can make a short curve shorter than a required minimum. Each curve's resulting length, `k` and `radius` are returned.
+- The K-value mode was added after field use in which moving a tangent changed the radius of length-set curves. **Unverified live:** the K mode has not run in Civil 3D yet; its postcondition refuses the curve if Civil 3D reads the K-value in another unit.
 - **Proven in a scoped Civil 3D 2025 live test (2026-10-01):** a new three-PVI FG profile with one 40-unit symmetric parabola survived host-managed save and independent close/reopen. PVI coordinates, curve extents, sampled elevations and `DBMOD=0` matched. Broader curve combinations, road-standard compliance and engineering suitability remain **Unverified**.
