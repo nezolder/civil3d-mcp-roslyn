@@ -8,6 +8,10 @@ This repository contains the accepted runtime, six focused engineering recipes w
 
 The catalogue contains **47 skills** with **48 C# templates**; **46** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
 
+## Code set labels on API section views (2026-11-25)
+
+Live comparison on copies of a field project (`docs/validation/section-view-code-set-labels-2026-11-25.md`): section views created through the .NET API do not show the labels a corridor section's code set style draws (for example in the bottom bands), while views placed with the Civil 3D dialog do. Both create the same objects with the same readable properties; re-applying the style, `REGENALL` and a layout update do not add them, and the .NET API has no setting for it. The `civil` guide topic and the `create_section_view_group` notes now say so, and that `SectionViewGroups.Add` can leave out sample lines exactly at the start and end stations (recipe code not changed yet).
+
 ## Preview receipt after 3D polylines; dependency alerts (2026-11-25)
 
 - **Receipt:** after a preview or a failed script, the plugin checks that nothing the script added is still in the drawing. It used to count every new handle whose id was not marked erased. In the field, a preview that created a layer and 196 3D polylines was reported with `leftAfterPreview: 196` although the layer and the polylines were gone, so the clean mark was not restored. An object now counts only when it can still be opened, is not erased, and its owner is still there and still lists it; an object that cannot be opened for another reason still counts. A nonzero count comes with `leftTypes`, the types of what was left.

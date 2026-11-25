@@ -407,12 +407,13 @@ Seen in live Civil 3D 2025 work. A point not proven by this repository's own tes
 
 ### Section views and profiles
 
-- Section views created through the API (a view group or single views) did not show the code
-  set style labels of corridor points that a view made with the Civil 3D dialog, with the same
-  settings, did. Cause unverified; a likely lead is the corridor point labeling method of
-  section view creation, which the .NET API does not expose.
-  `SectionView.GetSectionCorridorPointLabelGroupIds()` shows which label groups a view has.
-  Check them after creating views and tell the user when they are missing.
+- Section views created through the API (a view group or single views) do not show the labels
+  that the code set style draws on a corridor section (for example point labels set to land in
+  the bottom bands), while a view placed with the Civil 3D dialog does. Seen live in Civil 3D
+  2025: both create the same objects with the same readable properties, and re-applying the
+  code set style, REGENALL or updating the layout does not add them. `SectionCorridorPointLabelGroup`
+  adds separate labels, not these. When such labels matter, the user places those views with
+  the dialog.
 - The .NET API has no call that projects objects into section views; `SectionView` only lists
   existing projection labels. The user runs the Civil 3D command for projecting objects to
   multiple section views, or the script draws static objects.
