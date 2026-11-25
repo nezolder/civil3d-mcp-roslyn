@@ -402,10 +402,10 @@ internal sealed class DrawingChangeTracker : IDisposable
   /// After a preview or a failure nothing the script added may still be in the
   /// drawing. A new handle whose id is not marked erased is not enough to say
   /// so: when a transaction is abandoned, an object that the drawing made by
-  /// itself for a new object (the end marker of a 3D polyline, for example)
+  /// itself for a new object (the end marker of a 3D polyline)
   /// can keep an id that is not marked erased although its owner is gone
-  /// (seen live: one such id per abandoned 3D polyline, with the polylines
-  /// themselves gone). So an object counts only when
+  /// (seen live: the end marker of every abandoned 3D polyline, while the
+  /// polyline and its vertices are marked erased). So an object counts only when
   /// it can still be opened, is not erased, and its owner is still there and
   /// still holds it. An object that cannot be opened for another reason is
   /// counted, so that a doubt never turns into a clean mark.

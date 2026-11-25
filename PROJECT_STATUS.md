@@ -14,7 +14,7 @@ The catalogue contains **47 skills** with **48 C# templates**; **46** of the ski
 - **Live smoke test:** case `W10` previews a new layer with three 3D polylines and expects `rolledBack: true`, the layer and the polylines gone and `DBMOD` 0.
 - **Dependencies:** `npm audit` reported moderate alerts in `hono`, `@hono/node-server` and `ip-address` (through the MCP SDK; the server uses the stdio transport, not the HTTP parts) and in `glob`/`minimatch` (through `rimraf`, used only by `npm run clean`). The lock file now has the fixed versions and `rimraf` is 6.1.4; `npm audit` reports 0.
 
-Evidence boundaries: compiled and tested offline (simulated Civil 3D). Which object the old check counted (likely the end marker the drawing makes for each 3D polyline) is **unverified** until the live run of `W10`.
+Evidence boundaries: **proven live** in Civil 3D 2025 (`docs/validation/preview-receipt-7d6b2d0-2026-11-25.md`): the live smoke test passed with `W10`, and a diagnostic showed that the old check counted the end marker (`AcDbSequenceEnd`) of each abandoned 3D polyline, whose id stays unmarked while its owner is erased. A failed script with 3D polylines (`leftBehind`) and other complex entities were not run live.
 
 ## Recipes from the street renovation findings (2026-11-24)
 
