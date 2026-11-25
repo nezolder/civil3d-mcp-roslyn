@@ -55,6 +55,7 @@ internal static class PluginCoreTests
       ("every write request leaves one journal line without code or result", WriteJournalAsync),
       ("the receipt lists what a write changed, read after the transaction closed", ChangeListReceiptAsync),
       ("a saved write saves again after its command until the drawing stays clean", SaveSettleAsync),
+      ("API notes travel next to the result of a query, a write and a failed script", ApiNotesReplyAsync),
       ("a preview runs the script and keeps nothing: no commit, save, backup or used key", PreviewKeepsNothingAsync),
       ("the listener runs a request only with the session token from its endpoint record", SessionTokenAsync),
       ("the description is shown on the command line as plain text", DescriptionEchoAsync),
@@ -98,7 +99,7 @@ internal static class PluginCoreTests
       SaveAfterCommitOrderingAsync, SaveRequestValidationAsync, SaveFailureCompletesIdempotencyAsync,
       ReadOnlyDrawingSaveAsync, ScriptTimeLimitParameterAsync,
       RequireCleanAsync, BackupBeforeWriteAsync, WriteReceiptAsync, WriteJournalAsync, DescriptionEchoAsync,
-      ChangeListReceiptAsync, SaveSettleAsync, PreviewKeepsNothingAsync,
+      ChangeListReceiptAsync, SaveSettleAsync, ApiNotesReplyAsync, PreviewKeepsNothingAsync,
       SerializedDispatchStatusAsync, RunningScriptProgressAndCancellationAsync, ProgressCleanupAsync,
       HealthBypassesSerializedQueueAsync, ApiLookupBypassesSerializedQueueAsync,
       CancellationAndErrorCleanupAsync, GateWaitMeasurementAsync, ExecuteResultSerializationAsync,
@@ -1884,6 +1885,46 @@ internal static class PluginCoreTests
     AssertCleanStatus();
   }
 
+  private static async Task ApiNotesReplyAsync()
+  {
+    ClearSafetyFiles();
+    var drawingPath = CreateTestDrawingFile("Notes.dwg");
+    var note = new ApiNote("bounded-volumes-raw", "Autodesk.Civil.DatabaseServices.Surface.GetBoundedVolumes", 3,
+      "live", "raw values", null);
+
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.NoteHandler = code => code.Contains("noted", StringComparison.Ordinal) ? new[] { note } : Array.Empty<ApiNote>();
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    var query = JsonNode.Parse(await SendAsync(CreateRequest("notes-query", readOnly: true, code: "noted-query")))!.AsObject();
+    var notes = query["apiNotes"]?.AsArray();
+    Assert(query["result"]?.GetValue<string>() == "noted-query" && notes?.Count == 1,
+      "a query reply carries its notes next to the result, which keeps its shape");
+    Assert(notes![0]!["id"]?.GetValue<string>() == "bounded-volumes-raw"
+      && notes[0]!["member"]?.GetValue<string>() == "Autodesk.Civil.DatabaseServices.Surface.GetBoundedVolumes"
+      && notes[0]!["line"]?.GetValue<int>() == 3 && notes[0]!["source"]?.GetValue<string>() == "live"
+      && notes[0]!["note"]?.GetValue<string>() == "raw values" && notes[0]!.AsObject().ContainsKey("guideTopic"),
+      $"a note names its member, line, source and text, got: {notes.ToJsonString()}");
+
+    var plain = JsonNode.Parse(await SendAsync(CreateRequest("notes-none", readOnly: true, code: "plain")))!.AsObject();
+    Assert(!plain.ContainsKey("apiNotes"), "a script without noted members gets no notes block");
+
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.NoteHandler = _ => new[] { note };
+    RoslynExecutor.Handler = (code, _) => Task.FromResult<object?>(code);
+    var write = JsonNode.Parse(await SendAsync(CreateRequest("notes-write", readOnly: false,
+      includeExpectedDrawing: true, expectedDrawing: Guard(drawingPath, ActualFingerprint), code: "noted-write")))!.AsObject();
+    Assert(write["apiNotes"]?.AsArray().Count == 1 && write["receipt"] != null,
+      "a write reply carries notes and receipt side by side");
+
+    ResetEnvironment(actualPath: drawingPath);
+    RoslynExecutor.NoteHandler = _ => new[] { note };
+    RoslynExecutor.Handler = (_, _) => throw new InvalidOperationException("eNotOpenForWrite");
+    var failed = JsonNode.Parse(await SendAsync(CreateRequest("notes-failed", readOnly: true, code: "noted-failure")))!.AsObject();
+    Assert(failed["error"] != null && failed["apiNotes"]?.AsArray().Count == 1,
+      "a failed script still gets its notes: the failure is often what the note is about");
+    AssertCleanStatus();
+  }
+
   private static string[] ReadJournalLines()
     => Directory.Exists(JournalDirectory)
       ? Directory.GetFiles(JournalDirectory, "*.jsonl").SelectMany(File.ReadAllLines).ToArray()
@@ -2676,7 +2717,7 @@ internal static class PluginCoreTests
       && unknown["build"]?.AsObject().ContainsKey("dirty") == true,
       "a build without a stamp says so instead of inventing a commit");
     Assert(unknown["features"]?.AsArray().Select(item => item?.GetValue<string>()).SequenceEqual(
-      new[] { "activeDrawing", "writeSafety", "images", "changeList", "preview", "sessionToken" }) == true,
+      new[] { "activeDrawing", "writeSafety", "images", "changeList", "preview", "sessionToken", "saveSettle", "apiNotes" }) == true,
       "health lists what this plugin build can do");
 
     // The identity is picked up when the application is idle.

@@ -300,6 +300,9 @@ are imported. Keep it synchronous: a script that uses `await` is rejected.
   refused. It is a guard rail against accidents, not a security boundary.
 - Refused in `civil3d_query` only: `SampleLineGroup.GetSectionSources()`, which needs write
   access (topic `civil`).
+- A reply can carry `{"apiNotes": [...]}`: notes on members the script uses that crashed or
+  misled earlier work (`source` `live`, `field` or `api`). They refuse nothing; read them before
+  trusting the result or sending the call again.
 - Names that exist twice have a default: `DBObject`, `Entity` and `ErrorStatus` are the AutoCAD
   types, `Surface` and `Section` the Civil 3D ones, `Exception` is `System.Exception`. Write the
   full name for the other one, and for other duplicated names such as `Table`. Write

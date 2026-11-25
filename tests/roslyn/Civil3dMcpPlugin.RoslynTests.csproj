@@ -23,6 +23,8 @@
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptDiagnostics.cs" Link="ScriptDiagnostics.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptInstrumentation.cs" Link="ScriptInstrumentation.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ScriptSandbox.cs" Link="ScriptSandbox.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ApiNote.cs" Link="ApiNote.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ApiNotes.cs" Link="ApiNotes.cs" />
     <Compile Include="RoslynTestStubs.cs" />
     <Compile Include="RoslynExecutorTests.cs" />
   </ItemGroup>

@@ -33,6 +33,7 @@ import {
   logOperationSuccess,
 } from "../utils/operationAudit.js";
 import { imageContentBlocks, readResultImages, type ResultImage } from "./resultImages.js";
+import { apiNotesContentBlocks, readApiNotes, type ApiNote } from "./apiNotes.js";
 
 const log = createLogger("ExecuteTool");
 /** Plugin ability behind requireClean and backup; an older plugin would ignore them. */
@@ -207,6 +208,7 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
       ];
       let receipt: Record<string, unknown> | undefined;
       let images: ResultImage[] = [];
+      let apiNotes: ApiNote[] = [];
       try {
         const commandResult = await withApplicationConnection(
           async (client) =>
@@ -235,6 +237,8 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
               (response) => {
                 receipt = readReceipt(response);
                 images = readResultImages(response);
+                // A catalog recipe already handles what a note would say.
+                apiNotes = args.skill ? [] : readApiNotes(response);
               }
             ),
           {
@@ -261,6 +265,7 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
             ...(receipt
               ? [{ type: "text" as const, text: JSON.stringify({ receipt }) }]
               : []),
+            ...apiNotesContentBlocks(apiNotes),
             ...imageContentBlocks(images),
           ],
         };
@@ -275,16 +280,22 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
         const errorResult = createStructuredToolErrorResult(error, "Execution failed: ");
         // A refusal or failure that reached the drawing still reports its state,
         // for example that a write was committed although the save failed.
-        const normalResult = receipt
-          ? {
-              ...errorResult,
-              content: [
-                ...errorResult.content,
-                { type: "text" as const, text: JSON.stringify({ receipt }) },
-              ],
-              structuredContent: { ...errorResult.structuredContent, receipt },
-            }
-          : errorResult;
+        const normalResult =
+          receipt || apiNotes.length > 0
+            ? {
+                ...errorResult,
+                content: [
+                  ...errorResult.content,
+                  ...(receipt ? [{ type: "text" as const, text: JSON.stringify({ receipt }) }] : []),
+                  ...apiNotesContentBlocks(apiNotes),
+                ],
+                structuredContent: {
+                  ...errorResult.structuredContent,
+                  ...(receipt ? { receipt } : {}),
+                  ...(apiNotes.length > 0 ? { apiNotes } : {}),
+                },
+              }
+            : errorResult;
         return withBenchmarkEventMeta(
           normalResult,
           finalizeReturnedPayloadMeasurement(

@@ -47,6 +47,9 @@ internal sealed class ExecutionRecord
   internal DateTimeOffset? FileLastWriteUtc { get; private set; }
   internal long? FileBytes { get; private set; }
 
+  /// <summary>Notes on API members the script uses; sent next to the result, never journaled.</summary>
+  internal List<ApiNote> Notes { get; } = new();
+
   /// <summary>Image files the script returned; sent next to the result, never journaled.</summary>
   internal List<ScriptImagePayload> Images { get; } = new();
 

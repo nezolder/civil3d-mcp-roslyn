@@ -377,6 +377,7 @@ public static class PluginRuntime
         benchmarkMeasurement.ToJsonObject();
     }
     AddReceipt(response, record);
+    AddApiNotes(response, record);
     AddImages(response, record);
     return response.ToJsonString(JsonSerializerOptions);
   }
@@ -401,6 +402,32 @@ public static class PluginRuntime
   }
 
   internal const string ImagesPropertyName = "images";
+
+  /// <summary>
+  /// Notes on API members the script uses travel next to the result, on a
+  /// success and on an error alike: a crash or a wrong value is often what
+  /// the note is about.
+  /// </summary>
+  private static void AddApiNotes(JsonObject response, ExecutionRecord? record)
+  {
+    if (record == null || record.Notes.Count == 0) return;
+    var notes = new JsonArray();
+    foreach (var found in record.Notes)
+    {
+      notes.Add(new JsonObject
+      {
+        ["id"] = found.Id,
+        ["member"] = found.Member,
+        ["line"] = found.Line,
+        ["source"] = found.Source,
+        ["note"] = found.Text,
+        ["guideTopic"] = found.GuideTopic,
+      });
+    }
+    response[ApiNotesPropertyName] = notes;
+  }
+
+  internal const string ApiNotesPropertyName = "apiNotes";
 
   /// <summary>
   /// A write that reached the drawing reports what happened to it next to the
@@ -439,6 +466,7 @@ public static class PluginRuntime
         benchmarkMeasurement.ToJsonObject();
     }
     AddReceipt(response, record);
+    AddApiNotes(response, record);
     return response.ToJsonString(JsonSerializerOptions);
   }
 

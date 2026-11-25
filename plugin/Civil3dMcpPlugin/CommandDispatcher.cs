@@ -73,7 +73,7 @@ public static class CommandDispatcher
       // Run the Roslyn script synchronously within the command context
       // (we're already on the main thread here)
       var rawResult = RoslynExecutor
-        .ExecuteAsync(code, context, benchmarkMeasurement, progress, cancellationToken, timeLimit, readOnly)
+        .ExecuteAsync(code, context, benchmarkMeasurement, progress, cancellationToken, timeLimit, readOnly, record?.Notes)
         .GetAwaiter()
         .GetResult();
       progress?.SetStage(OperationStage.SerializingResult);
@@ -279,7 +279,7 @@ public static class CommandDispatcher
   /// </summary>
   internal static readonly string[] Features =
   {
-    "activeDrawing", "writeSafety", "images", "changeList", "preview", "sessionToken",
+    "activeDrawing", "writeSafety", "images", "changeList", "preview", "sessionToken", "saveSettle", "apiNotes",
   };
 
   /// <summary>
