@@ -121,7 +121,9 @@ export function registerExecuteTool(server: McpServer, options: ScriptSourceOpti
         .describe(
           "When true, save the currently named DWG after the write transaction commits and wait for completion. " +
             "Use this instead of Database.SaveAs or Document.SendStringToExecute(\"QSAVE\") in code. " +
-            "An unsaved drawing must first be named in Civil 3D."
+            "An unsaved drawing must first be named in Civil 3D. " +
+            "If Civil 3D marks the drawing modified again right after the save, the plugin saves again (at most three times); " +
+            "the receipt's saveSettle says how that went."
         ),
       requireClean: z
         .boolean()

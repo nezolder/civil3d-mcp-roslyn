@@ -54,6 +54,7 @@ internal static class PluginCoreTests
       ("a write returns a receipt next to its result and a query does not", WriteReceiptAsync),
       ("every write request leaves one journal line without code or result", WriteJournalAsync),
       ("the receipt lists what a write changed, read after the transaction closed", ChangeListReceiptAsync),
+      ("a saved write saves again after its command until the drawing stays clean", SaveSettleAsync),
       ("a preview runs the script and keeps nothing: no commit, save, backup or used key", PreviewKeepsNothingAsync),
       ("the listener runs a request only with the session token from its endpoint record", SessionTokenAsync),
       ("the description is shown on the command line as plain text", DescriptionEchoAsync),
@@ -97,7 +98,7 @@ internal static class PluginCoreTests
       SaveAfterCommitOrderingAsync, SaveRequestValidationAsync, SaveFailureCompletesIdempotencyAsync,
       ReadOnlyDrawingSaveAsync, ScriptTimeLimitParameterAsync,
       RequireCleanAsync, BackupBeforeWriteAsync, WriteReceiptAsync, WriteJournalAsync, DescriptionEchoAsync,
-      ChangeListReceiptAsync, PreviewKeepsNothingAsync,
+      ChangeListReceiptAsync, SaveSettleAsync, PreviewKeepsNothingAsync,
       SerializedDispatchStatusAsync, RunningScriptProgressAndCancellationAsync, ProgressCleanupAsync,
       HealthBypassesSerializedQueueAsync, ApiLookupBypassesSerializedQueueAsync,
       CancellationAndErrorCleanupAsync, GateWaitMeasurementAsync, ExecuteResultSerializationAsync,
@@ -1766,6 +1767,123 @@ internal static class PluginCoreTests
     return request.ToJsonString();
   }
 
+  private static async Task SaveSettleAsync()
+  {
+    ClearSafetyFiles();
+    var drawingPath = CreateTestDrawingFile("Settle.dwg");
+    var settleOn = new CivilExecution.SaveSettleOptions(3, TimeSpan.Zero);
+
+    // Sends one saved write; every save of the drawing runs onSave(saveNumber).
+    async Task<JsonObject> SavedWrite(string id, Action<int> onSave, bool saveDrawing = true)
+    {
+      ResetEnvironment(actualPath: drawingPath);
+      CivilExecution.SaveSettleOverrideForTests = settleOn;
+      RoslynExecutor.Handler = (code, _) =>
+      {
+        Application.DbMod = 1;
+        return Task.FromResult<object?>(code);
+      };
+      var saves = 0;
+      CurrentDatabase.BeforeSaveAs = () => onSave(++saves);
+      return JsonNode.Parse(await SendAsync(CreateRequest(
+        id,
+        readOnly: false,
+        includeExpectedDrawing: true,
+        expectedDrawing: Guard(drawingPath, ActualFingerprint),
+        code: id,
+        saveDrawing: saveDrawing)))!.AsObject();
+    }
+
+    // Civil 3D marks the drawing modified again after the first save; the
+    // second save leaves it clean.
+    ClearSafetyFiles();
+    drawingPath = CreateTestDrawingFile("Settle.dwg");
+    var remarked = await SavedWrite("settle-remarked", save => Application.DbMod = save == 1 ? 1 : 0);
+    Assert(remarked["result"]?.GetValue<string>() == "settle-remarked" && remarked["error"] == null,
+      "a settled save is still a plain successful write");
+    var receipt = remarked["receipt"]!.AsObject();
+    var settle = receipt["saveSettle"]!.AsObject();
+    Assert(CurrentDatabase.SaveAsCallCount == 2, $"one extra save expected, got {CurrentDatabase.SaveAsCallCount - 1}");
+    Assert(receipt["saved"]?.GetValue<bool>() == true && receipt["dbmodAfter"]?.GetValue<int>() == 0,
+      "the receipt reports the final, clean state");
+    Assert(settle["clean"]?.GetValue<bool>() == true && settle["checks"]?.GetValue<int>() == 2
+      && settle["extraSaves"]?.GetValue<int>() == 1 && settle["dbmodAfterFirstSave"]?.GetValue<int>() == 1
+      && settle["stopped"] == null,
+      $"the receipt says how the save settled, got: {settle.ToJsonString()}");
+    Assert(_modalHost == null || CurrentDocument.LastQueuedCommand == ModalCommandAdmission.ReadCommandName,
+      "the extra save changes no object, so it runs under the command without an Undo step");
+    var line = JsonNode.Parse(ReadJournalLines().Single())!.AsObject();
+    Assert(line["extraSaves"]?.GetValue<int>() == 1 && line["settledClean"]?.GetValue<bool>() == true
+      && line["dbmodAfter"]?.GetValue<int>() == 0,
+      "the journal line has the final state and the extra saves");
+    AssertCleanStatus();
+
+    // Clean at the first look: no extra save.
+    ClearSafetyFiles();
+    drawingPath = CreateTestDrawingFile("Settle.dwg");
+    var clean = await SavedWrite("settle-clean", _ => Application.DbMod = 0);
+    settle = clean["receipt"]!["saveSettle"]!.AsObject();
+    Assert(CurrentDatabase.SaveAsCallCount == 1 && settle["clean"]?.GetValue<bool>() == true
+      && settle["checks"]?.GetValue<int>() == 1 && settle["extraSaves"]?.GetValue<int>() == 0,
+      $"a drawing that stays clean is saved once, got: {settle.ToJsonString()}");
+
+    // Never clean: three extra saves, then the receipt says it is still marked.
+    ClearSafetyFiles();
+    drawingPath = CreateTestDrawingFile("Settle.dwg");
+    var stubborn = await SavedWrite("settle-stubborn", _ => Application.DbMod = 1);
+    receipt = stubborn["receipt"]!.AsObject();
+    settle = receipt["saveSettle"]!.AsObject();
+    Assert(stubborn["error"] == null && CurrentDatabase.SaveAsCallCount == 4,
+      $"at most three extra saves, and the write stays successful; saves: {CurrentDatabase.SaveAsCallCount}");
+    Assert(settle["clean"]?.GetValue<bool>() == false && settle["checks"]?.GetValue<int>() == 4
+      && settle["stopped"]?.GetValue<string>() == "extraSaveLimitReached"
+      && receipt["dbmodAfter"]?.GetValue<int>() == 1,
+      $"the receipt says the drawing did not stay clean, got: {settle.ToJsonString()}");
+
+    // A failing extra save does not turn the saved write into an error.
+    ClearSafetyFiles();
+    drawingPath = CreateTestDrawingFile("Settle.dwg");
+    var failing = await SavedWrite("settle-failing", save =>
+    {
+      Application.DbMod = 1;
+      if (save == 2) throw new InvalidOperationException("file locked");
+    });
+    receipt = failing["receipt"]!.AsObject();
+    settle = receipt["saveSettle"]!.AsObject();
+    Assert(failing["error"] == null && receipt["saved"]?.GetValue<bool>() == true
+      && settle["stopped"]?.GetValue<string>() == "extraSaveFailed"
+      && settle["saveError"]?.GetValue<string>() == "file locked"
+      && settle["extraSaves"]?.GetValue<int>() == 0 && receipt["dbmodAfter"]?.GetValue<int>() == 1,
+      $"a failed extra save is reported and stops the settle, got: {settle.ToJsonString()}");
+
+    // The user switched to another drawing: that one is never saved.
+    ClearSafetyFiles();
+    drawingPath = CreateTestDrawingFile("Settle.dwg");
+    var other = new Document(new Database { Filename = CreateTestDrawingFile("Other.dwg"), FingerprintGuid = Guid.NewGuid().ToString("B") });
+    Document? written = null;
+    var switched = await SavedWrite("settle-switched", _ =>
+    {
+      Application.DbMod = 1;
+      written = CurrentDocument;
+      Application.DocumentManager.MdiActiveDocument = other;
+      _modalHost?.Attach(other);
+    });
+    settle = switched["receipt"]!["saveSettle"]!.AsObject();
+    Assert(written!.Database.SaveAsCallCount == 1 && other.Database.SaveAsCallCount == 0,
+      "only the written drawing was saved, and only once");
+    Assert(settle["stopped"]?.GetValue<string>() == "activeDrawingChanged" && settle["extraSaves"]?.GetValue<int>() == 0,
+      $"the receipt says the active drawing changed, got: {settle.ToJsonString()}");
+    Application.DocumentManager.MdiActiveDocument = written;
+
+    // Without saveDrawing nothing is settled.
+    ClearSafetyFiles();
+    drawingPath = CreateTestDrawingFile("Settle.dwg");
+    var unsaved = await SavedWrite("settle-unsaved", _ => { }, saveDrawing: false);
+    Assert(unsaved["receipt"]!["saveSettle"] == null && CurrentDatabase.SaveAsCallCount == 0,
+      "a write without saveDrawing is not saved afterwards either");
+    AssertCleanStatus();
+  }
+
   private static string[] ReadJournalLines()
     => Directory.Exists(JournalDirectory)
       ? Directory.GetFiles(JournalDirectory, "*.jsonl").SelectMany(File.ReadAllLines).ToArray()
@@ -3404,6 +3522,7 @@ internal static class PluginCoreTests
     bool? dwgTitled = null)
   {
     CivilExecution.UseNativeBackendOverrideForTests = _modalHost == null;
+    CivilExecution.SaveSettleOverrideForTests = CivilExecution.SaveSettleOptions.Off;
     Application.DocumentManager.BeforeCommandContextAsync = null;
     Application.DocumentManager.AfterCommandContextAsync = null;
     Application.DocumentManager.CommandContextScheduleException = null;

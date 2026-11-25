@@ -19,6 +19,7 @@ internal enum OperationStage
   DisposingDocumentLock,
   SavingDrawing,
   WaitingForCommandContextCompletion,
+  SettlingSave,
   ReturningResult,
 }
 

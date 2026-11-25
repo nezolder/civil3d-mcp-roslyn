@@ -696,6 +696,7 @@ export async function runSmoke(deps) {
     const receipt = result.receipt ?? {};
     const changes = receipt.changes ?? {};
     details.backupPath = receipt.backupPath;
+    details.saveSettle = receipt.saveSettle;
     details.changes = { added: changes.added?.byType, modified: changes.modified?.byType };
     check(typeof receipt.backupPath === "string" && deps.fileExists(receipt.backupPath), "the backup copy is missing", problems);
     check(changes.added?.byType?.Line === 1, "the receipt does not list the one new line", problems);

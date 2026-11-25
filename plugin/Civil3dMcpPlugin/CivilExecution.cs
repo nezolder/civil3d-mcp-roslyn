@@ -19,6 +19,20 @@ public static class CivilExecution
     "native", StringComparison.OrdinalIgnoreCase);
   internal static bool? UseNativeBackendOverrideForTests { get; set; }
   internal static bool UseNativeBackend => UseNativeBackendOverrideForTests ?? NativeBackendConfigured;
+
+  /// <summary>
+  /// How a saved write makes sure the drawing stays saved: up to this many
+  /// extra saves, each after a pause in which Civil 3D can finish its own
+  /// updates. A negative count turns the step off (most tests drive one
+  /// command by hand and set it off; the settle tests turn it on).
+  /// </summary>
+  internal sealed record SaveSettleOptions(int MaxExtraSaves, TimeSpan Delay)
+  {
+    internal static readonly SaveSettleOptions Off = new(-1, TimeSpan.Zero);
+  }
+  private static readonly SaveSettleOptions DefaultSaveSettle = new(3, TimeSpan.FromSeconds(1));
+  internal static SaveSettleOptions? SaveSettleOverrideForTests { get; set; }
+  private static SaveSettleOptions SaveSettle => SaveSettleOverrideForTests ?? DefaultSaveSettle;
   /// <summary>
   /// Execute an operation within a proper document lock and transaction.
   /// If <paramref name="write"/> is true, the transaction is committed.
@@ -41,6 +55,9 @@ public static class CivilExecution
     T? result = default;
     Exception? capturedException = null;
     var operationCommitted = false;
+    // Set once the first save went through: which drawing, so that the
+    // settle step after the command saves the same one or nothing.
+    SavedDrawing? savedDrawing = null;
     var commandContextRequestedAt = benchmarkMeasurement == null
       ? (long?)null
       : Stopwatch.GetTimestamp();
@@ -195,14 +212,10 @@ public static class CivilExecution
             progress?.RecordSave(null);
             // Saving inside the Roslyn transaction can fail with eFilerError.
             // Run it only after both the transaction and document lock are disposed.
-            database.SaveAs(
-              database.Filename,
-              true,
-              database.OriginalFileVersion,
-              database.SecurityParameters
-            );
+            SaveDatabase(database);
             progress?.RecordSave(true);
             if (writeRecord != null) writeRecord.Saved = true;
+            savedDrawing = new SavedDrawing(doc, database.Filename, database.FingerprintGuid.ToString());
           }
           catch (Exception ex)
           {
@@ -258,6 +271,18 @@ public static class CivilExecution
         ExecuteBody, commandContextStartCancellationToken, () => operationCommitted, readOnly: !write);
     }
 
+    // Civil 3D can mark the drawing modified again right after the command
+    // that saved it, when it updates objects that depend on what the write
+    // changed (seen live: 40-60 ms after a save of a write to an alignment
+    // with profiles, views and a corridor). Save again until it stays clean,
+    // so that the receipt's dbmodAfter is the final state.
+    if (capturedException == null && savedDrawing != null && SaveSettle.MaxExtraSaves >= 0)
+    {
+      progress?.SetStage(OperationStage.SettlingSave);
+      var settle = await SettleSaveAsync(savedDrawing, write ? record : null).ConfigureAwait(false);
+      if (write && record != null) record.SaveSettle = settle;
+    }
+
     progress?.SetStage(OperationStage.ReturningResult);
 
     if (capturedException != null)
@@ -267,6 +292,117 @@ public static class CivilExecution
 
     return result!;
   }
+
+  private sealed record SavedDrawing(Document Document, string Filename, string FingerprintGuid);
+
+  /// <summary>
+  /// After the command of a saved write has ended: wait, read DBMOD, and save
+  /// again while the drawing is marked modified, at most
+  /// <see cref="SaveSettleOptions.MaxExtraSaves"/> times. Each step runs in a
+  /// command of its own on the main thread, so Civil 3D finishes its updates
+  /// in between. Only the drawing that was saved is ever saved again; when
+  /// the active drawing is another one, or a step cannot start, it stops and
+  /// says so. A failure here never turns the finished write into an error.
+  /// The operation gate is still held, so no other request runs in between.
+  /// </summary>
+  private static async Task<SaveSettleReport> SettleSaveAsync(SavedDrawing saved, ExecutionRecord? record)
+  {
+    var options = SaveSettle;
+    var report = new SaveSettleReport { DbmodAfterFirstSave = record?.DbmodAfter };
+    for (var round = 0; round <= options.MaxExtraSaves; round++)
+    {
+      if (options.Delay > TimeSpan.Zero) await Task.Delay(options.Delay).ConfigureAwait(false);
+      var allowSave = round < options.MaxExtraSaves;
+      try
+      {
+        await RunOnMainThreadAsync(() => SettleStep(saved, allowSave, report)).ConfigureAwait(false);
+      }
+      catch (Exception)
+      {
+        // The step did not start (another command or prompt holds Civil 3D)
+        // or ended badly; the drawing was not saved again by it.
+        report.Stopped ??= SaveSettleReport.StepNotRun;
+      }
+      if (report.Clean || report.Stopped != null) break;
+    }
+
+    if (record != null)
+    {
+      if (report.LastDbmod is int last) record.DbmodAfter = last;
+      if (report.ExtraSaves > 0) record.RecordFile(saved.Filename);
+    }
+    return report;
+  }
+
+  private static void SettleStep(SavedDrawing saved, bool allowSave, SaveSettleReport report)
+  {
+    report.Checks++;
+    var active = App.DocumentManager.MdiActiveDocument;
+    var database = saved.Document.Database;
+    if (!ReferenceEquals(active, saved.Document)
+      || !string.Equals(database.Filename, saved.Filename, StringComparison.Ordinal)
+      || !string.Equals(database.FingerprintGuid.ToString(), saved.FingerprintGuid, StringComparison.Ordinal))
+    {
+      report.Stopped = SaveSettleReport.DrawingChanged;
+      return;
+    }
+
+    var dbmod = TryReadDbmod();
+    report.LastDbmod = dbmod;
+    if (dbmod == null)
+    {
+      report.Stopped = SaveSettleReport.DbmodUnreadable;
+      return;
+    }
+    if (dbmod == 0)
+    {
+      report.Clean = true;
+      return;
+    }
+    if (!allowSave)
+    {
+      report.Stopped = SaveSettleReport.LimitReached;
+      return;
+    }
+
+    try
+    {
+      SaveDatabase(database);
+      report.ExtraSaves++;
+    }
+    catch (Exception ex)
+    {
+      report.Stopped = SaveSettleReport.SaveFailed;
+      report.SaveError = ExecutionRecord.ToSingleLine(ex.Message, 200);
+    }
+    report.LastDbmod = TryReadDbmod();
+  }
+
+  /// <summary>
+  /// A settle step changes no object, so it runs under the read command,
+  /// which leaves no Undo step between the write and the user's next Ctrl+Z.
+  /// </summary>
+  private static Task RunOnMainThreadAsync(Action step)
+  {
+    if (UseNativeBackend)
+    {
+      return CommandContextAdmission.ExecuteAsync(App.DocumentManager, async _ =>
+      {
+        step();
+        await Task.CompletedTask;
+      }, null, CancellationToken.None);
+    }
+    return ModalCommandAdmission.ExecuteAsync(step, CancellationToken.None, () => false, readOnly: true);
+  }
+
+  /// <summary>Saves the drawing to its own file in its own format.</summary>
+  private static void SaveDatabase(Database database)
+    => database.SaveAs(
+      database.Filename,
+      true,
+      database.OriginalFileVersion,
+      database.SecurityParameters
+    );
 
   /// <summary>
   /// Runs before the document lock and the script: notes the unsaved-changes
