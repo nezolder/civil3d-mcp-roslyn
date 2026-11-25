@@ -8,6 +8,12 @@ This repository contains the accepted runtime, six focused engineering recipes w
 
 The catalogue contains **50 skills** with **51 C# templates**; **49** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
 
+## Section view group station range (2026-11-25)
+
+`create_section_view_group` now passes `SectionViewGroups.Add` a station range 0.01 units wider than the selected sample lines on each side (at most a third of the gap to an unselected neighbour, never beyond the alignment) and reports it as `stationRange.passedToCivil`; the `section-view-group-end-stations` API note says the same.
+
+Evidence boundaries: **proven live** in Civil 3D 2025 on the generated smoke drawing (`docs/validation/section-view-group-range-cd55b87-2026-11-25.md`): `Add` with exactly 100 to 200 left out the line at 100, with 99.99 to 200.01 it kept both; a start 0.01 before the alignment start throws; the recipe made 6 views for 100 to 200 and 20 for the whole group, both end lines included, saved clean and read back. **Unverified:** template placement with the padded range.
+
 ## Save until clean, corridor read recipes, API notes (2026-11-25)
 
 - **Save until clean:** Civil 3D can mark a drawing modified again right after the command that saved it, when it updates objects that depend on the written ones (seen in the live smoke runs, `W2b`). After a saved write the plugin now waits a second, reads `DBMOD` in a command of its own (the read command, no Undo step) and saves again while the drawing is marked, at most three times, so the receipt's `dbmodAfter` is the final state. Only the drawing that was written is saved again; the step stops when another drawing is active, a save fails or the step cannot start, and it never turns the finished write into an error. The receipt has a `saveSettle` block (`clean`, `checks`, `extraSaves`, `dbmodAfterFirstSave`, `stopped`), the journal line `extraSaves` and `settledClean`. Re-marking that comes much later (section views after about 30 seconds) is not covered.
@@ -19,7 +25,7 @@ Evidence boundaries: **proven live** in Civil 3D 2025 on the generated smoke dra
 
 ## Code set labels on API section views (2026-11-25)
 
-Live comparison on copies of a field project (`docs/validation/section-view-code-set-labels-2026-11-25.md`): section views created through the .NET API do not show the labels a corridor section's code set style draws (for example in the bottom bands), while views placed with the Civil 3D dialog do. Both create the same objects with the same readable properties; re-applying the style, `REGENALL` and a layout update do not add them, and the .NET API has no setting for it. The `civil` guide topic and the `create_section_view_group` notes now say so, and that `SectionViewGroups.Add` can leave out sample lines exactly at the start and end stations (recipe code not changed yet).
+Live comparison on copies of a field project (`docs/validation/section-view-code-set-labels-2026-11-25.md`): section views created through the .NET API do not show the labels a corridor section's code set style draws (for example in the bottom bands), while views placed with the Civil 3D dialog do. Both create the same objects with the same readable properties; re-applying the style, `REGENALL` and a layout update do not add them, and the .NET API has no setting for it. The `civil` guide topic and the `create_section_view_group` notes now say so, and that `SectionViewGroups.Add` can leave out sample lines exactly at the start and end stations (recipe code changed afterwards, see above).
 
 ## Preview receipt after 3D polylines; dependency alerts (2026-11-25)
 
