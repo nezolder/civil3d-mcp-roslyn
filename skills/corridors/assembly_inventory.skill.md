@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["szerelvények és alszerelvények listája paraméterekkel", "assembly and subassembly inventory with parameters", "melyik régió melyik szerelvényt használja", "assembly usage by corridor region"]
 workflow_tags: ["source_state", "audit"]
 tested_civil_version: "2025"
-validation_summary: "Offline: compiles against the Civil 3D 2025 API. Not yet run in Civil 3D."
+validation_summary: "Live (Civil 3D 2025, generated smoke drawing): one assembly with two stock BasicLane subassemblies, parameters by key and the using region read, DBMOD unchanged. Composer subassemblies and several assemblies unverified."
 parameters:
   - name: assemblyName
     type: string

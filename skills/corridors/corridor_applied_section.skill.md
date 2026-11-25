@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["korridor keresztszelvény pontjai linkjei egy szelvényben", "applied corridor section at a station points links shapes", "beépített szerelvény adott szelvényben", "corridor section geometry by code at station"]
 workflow_tags: ["geometry_query", "source_state"]
 tested_civil_version: "2025"
-validation_summary: "Offline: compiles against the Civil 3D 2025 API. Not yet run in Civil 3D."
+validation_summary: "Live (Civil 3D 2025, generated smoke drawing): station 50 read, crown elevation equal to the design profile, -2 % lanes, shape area; off-station reply names neighbours; DBMOD unchanged. Composer subassemblies unverified."
 parameters:
   - name: corridorHandle
     type: string

@@ -6,7 +6,7 @@ requires_write: false
 aliases: ["korridor régiók szerelvény és gyakoriság listája", "corridor regions with assembly frequency and stations", "régiók közötti hézag és átfedés ellenőrzése", "corridor region gap and overlap check"]
 workflow_tags: ["source_state", "audit"]
 tested_civil_version: "2025"
-validation_summary: "Offline: compiles against the Civil 3D 2025 API. Not yet run in Civil 3D."
+validation_summary: "Live (Civil 3D 2025, generated smoke drawing): one region, 21 built stations, frequency and spacing read, no gap finding, DBMOD unchanged. Several regions, gaps, targets and offset baselines unverified."
 parameters:
   - name: corridorHandle
     type: string
