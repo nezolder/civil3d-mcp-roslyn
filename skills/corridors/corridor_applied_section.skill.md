@@ -144,7 +144,15 @@ foreach (AppliedSubassembly sub in applied.GetAppliedSubassemblies())
         Count(codes);
         if (!Wanted(codes) || !Room()) continue;
         var soe = point.StationOffsetElevationToBaseline;
-        points.Add(new { codes, offset = Math.Round(soe.Y, 4), elevation = Math.Round(soe.Z, 4), x = Math.Round(point.XYZ.X, 4), y = Math.Round(point.XYZ.Y, 4) });
+        points.Add(new
+        {
+            codes,
+            offset = Math.Round(soe.Y, 4),
+            elevation = Math.Round(point.XYZ.Z, 4),
+            elevationToBaseline = Math.Round(soe.Z, 4),
+            x = Math.Round(point.XYZ.X, 4),
+            y = Math.Round(point.XYZ.Y, 4)
+        });
     }
 
     var links = new List<object>();
@@ -154,7 +162,8 @@ foreach (AppliedSubassembly sub in applied.GetAppliedSubassemblies())
         Count(codes);
         if (!Wanted(codes)) continue;
         var pts = new List<Point3d>();
-        foreach (CalculatedPoint p in link.CalculatedPoints) pts.Add(p.StationOffsetElevationToBaseline);
+        var absolute = new List<double>();
+        foreach (CalculatedPoint p in link.CalculatedPoints) { pts.Add(p.StationOffsetElevationToBaseline); absolute.Add(p.XYZ.Z); }
         if (pts.Count < 2 || !Room()) continue;
         double length = 0;
         for (var i = 1; i < pts.Count; i++)
@@ -168,9 +177,9 @@ foreach (AppliedSubassembly sub in applied.GetAppliedSubassemblies())
         {
             codes,
             startOffset = Math.Round(pts[0].Y, 4),
-            startElevation = Math.Round(pts[0].Z, 4),
+            startElevation = Math.Round(absolute[0], 4),
             endOffset = Math.Round(pts[pts.Count - 1].Y, 4),
-            endElevation = Math.Round(pts[pts.Count - 1].Z, 4),
+            endElevation = Math.Round(absolute[absolute.Count - 1], 4),
             pointCount = pts.Count,
             length = Math.Round(length, 4),
             slopeOutwardPercent = run > 1e-9 ? Math.Round((outer.Z - inner.Z) / run * 100, 3) : (double?)null
@@ -192,7 +201,7 @@ foreach (AppliedSubassembly sub in applied.GetAppliedSubassemblies())
         name = subName,
         handle = sub.SubassemblyId.IsNull ? null : sub.SubassemblyId.Handle.ToString(),
         originOffset = Math.Round(origin.Y, 4),
-        originElevation = Math.Round(origin.Z, 4),
+        originElevationToBaseline = Math.Round(origin.Z, 4),
         points,
         links,
         shapes
@@ -223,7 +232,7 @@ return new
 
 - Read-only: it reads the corridor as last built and changes nothing. With `corridorOutOfDate` true the section is the old build; ask the user to rebuild first.
 - The section is read at a built corridor station. A station within `stationSnapTolerance` of one is read there (`snapped: true`); otherwise the reply names the built stations before and after. `add_sample_line_stations_to_corridor` adds a station to the regions.
-- Offsets and elevations are relative to the baseline: negative offset is left. `x` and `y` of a point are drawing coordinates. A link's `slopeOutwardPercent` runs from its end nearer the baseline to the end farther out, so a negative value falls away from the baseline; a vertical link has none.
+- `offset` is measured from the baseline: negative is left. `elevation`, `startElevation` and `endElevation` are drawing elevations (from the point's XYZ); `elevationToBaseline` and `originElevationToBaseline` are relative to the baseline's profile point at that station. `x` and `y` of a point are drawing coordinates. A link's `slopeOutwardPercent` runs from its end nearer the baseline to the end farther out, so a negative value falls away from the baseline; a vertical link has none.
 - `adjustedElevation` is `null` where Civil 3D cannot give it ("Cannot get adjusted elevation", seen live on a plain corridor along a design profile).
 - `codesAtStation` counts every code at the station, also those left out by `codeFilter`; run once without a filter to learn the drawing's codes. Uncoded points and links are left out unless `includeUncoded` is true.
 - The parameter values applied at the station (`AppliedSubassembly.Parameters`) are deliberately not read: reading them where a parameter is overridden for a station range has crashed Civil 3D in field use. The geometry here is what those values produced.
