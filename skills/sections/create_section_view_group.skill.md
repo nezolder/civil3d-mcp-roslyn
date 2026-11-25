@@ -155,6 +155,22 @@ var selected = lines.Where(l => l.Station >= firstStation - 1e-6 && l.Station <=
 if (lastStation < firstStation || selected.Count == 0 || selected.Count > 1000)
     return new { success = false, error = "The station range must select 1 to 1000 sample lines.", selected = selected.Count };
 
+// SectionViewGroups.Add can leave out a sample line that sits exactly on the start or end station it is given.
+// Pass Civil 3D a range slightly wider than the selected lines: 0.01 units, at most a third of the gap to an
+// unselected neighbour, and not beyond the alignment.
+const double rangePad = 0.01;
+var selectedFirst = selected[0].Station;
+var selectedLast = selected[selected.Count - 1].Station;
+var below = lines.Where(l => l.Station < selectedFirst - 1e-6).Select(l => l.Station).DefaultIfEmpty(double.NegativeInfinity).Max();
+var above = lines.Where(l => l.Station > selectedLast + 1e-6).Select(l => l.Station).DefaultIfEmpty(double.PositiveInfinity).Min();
+var addStart = selectedFirst - Math.Min(rangePad, (selectedFirst - below) / 3);
+var addEnd = selectedLast + Math.Min(rangePad, (above - selectedLast) / 3);
+if (!group.ParentAlignmentId.IsNull && Transaction.GetObject(group.ParentAlignmentId, OpenMode.ForRead) is Alignment parentAlignment)
+{
+    addStart = Math.Max(addStart, Math.Min(selectedFirst, parentAlignment.StartingStation));
+    addEnd = Math.Min(addEnd, Math.Max(selectedLast, parentAlignment.EndingStation));
+}
+
 ObjectId LookupStyle(Func<ObjectId> lookup)
 {
     try { return lookup(); }
@@ -289,7 +305,7 @@ using (var range = new SectionViewGroupCreationRangeOptions(group.ObjectId))
         range.Elevation = elevationHeight;
         range.ElevationRangeType = SectionViewElevationRangeType.LowestElevation;
     }
-    viewGroup = group.SectionViewGroups.Add(new Point3d(insertionX, insertionY, 0), firstStation, lastStation, range, placement);
+    viewGroup = group.SectionViewGroups.Add(new Point3d(insertionX, insertionY, 0), addStart, addEnd, range, placement);
 }
 if (viewGroup == null || viewGroup.IsIndividual)
     throw new InvalidOperationException("Civil 3D did not create a native section view group.");
@@ -428,7 +444,7 @@ return new {
         modelHeight = sheetViewport.Value.heightMm / sheetViewport.Value.customScale
     },
     sheetFit,
-    stationRange = new { first = firstStation, last = lastStation },
+    stationRange = new { first = firstStation, last = lastStation, passedToCivil = new { start = addStart, end = addEnd } },
     leftToRightByStation = steps.All(step => step > 0),
     views = ordered.Select(v => new {
         name = v.view.Name,
@@ -460,6 +476,6 @@ return new {
 - `bandSources` rewires bottom bands after the band set import: give each band's section sources by section source handle (for example the existing ground surface) and whether its labels show. Hide design bands with `showLabels: false` until a design section exists, then point them to the design source and show them. `firstViewBottomBands` shows the result for the first view.
 - With `viewNamePrefix` views are renamed to the prefix plus their sample line's actual station, for example `KSZ_GK_014.01`, after checking that no name collides.
 - Code set labels: views created here do not show the labels that the corridor section's code set style draws (for example point labels set to land in the bottom bands); views placed with the Civil 3D dialog do. Proven live in Civil 3D 2025: same objects and the same readable properties, and re-applying the code set style, REGENALL or updating the layout does not add them; the .NET API has no setting for it. When the user's sheets rely on such labels, say so before creating views and leave those views to the dialog.
-- Station range: `SectionViewGroups.Add` can leave out sample lines exactly at the start and end stations (seen live once, in a direct script: 100 to 200 gave only 150). This recipe then stops with "Expected one view per selected sample line" and keeps nothing; give `startStation` and `endStation` slightly outside the wanted stations (for example 99.99 and 200.01). Not yet changed in the code, because the fix needs a live check.
+- Station range: `SectionViewGroups.Add` can leave out sample lines exactly at the start and end stations it is given (seen live once, in a direct script: 100 to 200 gave only 150). The recipe therefore selects the sample lines itself and passes Civil 3D a range 0.01 units wider on each side, never reaching an unselected neighbour (at most a third of the gap) or beyond the alignment; `stationRange.passedToCivil` shows it. It still checks that every selected sample line got exactly one view and keeps nothing otherwise.
 - Objects cannot be projected into the views through the .NET API; the user runs the Civil 3D command for projecting objects to multiple section views.
 - To replace an older group, check the new one first, then remove the old group as a whole with `SectionViewGroups.Remove`; erasing its views one by one has crashed Civil 3D. Shift view elevations with `shift_section_view_elevations`.
