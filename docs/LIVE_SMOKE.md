@@ -48,6 +48,8 @@ code `0` when every case passed, `1` when a case failed and `2` when it could no
    corridor hanging on it; case `W2b` reports as a warning when Civil 3D marks the drawing modified
    again right after that save (seen in every live run so far), and a settle step follows before
    the next write that asks for a clean drawing.
+   Last, a preview creates a new layer with three 3D polylines (case `W10`): the receipt must say
+   `rolledBack: true`, and the layer, the polylines and the modified mark must be gone.
 6. **Guards**: a wrong `expectedDrawing` and a wrong session token are both refused with nothing
    run.
 7. **Final state**: still the same drawing, saved, with the expected object counts.

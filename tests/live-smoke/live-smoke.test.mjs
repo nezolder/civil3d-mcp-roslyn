@@ -52,7 +52,7 @@ function param(code, name) {
 }
 
 /** A simulated Civil 3D with just enough behaviour for the smoke run. */
-function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = null, pluginCommit = "abc" } = {}) {
+function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = null, pluginCommit = "abc", previewLeft = null } = {}) {
   const civil = {
     calls: [],
     dbmod: 0,
@@ -147,6 +147,22 @@ function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = n
       }
       return ok({ success: true, lineHandle: handle }, r);
     }
+    if (code.includes("creates a layer and 3D polylines")) {
+      assert.equal(args.preview, true);
+      const count = param(code, "polylineCount");
+      const r = receipt(args, {
+        added: { Polyline3d: count, PolylineVertex3d: count * 5, SequenceEnd: count, LayerTableRecord: 1 },
+        rolledBack: previewLeft === null,
+      });
+      if (previewLeft !== null) {
+        // The receipt fault seen in the field: everything is gone, but the check counted leftovers.
+        r.changes.leftAfterPreview = Object.values(previewLeft).reduce((sum, value) => sum + value, 0);
+        r.changes.leftTypes = previewLeft;
+        civil.dbmod = 1;
+        r.dbmodAfter = 1;
+      }
+      return ok({ success: true, polylines: count, vertices: count * 5 }, r);
+    }
     if (code.includes("changes nothing")) {
       return ok({ success: true }, receipt(args));
     }
@@ -174,6 +190,9 @@ function simulatedCivil({ drawing = FIXTURE, corridorWarning = null, throwOn = n
     }
     if (code.includes("how many lines lie on the given segment")) {
       return ok({ lines: civil.lines.get(lineKey(code)) ?? 0, description: civil.description, dbmod: civil.dbmod });
+    }
+    if (code.includes("whether the preview layer exists")) {
+      return ok({ layerExists: false, polylines: 0, dbmod: civil.dbmod });
     }
     if (code === "return 1;") return ok(1);
     switch (args.skill) {
@@ -264,7 +283,7 @@ test("a full run against the simulated Civil 3D passes every case", async () => 
   assert.deepEqual(
     report.steps.map((step) => step.id),
     ["S1", "S1b", "S2", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9",
-      "W0", "W1", "W2", "W2b", "W2c", "W3", "W4", "W5", "W6", "W7", "W7b", "W8", "W9", "G1", "G2", "E1"]
+      "W0", "W1", "W2", "W2b", "W2c", "W3", "W4", "W5", "W6", "W7", "W7b", "W8", "W9", "W10", "G1", "G2", "E1"]
   );
   // The fixture steps do not ask for a clean drawing, so a drawing Civil 3D
   // marks modified after a save does not stop them; the write cases do.
@@ -287,6 +306,18 @@ test("a full run against the simulated Civil 3D passes every case", async () => 
   const markdown = renderMarkdown(report, { "MCP server": "abc" });
   assert.match(markdown, /Result: \*\*pass\*\*/);
   assert.match(markdown, /\| W1 \| Preview/);
+});
+
+test("a preview reported as not rolled back fails W10 and names what was left", async () => {
+  const civil = simulatedCivil({ previewLeft: { SequenceEnd: 3 } });
+  const report = await run(civil);
+  const w10 = report.steps.find((step) => step.id === "W10");
+  assert.equal(w10.status, "fail");
+  assert.match(w10.problems.join("; "), /rolledBack is not true \(left: \{"SequenceEnd":3\}\)/);
+  assert.deepEqual(w10.details.changes.leftTypes, { SequenceEnd: 3 });
+  assert.equal(report.ok, false);
+  // The guards still run after it.
+  assert.equal(report.steps.find((step) => step.id === "G1").status, "pass");
 });
 
 test("a drawing that is not the run's own fixture gets no write", async () => {

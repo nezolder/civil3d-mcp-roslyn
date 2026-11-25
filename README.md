@@ -188,13 +188,13 @@ Every write that reached the drawing returns a **receipt** next to its result. T
 - For a committed write the list is made after the commit, by reading the drawing again in a separate short transaction, so it shows what is in the drawing and not what the script intended.
 - **`complete`** is false, with a `note`, when the list can miss something: a preview (see below), more than 2,000,000 new handles, more than 200,000 touched objects, or the notifications switched off with `CIVIL3D_MCP_CHANGE_EVENTS=0`.
 - When the list cannot be made, `changes` is `{"available": false, "reason": "…"}`. The write itself is never failed or changed by the list.
-- After a script or a commit that failed there is no list either, but the plugin checks that nothing the script added is left in the drawing: `{"available": false, "reason": "…", "rolledBack": true}`; with `rolledBack: false`, `leftBehind` counts what stayed.
+- After a script or a commit that failed there is no list either, but the plugin checks that nothing the script added is left in the drawing: `{"available": false, "reason": "…", "rolledBack": true}`; with `rolledBack: false`, `leftBehind` counts what stayed and `leftTypes` gives its types.
 
 The list tells which objects were touched, not whether their geometry is right; reading the result back with a query stays necessary.
 
 #### Preview
 
-With `preview: true` the receipt has `preview: true`, `committed: false`, `saved: false`, and `changes` describes what the script would add, modify and erase. After the transaction is abandoned the plugin checks that no added object exists and no erased object is still erased, and reports it as `rolledBack`; with `rolledBack: false`, `leftAfterPreview` counts what stayed behind.
+With `preview: true` the receipt has `preview: true`, `committed: false`, `saved: false`, and `changes` describes what the script would add, modify and erase. After the transaction is abandoned the plugin checks that no added object is still in the drawing and no erased object is still erased, and reports it as `rolledBack`; with `rolledBack: false`, `leftAfterPreview` counts what stayed behind and `leftTypes` gives its types.
 
 A preview has limits that follow from how it works:
 

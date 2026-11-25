@@ -1,12 +1,20 @@
 # Published development status
 
-Updated: 2026-11-24
+Updated: 2026-11-25
 
 This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
 
 ## Current catalogue
 
 The catalogue contains **47 skills** with **48 C# templates**; **46** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+
+## Preview receipt after 3D polylines; dependency alerts (2026-11-25)
+
+- **Receipt:** after a preview or a failed script, the plugin checks that nothing the script added is still in the drawing. It used to count every new handle whose id was not marked erased. In the field, a preview that created a layer and 196 3D polylines was reported with `leftAfterPreview: 196` although the layer and the polylines were gone, so the clean mark was not restored. An object now counts only when it can still be opened, is not erased, and its owner is still there and still lists it; an object that cannot be opened for another reason still counts. A nonzero count comes with `leftTypes`, the types of what was left.
+- **Live smoke test:** case `W10` previews a new layer with three 3D polylines and expects `rolledBack: true`, the layer and the polylines gone and `DBMOD` 0.
+- **Dependencies:** `npm audit` reported moderate alerts in `hono`, `@hono/node-server` and `ip-address` (through the MCP SDK; the server uses the stdio transport, not the HTTP parts) and in `glob`/`minimatch` (through `rimraf`, used only by `npm run clean`). The lock file now has the fixed versions and `rimraf` is 6.1.4; `npm audit` reports 0.
+
+Evidence boundaries: compiled and tested offline (simulated Civil 3D). Which object the old check counted (likely the end marker the drawing makes for each 3D polyline) is **unverified** until the live run of `W10`.
 
 ## Recipes from the street renovation findings (2026-11-24)
 
