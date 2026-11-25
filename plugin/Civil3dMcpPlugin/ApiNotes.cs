@@ -33,8 +33,9 @@ internal static class ApiNotes
     [("Autodesk.Civil.DatabaseServices.SectionViewGroupCollection", "Add")] = new(
       "section-view-group-end-stations",
       "live",
-      "SectionViewGroups.Add with a station range can leave out sample lines exactly at the start and end station. " +
-        "Read back which sample lines got a view; widen the range slightly if one is missing.",
+      "SectionViewGroups.Add with a station range can leave out the sample line exactly at its start station. " +
+        "Pass a range slightly wider than the wanted lines, but not before the alignment start (Add throws), " +
+        "and read back which sample lines got a view; recipe create_section_view_group does this.",
       "civil"),
     [("Autodesk.Civil.DatabaseServices.Surface", "GetBoundedVolumes")] = new(
       "bounded-volumes-raw",
