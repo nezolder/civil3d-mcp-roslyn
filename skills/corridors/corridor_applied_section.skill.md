@@ -107,6 +107,11 @@ try { applied = baseline.GetAppliedAssemblyAtStation(nearest); }
 catch (System.ArgumentException) { applied = null; }
 if (applied == null) return new { success = false, error = "No assembly is applied at this station (Station not processed).", station = Math.Round(nearest, 4), region = regionName };
 
+// Civil 3D answers "Cannot get adjusted elevation" at many stations (seen live); it is optional.
+double? adjustedElevation = null;
+try { adjustedElevation = Math.Round(applied.AdjustedElevation, 4); }
+catch (System.Exception) { adjustedElevation = null; }
+
 List<string> Codes(CorridorCodeCollection codes)
 {
     var list = new List<string>();
@@ -205,7 +210,7 @@ return new
     snapped = Math.Abs(nearest - station) > 1e-9,
     region = regionName,
     assembly = regionAssembly,
-    adjustedElevation = Math.Round(applied.AdjustedElevation, 4),
+    adjustedElevation,
     codeFilter,
     itemsListed = listed,
     itemLimitReached = cut,
@@ -219,6 +224,7 @@ return new
 - Read-only: it reads the corridor as last built and changes nothing. With `corridorOutOfDate` true the section is the old build; ask the user to rebuild first.
 - The section is read at a built corridor station. A station within `stationSnapTolerance` of one is read there (`snapped: true`); otherwise the reply names the built stations before and after. `add_sample_line_stations_to_corridor` adds a station to the regions.
 - Offsets and elevations are relative to the baseline: negative offset is left. `x` and `y` of a point are drawing coordinates. A link's `slopeOutwardPercent` runs from its end nearer the baseline to the end farther out, so a negative value falls away from the baseline; a vertical link has none.
+- `adjustedElevation` is `null` where Civil 3D cannot give it ("Cannot get adjusted elevation", seen live on a plain corridor along a design profile).
 - `codesAtStation` counts every code at the station, also those left out by `codeFilter`; run once without a filter to learn the drawing's codes. Uncoded points and links are left out unless `includeUncoded` is true.
 - The parameter values applied at the station (`AppliedSubassembly.Parameters`) are deliberately not read: reading them where a parameter is overridden for a station range has crashed Civil 3D in field use. The geometry here is what those values produced.
 - `corridor_section_check` checks many stations for repeated codes, overlaps, missing shapes and short links; this recipe shows one station in full.

@@ -90,14 +90,13 @@ object ParametersOf(Autodesk.Civil.DatabaseServices.Subassembly sub)
     foreach (var p in sub.ParamsLong) rows.Add((p.DisplayOrder, p.Key, p.DisplayName, "long", p.Value));
     foreach (var p in sub.ParamsBool) rows.Add((p.DisplayOrder, p.Key, p.DisplayName, "bool", p.Value));
     foreach (var p in sub.ParamsString) rows.Add((p.DisplayOrder, p.Key, p.DisplayName, "string", p.Value));
-    return new
-    {
-        total = rows.Count,
-        listed = rows.OrderBy(r => r.order).Take(parameterLimit)
-            .Select(r => new { key = r.key, displayName = r.displayName, type = r.type, value = r.value })
-            .ToList()
-    };
+    // A flat list keeps the reply within the result depth limit of 8.
+    return rows.OrderBy(r => r.order).Take(parameterLimit)
+        .Select(r => new { key = r.key, displayName = r.displayName, type = r.type, value = r.value })
+        .ToList();
 }
+int ParameterCount(Autodesk.Civil.DatabaseServices.Subassembly sub)
+    => sub.ParamsDouble.Count + sub.ParamsLong.Count + sub.ParamsBool.Count + sub.ParamsString.Count;
 
 var assemblies = new List<object>();
 var total = 0;
@@ -110,12 +109,13 @@ foreach (ObjectId assemblyId in CivilDoc.AssemblyCollection)
     total++;
     if (assemblies.Count >= limit) continue;
 
-    var groups = new List<object>();
+    var groupNames = new List<string>();
+    var subs = new List<object>();
     var subassemblyTotal = 0;
     var listedSubassemblies = 0;
     foreach (AssemblyGroup group in assembly.Groups)
     {
-        var subs = new List<object>();
+        groupNames.Add(group.Name);
         foreach (ObjectId subId in group.GetSubassemblyIds())
         {
             subassemblyTotal++;
@@ -126,6 +126,7 @@ foreach (ObjectId assemblyId in CivilDoc.AssemblyCollection)
             var generator = sub.GeometryGenerator;
             subs.Add(new
             {
+                group = group.Name,
                 name = sub.Name,
                 handle = sub.Handle.ToString(),
                 macroOrClassName = generator?.MacroOrClassName,
@@ -139,10 +140,10 @@ foreach (ObjectId assemblyId in CivilDoc.AssemblyCollection)
                 offsetAssembly = sub.AttachedToOffsetAssembly ? sub.OffsetAssemblyName : null,
                 status = sub.Status.ToString(),
                 layer = sub.Layer,
+                parameterTotal = ParameterCount(sub),
                 parameters = includeParameters ? ParametersOf(sub) : null
             });
         }
-        groups.Add(new { name = group.Name, subassemblies = subs });
     }
 
     usage.TryGetValue(assemblyId, out var usedBy);
@@ -156,10 +157,10 @@ foreach (ObjectId assemblyId in CivilDoc.AssemblyCollection)
         layer = assembly.Layer,
         location = new { x = Math.Round(assembly.Location.X, 4), y = Math.Round(assembly.Location.Y, 4) },
         offsetAssemblies = assembly.OffsetAssemblies.Count,
-        groupCount = assembly.Groups.Count,
+        groups = groupNames,
         subassemblyTotal,
         subassembliesTruncated = subassemblyTotal > listedSubassemblies,
-        groups,
+        subassemblies = subs,
         usedByRegions = usedBy?.Count ?? 0,
         usedBy = usedBy ?? new List<object>()
     });
@@ -180,7 +181,7 @@ return new
 ## Usage Notes
 
 - Read-only. It reads the assemblies as they are in the drawing; nothing is created, rebuilt or opened for write.
-- `parameters` are the subassembly's own input values (`key`, `displayName`, `type`, `value`), sorted as the Properties dialog shows them. They are the assembly's defaults, not the values a corridor applies at a station: targets and station overrides can change those. Find a parameter by `key`; `displayName` follows the language of the installation.
+- Subassemblies are listed in one list per assembly, each with its `group`. `parameters` are the subassembly's own input values (`key`, `displayName`, `type`, `value`), sorted as the Properties dialog shows them; `parameterTotal` counts all of them. They are the assembly's defaults, not the values a corridor applies at a station: targets and station overrides can change those. Find a parameter by `key`; `displayName` follows the language of the installation.
 - The values applied at a station (`AppliedSubassembly.Parameters`) are deliberately not read here: reading them where a parameter is overridden for a station range has crashed Civil 3D in field use. Use `corridor_applied_section` for the built geometry at a station instead.
 - `macroOrClassName` names the stock subassembly class (for example `Subassembly.BasicLane`) or, with `fromSubassemblyComposer: true`, the Subassembly Composer package. `hookedTo` and `hookPointIndex` say where a subassembly is attached; `null` means it hangs on the assembly's baseline point.
 - `side` is `null` for a subassembly without a side setting. `offsetToAssembly` is its origin relative to the assembly's baseline point (offset, elevation).
