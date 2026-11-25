@@ -6,7 +6,7 @@ This repository contains the accepted runtime, six focused engineering recipes w
 
 ## Current catalogue
 
-The catalogue contains **47 skills** with **48 C# templates**; **46** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+The catalogue contains **50 skills** with **51 C# templates**; **49** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
 
 ## Code set labels on API section views (2026-11-25)
 
