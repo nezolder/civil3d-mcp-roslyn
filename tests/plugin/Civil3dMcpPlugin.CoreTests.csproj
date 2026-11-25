@@ -13,6 +13,7 @@
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\BuildInfo.cs" Link="BuildInfo.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\DrawingBackup.cs" Link="DrawingBackup.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ExecutionRecord.cs" Link="ExecutionRecord.cs" />
+    <Compile Include="..\..\plugin\Civil3dMcpPlugin\ApiNote.cs" Link="ApiNote.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\ChangeList.cs" Link="ChangeList.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\SessionAuth.cs" Link="SessionAuth.cs" />
     <Compile Include="..\..\plugin\Civil3dMcpPlugin\WriteJournal.cs" Link="WriteJournal.cs" />

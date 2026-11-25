@@ -155,9 +155,9 @@ per drawing which ones were changed and saved.
 ### Receipt and readback
 
 Every write that reached the drawing returns a receipt as a second text block,
-`{"receipt": {...}}`; a failed or refused write has it too, also in `structuredContent.receipt`.
+`{"receipt": {...}}`, failed and refused ones too, also in `structuredContent.receipt`.
 Fields: `drawing` (`databaseFilename`, `fingerprintGuid`), `dbmodBefore`, `dbmodAfter`, `preview`,
-`committed`, `saved`, `fileLastWriteUtc`, `fileBytes`, `backupPath`, `changes`.
+`committed`, `saved`, `fileLastWriteUtc`, `fileBytes`, `backupPath`, `changes`, `saveSettle`.
 
 - `committed` says whether the change is in the open drawing, `saved` whether this call wrote the
   file. Take the save state (`saved: true`, `dbmodAfter: 0`) and the backup location from the
@@ -300,6 +300,9 @@ are imported. Keep it synchronous: a script that uses `await` is rejected.
   refused. It is a guard rail against accidents, not a security boundary.
 - Refused in `civil3d_query` only: `SampleLineGroup.GetSectionSources()`, which needs write
   access (topic `civil`).
+- A reply can carry `{"apiNotes": [...]}`: notes on members the script uses that crashed or
+  misled earlier work (`source` `live`, `field` or `api`). They refuse nothing; read them before
+  trusting the result or sending the call again.
 - Names that exist twice have a default: `DBObject`, `Entity` and `ErrorStatus` are the AutoCAD
   types, `Surface` and `Section` the Civil 3D ones, `Exception` is `System.Exception`. Write the
   full name for the other one, and for other duplicated names such as `Table`. Write
@@ -370,6 +373,11 @@ Seen in live Civil 3D 2025 work. A point not proven by this repository's own tes
   objects regenerate (about 30 seconds was seen), when opening a drawing synchronises data
   references, and after a layout switch, a plot or a screen capture. Right after a save it can
   still update dependents (profile views, corridors); a second save then clears it.
+- So after a saved write the plugin waits a second, reads `DBMOD` and saves again while it is 1,
+  at most three times; `dbmodAfter` is the state after that. The receipt's `saveSettle` tells how
+  it went: `clean`, `checks`, `extraSaves`, `dbmodAfterFirstSave`, and `stopped` when it gave up
+  (`extraSaveLimitReached`, `extraSaveFailed`, `activeDrawingChanged`, `stepDidNotRun`). Only the
+  written drawing is saved again. Re-marking that comes later (the 30 seconds above) is not covered.
 - Compare `dbmodBefore` and `dbmodAfter` in the receipt; do not infer user edits from a 1 alone.
   When `requireClean` refuses a drawing the user says has no unsaved work, ask the user to save
   it. Do not save it from a script, and do not drop the switch without telling the user.

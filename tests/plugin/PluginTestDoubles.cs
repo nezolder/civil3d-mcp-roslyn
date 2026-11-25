@@ -147,6 +147,9 @@ public static class RoslynExecutor
   public static Func<string, ScriptContext, Task<object?>> Handler { get; set; } =
     (_, _) => Task.FromResult<object?>("ok");
 
+  /// <summary>Notes the real executor would find for a script; none by default.</summary>
+  internal static Func<string, IEnumerable<ApiNote>>? NoteHandler { get; set; }
+
   /// <summary>Script limit the dispatcher passed on the most recent call.</summary>
   public static TimeSpan? LastTimeLimit { get; private set; }
 
@@ -164,10 +167,12 @@ public static class RoslynExecutor
     OperationProgress? progress = null,
     CancellationToken cancellationToken = default,
     TimeSpan? timeLimit = null,
-    bool readOnly = false)
+    bool readOnly = false,
+    List<ApiNote>? apiNotes = null)
   {
     LastTimeLimit = timeLimit;
     LastReadOnly = readOnly;
+    if (apiNotes != null && NoteHandler != null) apiNotes.AddRange(NoteHandler(code));
     progress?.SetStage(OperationStage.RunningScript);
     Interlocked.Increment(ref _callCount);
     var active = Interlocked.Increment(ref _activeCount);
@@ -194,6 +199,7 @@ public static class RoslynExecutor
     Volatile.Write(ref _callCount, 0);
     Volatile.Write(ref _maxActiveCount, 0);
     Handler = (_, _) => Task.FromResult<object?>("ok");
+    NoteHandler = null;
     LastTimeLimit = null;
   }
 

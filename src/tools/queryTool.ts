@@ -33,6 +33,7 @@ import {
   logOperationSuccess,
 } from "../utils/operationAudit.js";
 import { imageContentBlocks, readResultImages, type ResultImage } from "./resultImages.js";
+import { apiNotesContentBlocks, readApiNotes, type ApiNote } from "./apiNotes.js";
 
 const log = createLogger("QueryTool");
 
@@ -54,7 +55,9 @@ export const SCRIPT_RULES =
   "Other namespaces (e.g. Autodesk.Civil.DatabaseServices.Styles, Autodesk.AutoCAD.Colors, System.IO) need a using line or a full name. " +
   "Names that exist twice have a default: DBObject, Entity and ErrorStatus are the AutoCAD types, Surface and Section " +
   "the Civil 3D ones, Exception is System.Exception; write the full name for the other one. " +
-  "A script still running at its time limit (120 s unless timeoutSeconds is set) is stopped and rolled back.";
+  "A script still running at its time limit (120 s unless timeoutSeconds is set) is stopped and rolled back. " +
+  "A block {apiNotes: [...]} after the result warns about API members the script uses that crashed or misled earlier work; " +
+  "read it before trusting the result or sending the call again.";
 
 /**
  * The working order is docs/USAGE.md. A tool description is the one text every
@@ -126,6 +129,7 @@ export function registerQueryTool(server: McpServer, options: ScriptSourceOption
       }
       const audit = createOperationAuditContext("civil3d_query", code, performance.now());
       let images: ResultImage[] = [];
+      let apiNotes: ApiNote[] = [];
       try {
         const commandResult = await withApplicationConnection(
           async (client) =>
@@ -142,6 +146,8 @@ export function registerQueryTool(server: McpServer, options: ScriptSourceOption
               extra.signal,
               (response) => {
                 images = readResultImages(response);
+                // A catalog recipe already handles what a note would say.
+                apiNotes = args.skill ? [] : readApiNotes(response);
               }
             ),
           {
@@ -164,6 +170,7 @@ export function registerQueryTool(server: McpServer, options: ScriptSourceOption
               type: "text" as const,
               text: JSON.stringify(result) ?? "null",
             },
+            ...apiNotesContentBlocks(apiNotes),
             ...imageContentBlocks(images),
           ],
         };
@@ -175,7 +182,15 @@ export function registerQueryTool(server: McpServer, options: ScriptSourceOption
       } catch (error) {
         const normalizedError = normalizeCivil3dError(error);
         logOperationFailure(log, audit, performance.now(), normalizedError);
-        const normalResult = createStructuredToolErrorResult(error, "Query failed: ");
+        const errorResult = createStructuredToolErrorResult(error, "Query failed: ");
+        const normalResult =
+          apiNotes.length > 0
+            ? {
+                ...errorResult,
+                content: [...errorResult.content, ...apiNotesContentBlocks(apiNotes)],
+                structuredContent: { ...errorResult.structuredContent, apiNotes },
+              }
+            : errorResult;
         return withBenchmarkEventMeta(
           normalResult,
           finalizeReturnedPayloadMeasurement(

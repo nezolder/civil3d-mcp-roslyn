@@ -37,6 +37,8 @@ var tests = new (string Name, Func<Task> Run)[]
   ("a refused script runs nothing and is not cached", SandboxRefusalRunsNothingAsync),
   ("a query may not read section sources; a write may, cached or not", QueryRefusesSectionSourcesAsync),
   ("the query-only guard lets look-alike names through", QueryGuardAllowsLookAlikesAsync),
+  ("API notes name noted members by what the compiler resolved and refuse nothing", ApiNotesFoundAsync),
+  ("API notes skip look-alikes, comments, strings and failed compiles", ApiNotesSkipLookAlikesAsync),
   ("LINQ results serialize without ToList", LinqResultsAsync),
   ("dates and times serialize as ISO 8601 text", DateResultsAsync),
   ("tuples serialize as arrays", TupleResultsAsync),
@@ -622,6 +624,71 @@ static async Task QueryGuardAllowsLookAlikesAsync()
     "return new Report().GetSectionSources() + (note.Length > 0 ? 0 : 1);",
     Context(), null, readOnly: true);
   Assert(Equals(result, 3), $"unexpected result: {result}");
+}
+
+static async Task<(object? Result, List<ApiNote> Notes)> RunWithNotesAsync(string code, bool readOnly = false)
+{
+  var notes = new List<ApiNote>();
+  var result = await RoslynExecutor.ExecuteAsync(code, Context(), null, readOnly: readOnly, apiNotes: notes);
+  return (result, notes);
+}
+
+static async Task ApiNotesFoundAsync()
+{
+  RoslynExecutor.ClearCache();
+  const string volumes =
+    "var surface = new TinVolumeSurface();\n" +
+    "var first = surface.GetBoundedVolumes(null);\n" +
+    "return first + surface.GetBoundedVolumes(null);";
+  var (result, notes) = await RunWithNotesAsync(volumes, readOnly: true);
+  Assert(Equals(result, 3.0), $"a noted member still runs, got {result}");
+  Assert(notes.Count == 1, $"one note per note id, got {notes.Count}");
+  Assert(notes[0].Id == "bounded-volumes-raw" && notes[0].Line == 2 && notes[0].Source == "live"
+    && notes[0].Member == "Autodesk.Civil.DatabaseServices.Surface.GetBoundedVolumes"
+    && notes[0].Text.Contains("CutFactor", StringComparison.Ordinal),
+    $"an inherited member is noted under its declaring type at its first line: {notes[0]}");
+
+  // A cached script gets its notes again.
+  (_, notes) = await RunWithNotesAsync(volumes, readOnly: true);
+  Assert(notes.Count == 1 && RoslynExecutor.CachedScriptCount == 1, "a cached script is noted as well");
+
+  // A property, and extension methods called on their receiver.
+  (_, notes) = await RunWithNotesAsync(
+    "var count = new AppliedSubassembly().Parameters.Length;\n" +
+    "var documents = new DocumentCollection();\n" +
+    "documents.Open(\"a.dwg\");\n" +
+    "documents.Add(\"b.dwt\");\n" +
+    "new Document().SendStringToExecute(\"QSAVE \", false, false, false);\n" +
+    "return count;");
+  var ids = notes.Select(note => note.Id).ToArray();
+  Assert(ids.SequenceEqual(new[] { "applied-parameters-override", "document-switch", "send-string-after-call" }),
+    $"notes in reading order, one per id: {string.Join(", ", ids)}");
+  Assert(notes[1].Member == "Autodesk.AutoCAD.ApplicationServices.DocumentCollectionExtension.Open" && notes[1].Line == 3,
+    $"an extension method is found under its static class: {notes[1]}");
+}
+
+static async Task ApiNotesSkipLookAlikesAsync()
+{
+  RoslynExecutor.ClearCache();
+  var (result, notes) = await RunWithNotesAsync(
+    "class Report { public double GetBoundedVolumes() => 2; public int Parameters => 1; }\n" +
+    "// surface.GetBoundedVolumes(null) is only mentioned here\n" +
+    "var text = \"AppliedSubassembly.Parameters\";\n" +
+    "return new Report().GetBoundedVolumes() + new Report().Parameters + (text.Length > 0 ? 0 : 1);");
+  Assert(Equals(result, 3.0) && notes.Count == 0, $"look-alikes are not noted: {notes.Count}");
+
+  var compileFailed = new List<ApiNote>();
+  try
+  {
+    await RoslynExecutor.ExecuteAsync("return new TinVolumeSurface().GetBoundedVolumes(null) + missing;",
+      Context(), null, apiNotes: compileFailed);
+    throw new InvalidOperationException("the script was expected not to compile");
+  }
+  catch (JsonRpcDispatchException ex)
+  {
+    Assert(ex.Code == "CIVIL3D.COMPILATION_ERROR", $"unexpected code {ex.Code}");
+  }
+  Assert(compileFailed.Count == 0, "a script that does not compile gets its compile errors, not notes");
 }
 
 static async Task<string> ResultJsonAsync(string code)

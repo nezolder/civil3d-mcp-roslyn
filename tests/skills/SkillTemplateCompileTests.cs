@@ -172,6 +172,20 @@ if (Civil3DMcpPlugin.ScriptSandbox.FindViolation(compilation) is { } violation)
   return;
 }
 Console.WriteLine("No skill template uses a type or member the script guard refuses.");
+
+// An API note keyed to a misspelled type or member would never fire.
+var unknownNotes = Civil3DMcpPlugin.ApiNotes.NotedMembers
+  .Where(noted => compilation.GetTypeByMetadataName(noted.Type) is not { } type
+    || !type.GetMembers(noted.Member).Any(member => member.DeclaredAccessibility == Accessibility.Public))
+  .Select(noted => noted.Type + "." + noted.Member)
+  .ToArray();
+if (unknownNotes.Length > 0)
+{
+  Console.Error.WriteLine("API notes name members the Civil 3D 2025 assemblies do not have: " + string.Join(", ", unknownNotes));
+  Environment.ExitCode = 1;
+  return;
+}
+Console.WriteLine($"All {Civil3DMcpPlugin.ApiNotes.NotedMembers.Count()} API notes name public members of the Civil 3D 2025 assemblies.");
 try
 {
   FixedPrimitiveInputTests.Run(repositoryRoot,

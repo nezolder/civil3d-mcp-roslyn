@@ -63,6 +63,8 @@ internal static class WriteJournal
         ["backupPath"] = record.BackupPath,
         ["dbmodBefore"] = record.DbmodBefore,
         ["dbmodAfter"] = record.DbmodAfter,
+        ["extraSaves"] = record.SaveSettle?.ExtraSaves,
+        ["settledClean"] = record.SaveSettle?.Clean,
         ["added"] = record.Changes is { IsAvailable: true } added ? added.AddedCount : null,
         ["modified"] = record.Changes is { IsAvailable: true } modified ? modified.ModifiedCount : null,
         ["erased"] = record.Changes is { IsAvailable: true } erased ? erased.ErasedCount : null,

@@ -1,7 +1,21 @@
 // Minimal stand-ins so the real RoslynExecutor compiles and runs scripts
 // without Autodesk assemblies. Every namespace the executor imports must exist.
 
-namespace Autodesk.AutoCAD.ApplicationServices { public class ApplicationServicesStub { } }
+namespace Autodesk.AutoCAD.ApplicationServices
+{
+  public class ApplicationServicesStub { }
+  public class Document
+  {
+    public void SendStringToExecute(string command, bool activate, bool wrapUpInactiveDoc, bool echo) { }
+  }
+  public class DocumentCollection { }
+  // Extension methods, as in the real assembly.
+  public static class DocumentCollectionExtension
+  {
+    public static Document Open(this DocumentCollection documents, string fileName) => new();
+    public static Document Add(this DocumentCollection documents, string templateFileName) => new();
+  }
+}
 namespace Autodesk.AutoCAD.EditorInput { public class EditorInputStub { } }
 namespace Autodesk.AutoCAD.Geometry
 {
@@ -75,7 +89,15 @@ namespace Autodesk.Civil.DatabaseServices
     public List<string> GetSectionSources() => new() { "EG", "Corridor" };
   }
 
-  public class Surface : Entity { }
+  public class Surface : Entity
+  {
+    public double GetBoundedVolumes(object polygon) => 1.5;
+  }
+  public class TinVolumeSurface : Surface { }
+  public class AppliedSubassembly
+  {
+    public object[] Parameters => new object[] { 1, 2 };
+  }
   public class Section : Entity { }
   public class Table : Entity { }
 }

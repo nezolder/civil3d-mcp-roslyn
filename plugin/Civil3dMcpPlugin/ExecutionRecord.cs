@@ -42,8 +42,13 @@ internal sealed class ExecutionRecord
   internal string? BackupPath { get; set; }
   /// <summary>What the write added, modified and erased; null when it was not looked at.</summary>
   internal ChangeList? Changes { get; set; }
+  /// <summary>What the saves after the command found; null when no save was settled.</summary>
+  internal SaveSettleReport? SaveSettle { get; set; }
   internal DateTimeOffset? FileLastWriteUtc { get; private set; }
   internal long? FileBytes { get; private set; }
+
+  /// <summary>Notes on API members the script uses; sent next to the result, never journaled.</summary>
+  internal List<ApiNote> Notes { get; } = new();
 
   /// <summary>Image files the script returned; sent next to the result, never journaled.</summary>
   internal List<ScriptImagePayload> Images { get; } = new();
@@ -128,6 +133,7 @@ internal sealed class ExecutionRecord
       ["fileBytes"] = FileBytes,
       ["backupPath"] = BackupPath,
     };
+    if (SaveSettle != null) receipt["saveSettle"] = SaveSettle.ToJson();
     if (Changes != null) receipt["changes"] = Changes.ToJson();
     return receipt;
   }
@@ -154,5 +160,44 @@ internal sealed class ExecutionRecord
     }
     var text = builder.ToString().Trim();
     return text.Length == 0 ? null : text;
+  }
+}
+
+/// <summary>
+/// What happened after the command of a saved write: how often DBMOD was read
+/// and the drawing saved again, and whether it ended clean. Civil 3D can mark
+/// a drawing modified again just after a save when it updates objects that
+/// depend on the written ones.
+/// </summary>
+internal sealed class SaveSettleReport
+{
+  internal const string DrawingChanged = "activeDrawingChanged";
+  internal const string DbmodUnreadable = "dbmodUnreadable";
+  internal const string LimitReached = "extraSaveLimitReached";
+  internal const string SaveFailed = "extraSaveFailed";
+  internal const string StepNotRun = "stepDidNotRun";
+
+  /// <summary>DBMOD read right after the first save, inside the write's command.</summary>
+  internal int? DbmodAfterFirstSave { get; set; }
+  internal int Checks { get; set; }
+  internal int ExtraSaves { get; set; }
+  internal int? LastDbmod { get; set; }
+  internal bool Clean { get; set; }
+  /// <summary>Why it stopped before the drawing was seen clean; null when it ended clean.</summary>
+  internal string? Stopped { get; set; }
+  internal string? SaveError { get; set; }
+
+  internal JsonObject ToJson()
+  {
+    var json = new JsonObject
+    {
+      ["clean"] = Clean,
+      ["checks"] = Checks,
+      ["extraSaves"] = ExtraSaves,
+      ["dbmodAfterFirstSave"] = DbmodAfterFirstSave,
+    };
+    if (Stopped != null) json["stopped"] = Stopped;
+    if (SaveError != null) json["saveError"] = SaveError;
+    return json;
   }
 }

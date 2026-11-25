@@ -139,6 +139,19 @@ public static class ScriptSandbox
 
   private static Violation? FindViolation(Compilation compilation, Func<ISymbol, string?> reasonFor)
   {
+    foreach (var (symbol, line) in ResolvedSymbols(compilation))
+    {
+      if (reasonFor(symbol) is { } reason) return new Violation(reason, DisplayName(symbol), line);
+    }
+    return null;
+  }
+
+  /// <summary>
+  /// Every type and member the script names, as the compiler resolved it,
+  /// with its script line, in reading order. Also used for the API notes.
+  /// </summary>
+  internal static IEnumerable<(ISymbol Symbol, int Line)> ResolvedSymbols(Compilation compilation)
+  {
     foreach (var tree in compilation.SyntaxTrees)
     {
       var model = compilation.GetSemanticModel(tree);
@@ -152,16 +165,12 @@ public static class ScriptSandbox
         var symbols = info.Symbol is not null
           ? new[] { info.Symbol }
           : info.CandidateSymbols.ToArray();
-        foreach (var symbol in symbols)
-        {
-          if (reasonFor(symbol) is not { } reason) continue;
-          // Loop checkpoints never add a line break, so the line is the caller's own.
-          var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
-          return new Violation(reason, DisplayName(symbol), line);
-        }
+        if (symbols.Length == 0) continue;
+        // Loop checkpoints never add a line break, so the line is the caller's own.
+        var line = node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
+        foreach (var symbol in symbols) yield return (symbol, line);
       }
     }
-    return null;
   }
 
   private static string? ReasonFor(ISymbol symbol)
@@ -211,7 +220,7 @@ public static class ScriptSandbox
   }
 
   /// <summary>Namespace and name without type arguments, such as System.IO.File.</summary>
-  private static string FullName(INamedTypeSymbol type)
+  internal static string FullName(INamedTypeSymbol type)
   {
     var definition = type.OriginalDefinition;
     var name = definition.Name;

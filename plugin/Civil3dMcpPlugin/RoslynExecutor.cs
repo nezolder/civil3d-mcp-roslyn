@@ -170,7 +170,8 @@ public static class RoslynExecutor
     OperationProgress? progress = null,
     CancellationToken cancellationToken = default,
     TimeSpan? timeLimit = null,
-    bool readOnly = false)
+    bool readOnly = false,
+    List<ApiNote>? apiNotes = null)
   {
     progress?.SetStage(OperationStage.PreparingScript);
     ScriptSandbox.Validate(code);
@@ -216,6 +217,8 @@ public static class RoslynExecutor
     // A query may not reach members that are only safe in a write call. A
     // cached script compiled once; a failed one reports its errors below.
     if (readOnly && !compileFailed) ScriptSandbox.ValidateForQuery(code, script!.GetCompilation());
+    // Notes on members that surprised earlier work; they refuse nothing.
+    if (apiNotes != null && !compileFailed) apiNotes.AddRange(ApiNotes.Find(code, script!.GetCompilation()));
 
     // Execute with a time limit. Loop checkpoints also observe the caller's
     // token, which the TCP server cancels when the client disconnects.
