@@ -143,7 +143,9 @@ internal sealed class DrawingChangeTracker : IDisposable
       if (preview)
       {
         if (_previewList == null) return ChangeList.Unavailable("the preview could not be described");
-        _previewList.LeftAfterPreview = CountLeftAfterPreview();
+        var leftByType = new Dictionary<string, int>(StringComparer.Ordinal);
+        _previewList.LeftAfterPreview = CountLeftNewObjects(_previewScanEnd, leftByType) + CountStillErased();
+        _previewList.LeftByType = leftByType;
         return _previewList;
       }
       if (!committed) return null;
@@ -170,7 +172,8 @@ internal sealed class DrawingChangeTracker : IDisposable
     try
     {
       var scanEnd = Math.Min(_database.Handseed.Value, _firstNewHandle + MaxHandleScan);
-      return ChangeList.AfterFailure(CountLiveNewHandles(scanEnd) + CountStillErased());
+      var leftByType = new Dictionary<string, int>(StringComparer.Ordinal);
+      return ChangeList.AfterFailure(CountLeftNewObjects(scanEnd, leftByType) + CountStillErased(), leftByType);
     }
     catch (System.Exception)
     {
@@ -396,19 +399,124 @@ internal sealed class DrawingChangeTracker : IDisposable
   }
 
   /// <summary>
-  /// After a preview nothing the script added may exist and nothing it erased
-  /// may still be erased. Returns how many objects break that rule.
+  /// After a preview or a failure nothing the script added may still be in the
+  /// drawing. A new handle whose id is not marked erased is not enough to say
+  /// so: when a transaction is abandoned, an object that the drawing made by
+  /// itself for a new object (the end marker of a 3D polyline)
+  /// can keep an id that is not marked erased although its owner is gone
+  /// (seen live: the end marker of every abandoned 3D polyline, while the
+  /// polyline and its vertices are marked erased). So an object counts only when
+  /// it can still be opened, is not erased, and its owner is still there and
+  /// still holds it. An object that cannot be opened for another reason is
+  /// counted, so that a doubt never turns into a clean mark.
   /// </summary>
-  private int CountLeftAfterPreview() => CountLiveNewHandles(_previewScanEnd) + CountStillErased();
-
-  private int CountLiveNewHandles(long scanEnd)
+  private int CountLeftNewObjects(long scanEnd, Dictionary<string, int> byType)
   {
     var left = 0;
+    var verdicts = new Dictionary<ObjectId, bool>();
+    var ownerContents = new Dictionary<ObjectId, HashSet<ObjectId>?>();
+    using var reader = _database.TransactionManager.StartOpenCloseTransaction();
     for (var value = _firstNewHandle; value < scanEnd; value++)
     {
-      if (TryGetLiveId(value, out _)) left++;
+      if (!TryGetLiveId(value, out var id)) continue;
+      if (!StillInDrawing(reader, id, verdicts, ownerContents, out var type, depth: 0)) continue;
+      left++;
+      byType[type] = byType.TryGetValue(type, out var count) ? count + 1 : 1;
     }
+    reader.Commit();
     return left;
+  }
+
+  private bool StillInDrawing(
+    Transaction reader,
+    ObjectId id,
+    Dictionary<ObjectId, bool> verdicts,
+    Dictionary<ObjectId, HashSet<ObjectId>?> ownerContents,
+    out string type,
+    int depth)
+  {
+    type = "?";
+    try { type = id.ObjectClass?.Name ?? "?"; } catch (System.Exception) { }
+    if (verdicts.TryGetValue(id, out var known)) return known;
+
+    AcDbObject opened;
+    try
+    {
+      opened = reader.GetObject(id, OpenMode.ForRead, true, true);
+    }
+    catch (Autodesk.AutoCAD.Runtime.Exception ex) when (IsGone(ex.ErrorStatus))
+    {
+      return Remember(verdicts, id, false);
+    }
+    catch (System.Exception)
+    {
+      return Remember(verdicts, id, true);
+    }
+    if (opened == null) return Remember(verdicts, id, false);
+    type = DisplayType(opened, type);
+
+    try
+    {
+      if (opened.IsErased) return Remember(verdicts, id, false);
+      var owner = opened.OwnerId;
+      if (owner.IsNull || owner.Database?.UnmanagedObject != _databasePointer) return Remember(verdicts, id, true);
+      if (owner.Handle.Value >= _firstNewHandle)
+      {
+        // A part of something the script added: it is left only if that is.
+        if (!TryGetLiveId(owner.Handle.Value, out _)) return Remember(verdicts, id, false);
+        if (depth >= 16) return Remember(verdicts, id, true);
+        return Remember(verdicts, id, StillInDrawing(reader, owner, verdicts, ownerContents, out _, depth + 1));
+      }
+      return Remember(verdicts, id, OwnerHolds(reader, owner, id, ownerContents));
+    }
+    catch (System.Exception)
+    {
+      return Remember(verdicts, id, true);
+    }
+  }
+
+  private static bool Remember(Dictionary<ObjectId, bool> verdicts, ObjectId id, bool left)
+  {
+    verdicts[id] = left;
+    return left;
+  }
+
+  /// <summary>Ids that no longer lead to an object.</summary>
+  private static bool IsGone(ErrorStatus status)
+    => status is ErrorStatus.WasErased or ErrorStatus.PermanentlyErased
+      or ErrorStatus.NullObjectPointer or ErrorStatus.NullObjectId;
+
+  /// <summary>
+  /// Whether an object that was there before the script still lists the new
+  /// object. Blocks are read once each; an owner of another kind, or one that
+  /// cannot be read, is taken to hold it.
+  /// </summary>
+  private static bool OwnerHolds(
+    Transaction reader, ObjectId owner, ObjectId id, Dictionary<ObjectId, HashSet<ObjectId>?> ownerContents)
+  {
+    try
+    {
+      if (ownerContents.TryGetValue(owner, out var known)) return known == null || known.Contains(id);
+      switch (reader.GetObject(owner, OpenMode.ForRead, true, true))
+      {
+        case BlockTableRecord block:
+          var contents = new HashSet<ObjectId>();
+          foreach (ObjectId entity in block) contents.Add(entity);
+          ownerContents[owner] = contents;
+          return contents.Contains(id);
+        case SymbolTable table:
+          return table.Has(id);
+        case DBDictionary dictionary:
+          return dictionary.Contains(id);
+        default:
+          ownerContents[owner] = null;
+          return true;
+      }
+    }
+    catch (System.Exception)
+    {
+      return true;
+    }
   }
 
   private int CountStillErased()

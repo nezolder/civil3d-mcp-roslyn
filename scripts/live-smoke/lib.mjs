@@ -68,6 +68,8 @@ export function designPvis(startStation, endStation) {
 /** Probe line segments, outside the corridor and the surface. */
 export const PROBE_LINE = Object.freeze({ x1: 900, y1: 1850, x2: 960, y2: 1850 });
 export const DIRTY_LINE = Object.freeze({ x1: 900, y1: 1840, x2: 960, y2: 1840 });
+/** Preview of a layer and 3D polylines, also outside the corridor and the surface. */
+export const PREVIEW_POLYLINES = Object.freeze({ layerName: "MCP_Preview_3d", polylineCount: 3, x0: 900, y0: 1900 });
 
 function round3(value) {
   return Math.round(value * 1000) / 1000;
@@ -814,6 +816,43 @@ export async function runSmoke(deps) {
   }
 
   if (state.corridor) await settle("W9", "Saved and still clean after the corridor rebuild");
+
+  // A 3D polyline brings parts the drawing makes by itself (vertices, an end
+  // marker). A field test saw a preview of such polylines reported as not
+  // rolled back although they were gone, which left the drawing modified.
+  await step("W10", "Preview of a layer and 3D polylines: nothing stays, the drawing stays clean", async ({ problems, details }) => {
+    const result = await execute(guarded({
+      ...writeSwitches,
+      preview: true,
+      code: script("preview_polylines", PREVIEW_POLYLINES),
+      description: "MCP smoke: preview of 3D polylines",
+    }));
+    if (result.isError) {
+      problems.push(`error ${result.error?.code ?? ""}: ${result.text}`.trim());
+      return;
+    }
+    const receipt = result.receipt ?? {};
+    const changes = receipt.changes ?? {};
+    details.changes = {
+      added: changes.added?.byType,
+      rolledBack: changes.rolledBack,
+      leftAfterPreview: changes.leftAfterPreview,
+      leftTypes: changes.leftTypes,
+    };
+    check(result.data?.success === true, `the script reported: ${result.data?.error ?? "success false"}`, problems);
+    check(receipt.committed === false, "receipt.committed is not false", problems);
+    check(changes.rolledBack === true, `changes.rolledBack is not true (left: ${JSON.stringify(changes.leftTypes ?? changes.leftAfterPreview)})`, problems);
+    check(changes.added?.byType?.Polyline3d === PREVIEW_POLYLINES.polylineCount, "the preview does not list the new 3D polylines", problems);
+    check(receipt.dbmodAfter === 0, `dbmodAfter is ${receipt.dbmodAfter}, not 0`, problems);
+    const after = await query(guarded({
+      code: script("preview_polylines_read", { layerName: PREVIEW_POLYLINES.layerName }),
+    }));
+    if (after.isError) throw new Error(`readback failed: ${after.text}`);
+    details.after = after.data;
+    check(after.data?.layerExists === false, "the preview layer stayed in the drawing", problems);
+    check(after.data?.polylines === 0, `${after.data?.polylines} 3D polylines stayed in the drawing`, problems);
+    check(after.data?.dbmod === 0, `DBMOD is ${after.data?.dbmod} after the preview`, problems);
+  });
 
   // --- Guards ----------------------------------------------------------------
   await step("G1", "Wrong target drawing: nothing runs", async ({ problems, details }) => {

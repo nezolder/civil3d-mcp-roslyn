@@ -46,11 +46,12 @@ internal sealed class ChangeList
   /// The script or its commit failed, so nothing was read. What can still be
   /// said is whether anything the script added is left in the drawing.
   /// </summary>
-  internal static ChangeList AfterFailure(int? left)
+  internal static ChangeList AfterFailure(int? left, IReadOnlyDictionary<string, int>? leftByType = null)
     => new(0)
     {
       UnavailableReason = "the script failed, so its changes were not read",
       LeftAfterFailure = left,
+      LeftByType = leftByType,
     };
 
   internal string? UnavailableReason { get; private init; }
@@ -71,6 +72,12 @@ internal sealed class ChangeList
   /// check did not run or does not apply.
   /// </summary>
   internal int? LeftAfterFailure { get; private init; }
+
+  /// <summary>
+  /// What the check after a preview or a failure found left behind, by type,
+  /// so that a nonzero count can be told apart from bookkeeping objects.
+  /// </summary>
+  internal IReadOnlyDictionary<string, int>? LeftByType { get; set; }
 
   /// <summary>
   /// True when nothing was kept and the check after the abandoned transaction
@@ -133,7 +140,11 @@ internal sealed class ChangeList
       if (LeftAfterFailure is int leftBehind)
       {
         unavailable["rolledBack"] = leftBehind == 0;
-        if (leftBehind != 0) unavailable["leftBehind"] = leftBehind;
+        if (leftBehind != 0)
+        {
+          unavailable["leftBehind"] = leftBehind;
+          AddLeftTypes(unavailable);
+        }
       }
       return unavailable;
     }
@@ -148,13 +159,22 @@ internal sealed class ChangeList
     if (Preview && LeftAfterPreview is int left)
     {
       json["rolledBack"] = left == 0;
-      if (left != 0) json["leftAfterPreview"] = left;
+      if (left != 0)
+      {
+        json["leftAfterPreview"] = left;
+        AddLeftTypes(json);
+      }
     }
 
     var complete = !Preview && !AddedScanTruncated && !TouchedOverflow && !InternalChangesUnobserved;
     json["complete"] = complete;
     if (!complete) json["note"] = DescribeGaps();
     return json;
+  }
+
+  private void AddLeftTypes(JsonObject json)
+  {
+    if (LeftByType is { Count: > 0 } types) json["leftTypes"] = ToJson(new Dictionary<string, int>(types, StringComparer.Ordinal));
   }
 
   private string DescribeGaps()

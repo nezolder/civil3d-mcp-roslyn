@@ -107,9 +107,19 @@ internal static class ChangeListTests
       && cleanJson["note"]!.GetValue<string>().Contains("preview", StringComparison.Ordinal),
       "a preview never claims to show what a commit would trigger");
 
-    var dirty = new ChangeList(3) { Preview = true, LeftAfterPreview = 2 }.ToJson();
-    Assert(!dirty["rolledBack"]!.GetValue<bool>() && dirty["leftAfterPreview"]!.GetValue<int>() == 2,
-      "objects that stayed behind are reported");
+    var dirty = new ChangeList(3)
+    {
+      Preview = true,
+      LeftAfterPreview = 2,
+      LeftByType = new Dictionary<string, int> { ["Line"] = 1, ["LayerTableRecord"] = 1 },
+    }.ToJson();
+    Assert(!dirty["rolledBack"]!.GetValue<bool>() && dirty["leftAfterPreview"]!.GetValue<int>() == 2
+      && dirty["leftTypes"]!["Line"]!.GetValue<int>() == 1
+      && dirty["leftTypes"]!["LayerTableRecord"]!.GetValue<int>() == 1,
+      "objects that stayed behind are reported with their types");
+
+    var cleanWithTypes = new ChangeList(3) { Preview = true, LeftAfterPreview = 0, LeftByType = new Dictionary<string, int>() }.ToJson();
+    Assert(!cleanWithTypes.ContainsKey("leftTypes"), "nothing left means no type list either");
 
     Assert(!new ChangeList(3) { Preview = true }.ToJson().ContainsKey("rolledBack"),
       "without the check nothing is claimed either way");
@@ -133,11 +143,12 @@ internal static class ChangeListTests
       && cleanJson["rolledBack"]!.GetValue<bool>() && cleanJson.Count == 3,
       "a failed script that left nothing says so and gives no counts");
 
-    var dirty = ChangeList.AfterFailure(4);
+    var dirty = ChangeList.AfterFailure(4, new Dictionary<string, int> { ["Polyline3d"] = 4 });
     var dirtyJson = dirty.ToJson();
     Assert(!dirty.NothingLeft && dirtyJson["rolledBack"]!.GetValue<bool>() == false
-      && dirtyJson["leftBehind"]!.GetValue<int>() == 4,
-      "objects a failed script left behind are counted");
+      && dirtyJson["leftBehind"]!.GetValue<int>() == 4
+      && dirtyJson["leftTypes"]!["Polyline3d"]!.GetValue<int>() == 4,
+      "objects a failed script left behind are counted with their types");
 
     var unknown = ChangeList.AfterFailure(null);
     Assert(!unknown.NothingLeft && !unknown.ToJson().ContainsKey("rolledBack"),
