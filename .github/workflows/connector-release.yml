@@ -1,10 +1,11 @@
-name: Claude plugin release
+name: Connector release
 
-# A new version of the Claude connector plugin on main (packaging/claude-plugin/.claude-plugin/plugin.json)
-# -> package it, refresh it in the shared plugin marketplace repository, publish a GitHub Release.
+# A new version of the connector plugin on main (the version in packaging/claude-plugin/.claude-plugin/plugin.json
+# and packaging/codex-plugin/.codex-plugin/plugin.json, which must agree)
+# -> package it for Claude and Codex, refresh both in the shared plugin marketplace repository, publish a GitHub Release.
 #
-# In the marketplace only plugins/claude/nezolder-civil3d-mcp/ and this plugin's entry in
-# .claude-plugin/marketplace.json change; the script refuses any other change there.
+# In the marketplace only plugins/claude/nezolder-civil3d-mcp/, plugins/codex/nezolder-civil3d-mcp/ and this plugin's
+# entries in .claude-plugin/marketplace.json and .agents/plugins/marketplace.json change; the script refuses any other change.
 # The tag nezolder-civil3d-mcp-v<version> marks a version as released, so a version is never released twice.
 #
 # Needs the repository secret KIADAS_TOKEN: a fine-grained token for the marketplace repository only,
@@ -12,14 +13,16 @@ name: Claude plugin release
 on:
   push:
     branches: [main]
-    paths: [packaging/claude-plugin/.claude-plugin/plugin.json]
+    paths:
+      - packaging/claude-plugin/.claude-plugin/plugin.json
+      - packaging/codex-plugin/.codex-plugin/plugin.json
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: claude-plugin-release
+  group: connector-release
   cancel-in-progress: false
 
 env:
@@ -41,7 +44,7 @@ jobs:
           cache: npm
       - name: Plugin version
         id: v
-        run: echo "version=$(node scripts/package-claude-plugin.mjs --print-version)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(node scripts/package-connector.mjs --print-version)" >> "$GITHUB_OUTPUT"
       - name: Already released?
         id: tag
         env:
@@ -72,7 +75,7 @@ jobs:
           for attempt in 1 2 3; do
             rm -rf "$market"
             git clone -q "https://x-access-token:${KIADAS_TOKEN}@github.com/${MARKETPLACE_REPO}.git" "$market"
-            node scripts/package-claude-plugin.mjs --release --out "dist/claude-plugin/$PLUGIN" --marketplace "$market"
+            node scripts/package-connector.mjs --release --out dist/connector --marketplace "$market"
             cd "$market"
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -94,15 +97,15 @@ jobs:
             fi
             sleep 10
           done
-      - name: Plugin file
+      - name: Plugin files
         if: steps.tag.outputs.done != '1'
         env:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
-          cd "dist/claude-plugin/$PLUGIN"
-          zip -X -r -q "../$PLUGIN-$VERSION.plugin" .
-          cd ..
-          sha256sum "$PLUGIN-$VERSION.plugin" > SHA256SUMS.txt
+          (cd "dist/connector/claude/$PLUGIN" && zip -X -r -q "../../$PLUGIN-$VERSION.plugin" .)
+          (cd "dist/connector/codex/$PLUGIN" && zip -X -r -q "../../$PLUGIN-codex-$VERSION.zip" .)
+          cd dist/connector
+          sha256sum "$PLUGIN-$VERSION.plugin" "$PLUGIN-codex-$VERSION.zip" > SHA256SUMS.txt
           cat SHA256SUMS.txt
       - name: GitHub Release
         if: steps.tag.outputs.done != '1'
@@ -112,7 +115,8 @@ jobs:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
           gh release create "$TAG" \
-            "dist/claude-plugin/$PLUGIN-$VERSION.plugin" \
-            dist/claude-plugin/SHA256SUMS.txt \
-            --target "$GITHUB_SHA" --title "$PLUGIN $VERSION (Claude plugin)" --latest=false \
-            --notes "Claude connector plugin, built automatically from ${GITHUB_SHA::7}. It starts the MCP server installed on the PC (npm run install:server); it does not contain the server or the Civil 3D plugin."
+            "dist/connector/$PLUGIN-$VERSION.plugin" \
+            "dist/connector/$PLUGIN-codex-$VERSION.zip" \
+            dist/connector/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title "$PLUGIN $VERSION (connector plugin)" --latest=false \
+            --notes "Connector plugin for Claude (.plugin) and Codex (.zip), built automatically from ${GITHUB_SHA::7}. It starts the MCP server installed on the PC (npm run install:server); it does not contain the server or the Civil 3D plugin."

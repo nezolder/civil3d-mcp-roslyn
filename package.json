@@ -21,7 +21,7 @@
     "test:mcp": "node scripts/mcp-smoke-test.mjs",
     "test:smoke": "node --test tests/live-smoke/*.test.mjs",
     "test:packaging": "npm run build && node --test tests/packaging/*.test.mjs",
-    "package:claude-plugin": "node scripts/package-claude-plugin.mjs",
+    "package:connector": "node scripts/package-connector.mjs",
     "smoke:live": "node scripts/live-smoke.mjs",
     "install:server": "node scripts/install.mjs --server",
     "install:plugin": "node scripts/install.mjs --plugin"

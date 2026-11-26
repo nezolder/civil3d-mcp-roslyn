@@ -1,0 +1,23 @@
+{
+  "name": "nezolder-civil3d-mcp",
+  "version": "1.3.0",
+  "description": "Civil 3D Roslyn MCP connector (civil3d_query, civil3d_execute, civil3d_skills). Starts the MCP server installed on this PC; contains no skills.",
+  "author": {
+    "name": "nezolder"
+  },
+  "repository": "https://github.com/nezolder/civil3d-mcp-roslyn",
+  "license": "MIT",
+  "keywords": [
+    "civil3d",
+    "roslyn",
+    "mcp"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Civil 3D MCP",
+    "shortDescription": "Drive Autodesk Civil 3D 2025 with C# scripts",
+    "longDescription": "Starts the Civil 3D Roslyn MCP server installed on this PC (npm run install:server) and gives Codex its three tools: civil3d_query, civil3d_execute and civil3d_skills. Contains no skills; the server hands over its own working order.",
+    "developerName": "nezolder",
+    "category": "Productivity"
+  }
+}

@@ -25,4 +25,4 @@ modify a real work project:
   (see [C_References/README.md](C_References/README.md)).
 - `npm run test:mcp`
 - `npm run test:smoke` (the live smoke runner against a simulated Civil 3D)
-- `npm run test:packaging` (the Claude connector plugin in `packaging/claude-plugin/`)
+- `npm run test:packaging` (the connector plugin in `packaging/claude-plugin/` and `packaging/codex-plugin/`)
