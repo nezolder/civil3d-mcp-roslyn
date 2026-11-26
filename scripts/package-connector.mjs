@@ -28,6 +28,9 @@ export const SOURCE_REPOSITORY = "nezolder/civil3d-mcp-roslyn";
 export const LAUNCHER = "start-civil3d-mcp.mjs";
 export const RECEIPT = "csomag.json";
 const ALLOWED_DRIVE_PATH = "C:\\Program Files\\nodejs\\node.exe";
+// Codex's own limits for this server: a saved write may take the server's 10-minute save limit plus a
+// margin; without them Codex waits 60 s for a tool call and 10 s for the start.
+export const CODEX_TIMEOUTS = { tool_timeout_sec: 660, startup_timeout_sec: 30 };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PACKAGING_DIR = join(repoRoot, "packaging");
@@ -135,6 +138,11 @@ export function checkPluginSource(platform, dir = join(PACKAGING_DIR, PLATFORMS[
   if (JSON.stringify(servers) !== JSON.stringify([SERVER_NAME])) problems.push(`${platform}: .mcp.json must define exactly the server ${SERVER_NAME}, has [${servers.join(", ")}]`);
   const server = mcp.mcpServers?.[SERVER_NAME] ?? {};
   if (!spec.launch(server)) problems.push(`${platform}: .mcp.json must start the launcher with ${spec.launchRule}`);
+  if (platform === "codex") {
+    for (const [key, value] of Object.entries(CODEX_TIMEOUTS)) {
+      if (server[key] !== value) problems.push(`codex: .mcp.json ${SERVER_NAME}.${key} must be ${value}, is ${server[key]}`);
+    }
+  }
   for (const file of files) {
     try { problems.push(...privacyProblems(`${platform} ${file}`, readFileSync(join(dir, file), "utf8"))); } catch (e) { problems.push(`${platform} ${file}: ${e.message}`); }
   }

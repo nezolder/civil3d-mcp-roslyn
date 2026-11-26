@@ -8,6 +8,13 @@ This repository contains the accepted runtime, six focused engineering recipes w
 
 The catalogue contains **50 skills** with **51 C# templates**; **49** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
 
+## Codex time limits in the connector plugin (2026-11-26)
+
+- **Fix:** the Codex plugin 1.3.0 left out the limits the hand-written Codex setting had, so Codex waited only its defaults (60 s for a tool call, 10 s for the start) and could report a timeout during a saved write. The Codex `.mcp.json` now sets `tool_timeout_sec` 660 (the server's 10-minute save limit plus a margin) and `startup_timeout_sec` 30; the packaging check requires both. Version 1.3.1 (the Claude plugin's content is unchanged).
+- **Install check:** `scripts/check-codex-install.mjs` installs the built Codex plugin (or a copy of a refreshed marketplace) with a real Codex CLI in a throw-away Codex home, without starting any server, and compares `codex mcp list --json` with the source: the server once, command, launcher, working folder = installed plugin folder, both limits, env. It runs in CI on Windows and in the release workflow before the push (Codex CLI 0.172.0).
+
+Evidence boundaries: **proven offline** with Codex CLI 0.172.0 on Linux: the check passes for 1.3.1 and, run against the published 1.3.0 marketplace, reports the two missing limits. **Unverified:** the check on the Windows CI runner until the first run, the limits during a long write in Codex.
+
 ## Codex variant of the connector plugin (2026-11-26)
 
 - **Source:** `packaging/codex-plugin/`: `.codex-plugin/plugin.json` (`mcpServers: "./.mcp.json"`, `interface` for the Codex plugin list), `.mcp.json` and README; the build adds the launcher from `packaging/claude-plugin/`. Codex has no `${CLAUDE_PLUGIN_ROOT}` for MCP servers, so `.mcp.json` starts `start-civil3d-mcp.mjs` with `"cwd": "."`, which Codex resolves to the installed plugin folder. Server name `civil3d_roslyn`, command and env as in the Claude plugin. Version 1.3.0 for both (the Claude plugin's content is unchanged).

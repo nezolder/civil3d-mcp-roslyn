@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
+  CODEX_TIMEOUTS,
   LAUNCHER,
   LAUNCHER_SOURCE,
   PACKAGING_DIR,
@@ -97,6 +98,17 @@ test("the Codex .mcp.json starts the launcher relative to the plugin folder, not
   assert.deepEqual(server.args, [LAUNCHER]);
   assert.equal(server.cwd, ".");
   assert.ok(!JSON.stringify(mcp).includes("CLAUDE_PLUGIN_ROOT"));
+});
+
+test("the Codex .mcp.json carries Codex's own time limits, and the check refuses a plugin without them", (t) => {
+  const mcp = JSON.parse(readFileSync(join(PACKAGING_DIR, "codex-plugin", ".mcp.json"), "utf8"));
+  assert.equal(mcp.mcpServers[SERVER_NAME].tool_timeout_sec, CODEX_TIMEOUTS.tool_timeout_sec);
+  assert.equal(mcp.mcpServers[SERVER_NAME].startup_timeout_sec, CODEX_TIMEOUTS.startup_timeout_sec);
+  const codex = join(tempDir(t), "codex-plugin");
+  cpSync(join(PACKAGING_DIR, "codex-plugin"), codex, { recursive: true });
+  delete mcp.mcpServers[SERVER_NAME].tool_timeout_sec;
+  writeJson(join(codex, ".mcp.json"), mcp);
+  assert.throws(() => checkPluginSource("codex", codex), /tool_timeout_sec must be 660/);
 });
 
 test("the check refuses a version mismatch between the platforms", (t) => {
