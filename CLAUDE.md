@@ -35,7 +35,7 @@ assistant --stdio--> Node MCP server (src/) --TCP JSON-RPC--> Civil 3D plugin (p
 | `docs/ENGINEERING_SKILLS.md`, `docs/LIVE_SMOKE.md` | Engineering recipes; one-command live smoke test |
 | `docs/validation/` | Records of live tests, named `<topic>-<commit>-<date>.md` |
 | `tests/` | `errors`, `transport`, `plugin`, `roslyn`, `skills`, `benchmark`, `live-smoke`, `packaging` |
-| `scripts/` | Build helpers, `install.mjs` (server and plugin install), `live-smoke.mjs`, `package-connector.mjs` (connector plugin packaging), `check-codex-install.mjs` (installs the Codex plugin with a real Codex CLI and reads it back) |
+| `scripts/` | Build helpers, `install.mjs` (server and plugin install), `live-smoke.mjs`, `package-connector.mjs` (connector plugin packaging), `check-codex-install.mjs` (installs the Codex plugin with a real Codex CLI, reads it back and checks its approval rules in real calls) |
 | `packaging/claude-plugin/`, `packaging/codex-plugin/` | The connector plugin `nezolder-civil3d-mcp` for Claude and Codex (launcher only, no skills; the launcher lives in `claude-plugin/`). Keep the name and the server name `civil3d_roslyn`; bump `version` in both manifests to release it (`.github/workflows/connector-release.yml`) |
 | `C_References/` | Autodesk reference DLLs, never committed (see its README) |
 | `PROJECT_STATUS.md` | Dated change log with evidence boundaries; update it with each feature |

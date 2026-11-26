@@ -27,4 +27,12 @@ is started from `C:\Program Files\nodejs\node.exe`.
 - Time limits: `tool_timeout_sec` 660 lets Codex wait for a write that saves the drawing (the
   server's save limit is 10 minutes, plus a margin); `startup_timeout_sec` 30 gives the server time
   to start. Without them Codex uses its own defaults (60 s for a tool call, 10 s for the start).
+- Approval rules: `default_tools_approval_mode` `prompt` makes Codex ask before every tool of this
+  server, including tools added later, with one exception: `civil3d_skills` (recipe catalog, API
+  lookup, status, guide) runs without approval. `civil3d_query` asks because its C# can act outside
+  the rolled-back transaction. Whether the question reaches you or Codex's automatic reviewer
+  depends on your Codex approval settings. To change a rule on one PC without shadowing the
+  plugin's server, add for example
+  `[plugins."nezolder-civil3d-mcp@<marketplace>".mcp_servers.civil3d_roslyn.tools.civil3d_query]`
+  with `approval_mode = "approve"` to `~/.codex/config.toml`.
 - Civil 3D 2025 must have the MCP plugin loaded (`C3DMCPSTATUS`).

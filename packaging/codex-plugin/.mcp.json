@@ -8,6 +8,12 @@
       "cwd": ".",
       "startup_timeout_sec": 30,
       "tool_timeout_sec": 660,
+      "default_tools_approval_mode": "prompt",
+      "tools": {
+        "civil3d_skills": {
+          "approval_mode": "approve"
+        }
+      },
       "env": {
         "CIVIL3D_HOST": "127.0.0.1",
         "CIVIL3D_CONNECT_TIMEOUT": "5000",

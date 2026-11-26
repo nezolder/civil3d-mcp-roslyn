@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
+  CODEX_APPROVALS,
   CODEX_TIMEOUTS,
   LAUNCHER,
   LAUNCHER_SOURCE,
@@ -109,6 +110,21 @@ test("the Codex .mcp.json carries Codex's own time limits, and the check refuses
   delete mcp.mcpServers[SERVER_NAME].tool_timeout_sec;
   writeJson(join(codex, ".mcp.json"), mcp);
   assert.throws(() => checkPluginSource("codex", codex), /tool_timeout_sec must be 660/);
+});
+
+test("the Codex .mcp.json asks before every tool except civil3d_skills, and the check refuses other rules", (t) => {
+  const mcp = JSON.parse(readFileSync(join(PACKAGING_DIR, "codex-plugin", ".mcp.json"), "utf8"));
+  const server = mcp.mcpServers[SERVER_NAME];
+  assert.equal(server.default_tools_approval_mode, "prompt");
+  assert.deepEqual(server.tools, { civil3d_skills: { approval_mode: "approve" } });
+  assert.deepEqual(CODEX_APPROVALS, { default: "prompt", tools: { civil3d_skills: "approve" } });
+  const codex = join(tempDir(t), "codex-plugin");
+  cpSync(join(PACKAGING_DIR, "codex-plugin"), codex, { recursive: true });
+  writeJson(join(codex, ".mcp.json"), { mcpServers: { [SERVER_NAME]: { ...server, tools: { ...server.tools, civil3d_execute: { approval_mode: "approve" } } } } });
+  assert.throws(() => checkPluginSource("codex", codex), /tools approval rules must be/);
+  const { default_tools_approval_mode: _, ...withoutDefault } = server;
+  writeJson(join(codex, ".mcp.json"), { mcpServers: { [SERVER_NAME]: withoutDefault } });
+  assert.throws(() => checkPluginSource("codex", codex), /default_tools_approval_mode must be prompt/);
 });
 
 test("the check refuses a version mismatch between the platforms", (t) => {
