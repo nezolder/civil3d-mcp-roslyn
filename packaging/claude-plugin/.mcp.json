@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "civil3d_roslyn": {
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/start-civil3d-mcp.mjs"
+      ],
+      "env": {
+        "CIVIL3D_HOST": "127.0.0.1",
+        "CIVIL3D_CONNECT_TIMEOUT": "5000",
+        "CIVIL3D_COMMAND_TIMEOUT": "120000",
+        "LOG_LEVEL": "error"
+      }
+    }
+  }
+}

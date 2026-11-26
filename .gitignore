@@ -21,3 +21,6 @@ tests/roslyn/obj/
 
 # Civil 3D References (proprietary DLLs)
 C_References/*.dll
+
+# Packaged Claude plugin
+dist/

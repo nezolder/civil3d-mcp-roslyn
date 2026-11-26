@@ -1,12 +1,20 @@
 # Published development status
 
-Updated: 2026-11-25
+Updated: 2026-11-26
 
 This repository contains the accepted runtime, six focused engineering recipes with scoped evidence, and an explicitly experimental, offline-validated surface-profile recipe. Client data, live-run artifacts, proprietary assemblies and private development history are excluded.
 
 ## Current catalogue
 
 The catalogue contains **50 skills** with **51 C# templates**; **49** of the skills run by name. These numbers, and the ones in the README, are compared with the `skills/` folder by `tests/skills/documented-counts.test.mjs`, so a change to the folder fails the test until the text follows. Counts inside the dated sections below describe the state at their date and are not updated.
+
+## Claude connector plugin in the repository, release to a marketplace (2026-11-26)
+
+- **Source:** the Claude connector plugin `nezolder-civil3d-mcp` (until now built by hand outside the repository) is in `packaging/claude-plugin/`: `plugin.json`, `.mcp.json`, README and the launcher `start-civil3d-mcp.mjs`. Version 1.2.0 drops the launcher's fallback to old development folders; it loads `CIVIL3D_MCP_SERVER_ENTRY` or the standard `%LOCALAPPDATA%\Civil3dMcpRoslyn\server\build\index.js`. Name and server key (`civil3d_roslyn`) are unchanged, so the tool names stay the same.
+- **Packaging:** `scripts/package-claude-plugin.mjs` checks the plugin (exact file list, name, version, launcher through `${CLAUDE_PLUGIN_ROOT}`, no local or network paths, user folder names or e-mail addresses), builds it with a `csomag.json` receipt (source commit, SHA-256 per file) and, with `--marketplace <clone>`, replaces only `plugins/claude/nezolder-civil3d-mcp/` and this plugin's entry in `.claude-plugin/marketplace.json`; it fails if anything else in the clone changed.
+- **Release:** `.github/workflows/claude-plugin-release.yml` runs when the plugin version on `main` changes: tests, marketplace update and push (secret `KIADAS_TOKEN`), then a GitHub Release `nezolder-civil3d-mcp-v<version>` with the `.plugin` file. A released version is not released again.
+
+Evidence boundaries: **proven offline** (`tests/packaging`, also in CI): the checks, the marketplace update on a test repository, the launcher's error and standard-place paths and an MCP handshake through the launcher; the update was also run against a local clone of the real marketplace (only the two expected paths changed) and `claude plugin validate` passed for the plugin and the marketplace. **Unverified:** the workflow on GitHub (needs the secret and a merge), installing 1.2.0 from the marketplace in the Claude app.
 
 ## Section view group station range (2026-11-25)
 

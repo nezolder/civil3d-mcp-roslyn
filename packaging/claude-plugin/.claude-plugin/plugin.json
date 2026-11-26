@@ -1,0 +1,15 @@
+{
+  "name": "nezolder-civil3d-mcp",
+  "version": "1.2.0",
+  "description": "Civil 3D Roslyn MCP connector (civil3d_query, civil3d_execute, civil3d_skills). Starts the MCP server installed on this PC; contains no skills.",
+  "author": {
+    "name": "nezolder"
+  },
+  "repository": "https://github.com/nezolder/civil3d-mcp-roslyn",
+  "license": "MIT",
+  "keywords": [
+    "civil3d",
+    "roslyn",
+    "mcp"
+  ]
+}
