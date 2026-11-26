@@ -10,7 +10,7 @@
 // The real Codex setup of this computer is never read or changed, and no MCP server is started.
 
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,8 +95,13 @@ function main() {
     if (transport.type !== "stdio") problems.push(`transport is ${transport.type}, expected stdio`);
     if (transport.command !== expected.command) problems.push(`command is ${transport.command}, expected ${expected.command}`);
     if (JSON.stringify(transport.args) !== JSON.stringify([LAUNCHER])) problems.push(`args are ${JSON.stringify(transport.args)}`);
-    const cwd = resolve(transport.cwd ?? "");
-    if (cwd !== resolve(pluginRoot)) problems.push(`cwd is ${transport.cwd}, expected the installed plugin folder ${pluginRoot}`);
+    // Compare real paths: on Windows the temporary folder can come as a short 8.3 name (RUNNER~1).
+    const real = (path) => {
+      try { return realpathSync.native(path); } catch { return resolve(path); }
+    };
+    const same = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+    const cwd = real(resolve(transport.cwd ?? ""));
+    if (!same(cwd, real(pluginRoot))) problems.push(`cwd is ${transport.cwd}, expected the installed plugin folder ${pluginRoot}`);
     if (!existsSync(join(cwd, LAUNCHER))) problems.push(`the launcher is not in the working folder ${cwd}`);
     for (const [key, value] of Object.entries(CODEX_TIMEOUTS)) {
       if (server[key] !== value) problems.push(`${key} is ${server[key]}, expected ${value}`);
