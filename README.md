@@ -278,6 +278,8 @@ Claude Code:
 claude mcp add civil3d --scope user -- node "$env:LOCALAPPDATA\Civil3dMcpRoslyn\server\build\index.js"
 ```
 
+Claude app and Claude Code can also use the connector plugin `nezolder-civil3d-mcp` instead of a hand-written setting. Its source is [packaging/claude-plugin/](packaging/claude-plugin/README.md): it starts the server installed at the standard place, the same on every PC, and contains no skills. A new plugin version on `main` (the `version` in its `plugin.json`) is packaged by the [Claude plugin release](.github/workflows/claude-plugin-release.yml) workflow, which refreshes only this plugin's folder and entry in a shared plugin marketplace repository and attaches the `.plugin` file to a GitHub Release; it needs the repository secret `KIADAS_TOKEN` (a token with write access to the contents of that marketplace repository only). `npm run package:claude-plugin` builds the same folder locally in `dist/claude-plugin/`.
+
 Codex (`~/.codex/config.toml`):
 
 ```toml

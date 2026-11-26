@@ -53,3 +53,5 @@ jobs:
         run: npm run test:mcp
       - name: Live smoke runner (offline part)
         run: npm run test:smoke
+      - name: Claude plugin packaging tests
+        run: node --test "tests/packaging/*.test.mjs"
