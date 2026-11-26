@@ -26,3 +26,5 @@ modify a real work project:
 - `npm run test:mcp`
 - `npm run test:smoke` (the live smoke runner against a simulated Civil 3D)
 - `npm run test:packaging` (the connector plugin in `packaging/claude-plugin/` and `packaging/codex-plugin/`)
+- After changing `packaging/codex-plugin/`: `node scripts/package-connector.mjs`, then
+  `node scripts/check-codex-install.mjs --codex-js <@openai/codex>/bin/codex.js` (CI runs it too)

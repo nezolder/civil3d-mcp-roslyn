@@ -28,6 +28,8 @@ concurrency:
 env:
   PLUGIN: nezolder-civil3d-mcp
   MARKETPLACE_REPO: nezolder-ai/ai-pluginok
+  # The Codex CLI that reads the installed Codex plugin back before anything is pushed.
+  CODEX_VERSION: 0.172.0
 
 jobs:
   release:
@@ -60,6 +62,7 @@ jobs:
         run: |
           npm ci --ignore-scripts
           npm run test:packaging
+          npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$CODEX_VERSION"
       - name: Package and refresh the marketplace
         if: steps.tag.outputs.done != '1'
         env:
@@ -76,6 +79,8 @@ jobs:
             rm -rf "$market"
             git clone -q "https://x-access-token:${KIADAS_TOKEN}@github.com/${MARKETPLACE_REPO}.git" "$market"
             node scripts/package-connector.mjs --release --out dist/connector --marketplace "$market"
+            # Install the Codex plugin from a copy of the refreshed marketplace and read its MCP settings back.
+            node scripts/check-codex-install.mjs --codex-js "$RUNNER_TEMP/codex/node_modules/@openai/codex/bin/codex.js" --marketplace "$market"
             cd "$market"
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

@@ -55,3 +55,8 @@ jobs:
         run: npm run test:smoke
       - name: Connector plugin packaging tests
         run: node --test "tests/packaging/*.test.mjs"
+      - name: Codex install check of the connector plugin
+        run: |
+          npm install --prefix "$env:RUNNER_TEMP\codex" --no-audit --no-fund "@openai/codex@0.172.0"
+          node scripts/package-connector.mjs
+          node scripts/check-codex-install.mjs --codex-js "$env:RUNNER_TEMP\codex\node_modules\@openai\codex\bin\codex.js"

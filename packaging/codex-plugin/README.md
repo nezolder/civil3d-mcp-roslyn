@@ -24,4 +24,7 @@ is started from `C:\Program Files\nodejs\node.exe`.
 - A server of the same name in `~/.codex/config.toml` (`[mcp_servers.civil3d_roslyn]`) takes
   precedence over the plugin's, and one under another name runs next to it. Remove a hand-written
   entry for this server when the plugin is installed.
+- Time limits: `tool_timeout_sec` 660 lets Codex wait for a write that saves the drawing (the
+  server's save limit is 10 minutes, plus a margin); `startup_timeout_sec` 30 gives the server time
+  to start. Without them Codex uses its own defaults (60 s for a tool call, 10 s for the start).
 - Civil 3D 2025 must have the MCP plugin loaded (`C3DMCPSTATUS`).
