@@ -31,6 +31,10 @@ const ALLOWED_DRIVE_PATH = "C:\\Program Files\\nodejs\\node.exe";
 // Codex's own limits for this server: a saved write may take the server's 10-minute save limit plus a
 // margin; without them Codex waits 60 s for a tool call and 10 s for the start.
 export const CODEX_TIMEOUTS = { tool_timeout_sec: 660, startup_timeout_sec: 30 };
+// Codex's approval rules for this server: every tool asks before it runs (civil3d_query runs C# that can
+// act outside the rolled-back transaction, civil3d_execute writes, and tools added later inherit the rule),
+// except the catalog and status tool civil3d_skills. Without them Codex decides from the tool annotations.
+export const CODEX_APPROVALS = { default: "prompt", tools: { civil3d_skills: "approve" } };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PACKAGING_DIR = join(repoRoot, "packaging");
@@ -141,6 +145,13 @@ export function checkPluginSource(platform, dir = join(PACKAGING_DIR, PLATFORMS[
   if (platform === "codex") {
     for (const [key, value] of Object.entries(CODEX_TIMEOUTS)) {
       if (server[key] !== value) problems.push(`codex: .mcp.json ${SERVER_NAME}.${key} must be ${value}, is ${server[key]}`);
+    }
+    if (server.default_tools_approval_mode !== CODEX_APPROVALS.default) {
+      problems.push(`codex: .mcp.json ${SERVER_NAME}.default_tools_approval_mode must be ${CODEX_APPROVALS.default}, is ${server.default_tools_approval_mode}`);
+    }
+    const tools = Object.fromEntries(Object.entries(server.tools ?? {}).map(([name, rule]) => [name, rule?.approval_mode]));
+    if (JSON.stringify(tools) !== JSON.stringify(CODEX_APPROVALS.tools)) {
+      problems.push(`codex: .mcp.json ${SERVER_NAME}.tools approval rules must be ${JSON.stringify(CODEX_APPROVALS.tools)}, are ${JSON.stringify(tools)}`);
     }
   }
   for (const file of files) {
